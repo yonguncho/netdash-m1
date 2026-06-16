@@ -51,8 +51,8 @@ def _parse_ports(status_output, desc_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # Match Extreme ExOS port format: number:number
-        match = re.match(r"^(\d+:\d+)\s+\S+\s+\S+\s+(Up|Down)$", line, re.IGNORECASE)
+        # Match Extreme ExOS port format: number:number (ignore Speed/Duplex columns)
+        match = re.match(r"^(\d+:\d+)\s+\S+\s+\S+\s+(Up|Down).*$", line, re.IGNORECASE)
         if match:
             port_name, line_status = match.groups()
 
@@ -85,8 +85,8 @@ def _parse_macs(mac_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # Simplified regex with explicit MAC format
-        match = re.match(r"^\s*(\d+)\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+(\w+)\s+(\d+:\d+)$", line, re.IGNORECASE)
+        # Regex supports both colon-separated (xx:xx:xx:xx:xx:xx) and no-colon (xxxxxxxxxxxx) MAC formats
+        match = re.match(r"^\s*(\d+)\s+([\da-f:]{12,17})\s+(\w+)\s+(\d+:\d+)$", line, re.IGNORECASE)
         if match:
             vlan_str, mac_addr, mac_type, port_name = match.groups()
 
