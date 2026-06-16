@@ -1,6 +1,7 @@
 import logging
 import hmac
 import os
+import re
 from flask import Flask, jsonify, request, render_template_string
 from pathlib import Path
 
@@ -15,6 +16,25 @@ logging.basicConfig(
     format='{"time":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":"%(message)s"}'
 )
 logger = logging.getLogger(__name__)
+
+
+def validate_credential(value, max_length=256):
+    """HIGH FIX (CWE-20): Validate credential string length, type, and character set.
+
+    Prevents DoS (oversized input), injection attacks (special characters).
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("credentials must be string")
+    if len(value) == 0:
+        raise ValueError("credentials cannot be empty")
+    if len(value) > max_length:
+        raise ValueError(f"credentials max length {max_length}")
+    # Whitelist: alphanumeric + common special chars for usernames/passwords
+    if not re.match(r'^[a-zA-Z0-9._@\-!$#%&*+=?^`{|}~]+$', value):
+        raise ValueError("credentials contain invalid characters")
+    return value
 
 
 def create_app(demo_mode=None):
@@ -130,8 +150,14 @@ def create_app(demo_mode=None):
 
         try:
             data = request.get_json() or {}
-            username = data.get("username")
-            password = data.get("password")
+
+            # HIGH FIX (CWE-20): Validate credential string length, type, character set
+            try:
+                username = validate_credential(data.get("username"))
+                password = validate_credential(data.get("password"))
+            except ValueError as validation_error:
+                log_event("warning", "collect_invalid_credentials", switch_id=switch_id, reason=str(validation_error))
+                return jsonify({"error": str(validation_error)}), 400
 
             # CWE-522 fix: Require credentials in production mode; sanitize log output
             if not config.app.get("demo_mode") and (not username or not password):
@@ -208,6 +234,11 @@ if __name__ == "__main__":
     host = config.app.get("host", "127.0.0.1")
     port = config.app.get("port", 8082)
     debug = config.app.get("debug", False)
+
+    # CRITICAL FIX (CWE-489): Force debug=False in production to prevent credential/stack-trace exposure
+    if not demo_mode:
+        debug = False
+        os.environ['DEBUG'] = 'false'  # Prevent runtime override
 
     log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=config.app.get("demo_mode", False))
 

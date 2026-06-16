@@ -29,16 +29,30 @@ def parse(outputs, switch_id):
 def _parse_ports(status_output, desc_output, switch_id):
     ports = []
 
+    # HIGH FIX (ReDoS prevention): Validate input size
+    if len(status_output) > 1_000_000 or len(desc_output) > 1_000_000:
+        utils.log_event("warning", "parse_ports_input_too_large", switch_id=switch_id)
+        return []
+
     descriptions = {}
-    for line in desc_output.split("\n"):
+    for line_idx, line in enumerate(desc_output.split("\n")):
+        if line_idx > 10000:  # Prevent billion-line attacks
+            break
+        if len(line) > 500:  # Reject oversized lines
+            continue
         parts = line.split()
         if len(parts) >= 2:
             port_name = parts[0]
             desc = " ".join(parts[1:]) if len(parts) > 1 else ""
-            descriptions[port_name] = desc.strip()
+            descriptions[port_name] = desc.strip()[:256]
 
-    for line in status_output.split("\n"):
-        match = re.match(r"(\d+:\d+)\s+\S+\s+\S+\s+(Up|Down)\s+", line, re.IGNORECASE)
+    for line_idx, line in enumerate(status_output.split("\n")):
+        if line_idx > 10000:  # Prevent billion-line attacks
+            break
+        if len(line) > 500:  # Reject oversized lines
+            continue
+        # Match Extreme ExOS port format: number:number
+        match = re.match(r"^(\d+:\d+)\s+\S+\s+\S+\s+(Up|Down)$", line, re.IGNORECASE)
         if match:
             port_name, line_status = match.groups()
 
@@ -61,8 +75,18 @@ def _parse_ports(status_output, desc_output, switch_id):
 def _parse_macs(mac_output, switch_id):
     macs = []
 
-    for line in mac_output.split("\n"):
-        match = re.match(r"\s*(\d+)\s+([\da-f:]+)\s+(\w+)\s+(\d+:\d+)", line, re.IGNORECASE)
+    # HIGH FIX (ReDoS prevention): Validate input size
+    if len(mac_output) > 1_000_000:
+        utils.log_event("warning", "parse_macs_input_too_large", switch_id=switch_id)
+        return []
+
+    for line_idx, line in enumerate(mac_output.split("\n")):
+        if line_idx > 10000:  # Prevent billion-line attacks
+            break
+        if len(line) > 500:  # Reject oversized lines
+            continue
+        # Simplified regex with explicit MAC format
+        match = re.match(r"^\s*(\d+)\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+(\w+)\s+(\d+:\d+)$", line, re.IGNORECASE)
         if match:
             vlan_str, mac_addr, mac_type, port_name = match.groups()
 
@@ -85,8 +109,18 @@ def _parse_macs(mac_output, switch_id):
 def _parse_arps(arp_output, switch_id):
     arps = []
 
-    for line in arp_output.split("\n"):
-        match = re.match(r"\s*([\d.]+)\s+([\da-f:]+)\s+(\d+)\s+(\d+:\d+)", line, re.IGNORECASE)
+    # HIGH FIX (ReDoS prevention): Validate input size
+    if len(arp_output) > 1_000_000:
+        utils.log_event("warning", "parse_arps_input_too_large", switch_id=switch_id)
+        return []
+
+    for line_idx, line in enumerate(arp_output.split("\n")):
+        if line_idx > 10000:  # Prevent billion-line attacks
+            break
+        if len(line) > 500:  # Reject oversized lines
+            continue
+        # Simplified regex with explicit IP/MAC format
+        match = re.match(r"^\s*([\d.]+)\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+(\d+)\s+(\d+:\d+)$", line, re.IGNORECASE)
         if match:
             ip, mac_addr, vlan_str, interface = match.groups()
 

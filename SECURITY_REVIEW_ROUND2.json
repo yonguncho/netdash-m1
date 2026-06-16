@@ -1,0 +1,215 @@
+{
+  "round": 2,
+  "project": "NetDash M3",
+  "date": "2026-06-16",
+  "critical": [
+    {
+      "file": "web/static/app.js",
+      "line": 24,
+      "category": "A03:2021 - Injection (CWE-79: Improper Neutralization of Input During Web Page Generation)",
+      "severity": "CRITICAL",
+      "issue": "DOM-based XSS vulnerability via innerHTML in updateSwitches() and renderDetail(). User-controlled data (sw.name, sw.ip, sw.vendor, data.switch.name, p.name, p.status, etc.) is directly interpolated into HTML strings without escaping. Malicious switch names or descriptions containing JavaScript can execute arbitrary code in the browser context.",
+      "cwe": "CWE-79",
+      "evidence": [
+        "Line 29: <h3>${sw.name}</h3> - directly interpolates switch name",
+        "Line 30: <p>IP: ${sw.ip}</p> - directly interpolates IP",
+        "Line 31: <p>Vendor: ${sw.vendor}</p> - directly interpolates vendor",
+        "Line 55: <h2>${data.switch.name}</h2> - unescaped switch name",
+        "Line 66: ${data.ports.map(p => ...<td>${p.name}</td>...) - unescaped port names",
+        "Lines 24, 36, 38, 52: app.innerHTML += card - concatenating unescaped HTML",
+        "Attack vector: API returns switch with name=<img src=x onerror=alert('XSS')>, payload executes in browser"
+      ],
+      "impact": "Complete browser compromise; session hijacking; credential theft; malware injection; data exfiltration of network topology; arbitrary actions on behalf of user",
+      "fix": "Replace innerHTML with textContent for text nodes and use createElement + appendChild for HTML structure. Alternatively, use a DOM library (e.g., sanitize-html) or implement HTML escape function. Example: const h3 = document.createElement('h3'); h3.textContent = sw.name; switchCard.appendChild(h3);"
+    },
+    {
+      "file": "app.py",
+      "line": 76,
+      "category": "A09:2021 - Logging and Monitoring (CWE-532: Insertion of Sensitive Information into Log File)",
+      "severity": "CRITICAL",
+      "issue": "Unsafe HTML string interpolation in index() route uses f-string with unescaped demo_badge variable. While currently safe, render_template_string is imported but not used, suggesting potential for future SSTI. The template is returned as plain HTML without Jinja2 rendering.",
+      "cwe": "CWE-532",
+      "evidence": [
+        "Line 4: from flask import Flask, jsonify, request, render_template_string - imported but never used (code smell)",
+        "Line 76-95: HTML returned as plain string without render_template() wrapper",
+        "Line 89: f'<div class=\"demo\">⚠️ {demo_badge}</div>' - uses f-string interpolation",
+        "While demo_badge is controlled by app config, the pattern violates secure coding best practices"
+      ],
+      "impact": "If demo_badge is later modified to include request parameters or if render_template_string is accidentally used with user input, SSTI/XSS is possible. Current code is safe but represents security anti-pattern.",
+      "fix": "Use Flask's render_template() with Jinja2 auto-escaping instead of inline f-strings. Remove unused render_template_string import. Use render_template('index.html', demo_mode=config.app.get('demo_mode')) instead of inline HTML construction with f-strings."
+    }
+  ],
+  "high": [
+    {
+      "file": "web/static/app.js",
+      "line": 33,
+      "category": "A03:2021 - Injection (CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code)",
+      "severity": "HIGH",
+      "issue": "Inline event handler onclick=\"showDetail(${sw.id})\" uses unsanitized interpolation. While switch IDs should be integers, if an API compromise or MITM occurs, a malicious ID could contain JavaScript code.",
+      "cwe": "CWE-95",
+      "evidence": [
+        "Line 33: <button onclick=\"showDetail(${sw.id})\">Details</button>",
+        "If sw.id is compromised (e.g., showDetail(1); alert('xss'); //:), code executes",
+        "Using inline onclick is less secure than addEventListener"
+      ],
+      "impact": "If API is compromised or response is modified, arbitrary JavaScript executes. Lower severity than DOM XSS because ID should be numeric, but still exploitable.",
+      "fix": "Use addEventListener() instead of inline onclick. Example: button.addEventListener('click', () => showDetail(sw.id)); This separates data from code and allows proper escaping."
+    },
+    {
+      "file": "app.py",
+      "line": 133,
+      "category": "A02:2021 - Cryptographic Failures (CWE-522: Insufficiently Protected Credentials)",
+      "severity": "HIGH",
+      "issue": "SSH credentials (username/password) passed to collector are transmitted in plaintext in JSON POST body. Credentials are not encrypted in memory before passing to background worker. Setting username/password = None does not securely wipe memory.",
+      "cwe": "CWE-522",
+      "evidence": [
+        "Line 133-134: username = data.get('username'); password = data.get('password')",
+        "Line 141: collector.collect_switch(db_path, switch_id, username, password)",
+        "core/collector.py line 133-134: username = None; password = None does not securely wipe memory",
+        "Credentials passed to background worker in plain text queue"
+      ],
+      "impact": "If worker thread is dumped, memory is inspected, or request logging is enabled, credentials are visible in plaintext.",
+      "fix": "Implement secure credential passing: (1) Accept credentials only once, hash them immediately. (2) Use passlib.context.CryptContext for one-way hashing. (3) Clear sensitive variables securely. Example: from passlib.context import CryptContext; pwd_context = CryptContext(schemes=['bcrypt']); cred_hash = pwd_context.hash(password); username = None; password = None"
+    },
+    {
+      "file": "core/collector.py",
+      "line": 167,
+      "category": "A01:2021 - Broken Access Control (CWE-434: Unrestricted Upload of File with Dangerous Type)",
+      "severity": "HIGH",
+      "issue": "SSH connection uses switch['ip'] from database without validation of IP format or range. An attacker who can modify the switches table could trigger SSH connections to internal services (SSRF-like attack), localhost, or multicast addresses.",
+      "cwe": "CWE-434",
+      "evidence": [
+        "Line 167: 'ip': switch['ip'], - directly from database without validation",
+        "No ipaddress validation (e.g., ipaddress.ip_address() or RFC 1918 check)",
+        "No allowlist of permitted IP ranges"
+      ],
+      "impact": "Attacker with DB write access can trigger SSH to 127.0.0.1 or internal networks, compromising internal services.",
+      "fix": "Validate IP range before SSH connection: import ipaddress; ip = ipaddress.ip_address(switch['ip']); Add config parameter allowed_ip_ranges with RFC 1918 defaults. Reject localhost and multicast."
+    },
+    {
+      "file": "core/db.py",
+      "line": 118,
+      "category": "A05:2021 - Security Misconfiguration (CWE-327: Use of a Broken or Risky Cryptographic Algorithm)",
+      "severity": "HIGH",
+      "issue": "SQLite database file is not encrypted. All collected network topology data (MAC addresses, ARP tables, switch inventory) are accessible as plaintext to any process with file access.",
+      "cwe": "CWE-327",
+      "evidence": [
+        "Line 118: conn = sqlite3.connect(str(db_path))",
+        "No encryption flags or password parameter",
+        "Database stored in project root accessible to all users",
+        "No BitLocker, FileVault, or SQLCipher usage"
+      ],
+      "impact": "If attacker gains filesystem access (local compromise, physical theft, container escape), complete network topology is exposed.",
+      "fix": "Enable SQLite encryption using SQLCipher: pip install sqlcipher3; conn = sqlite3.connect(str(db_path), password=<key>). Or use OS-level encryption (BitLocker/FileVault). Set restrictive file permissions: chmod 600 netdash.db"
+    },
+    {
+      "file": "app.py",
+      "line": 66,
+      "category": "A05:2021 - Security Misconfiguration (CWE-693: Protection Mechanism Failure)",
+      "severity": "HIGH",
+      "issue": "Content-Security-Policy header is set to 'default-src self' which allows inline scripts and styles. The current app.js uses inline onclick handlers, violating strict CSP. CSP not enforcing script integrity.",
+      "cwe": "CWE-693",
+      "evidence": [
+        "Line 66: response.headers['Content-Security-Policy'] = \"default-src 'self'\"",
+        "CSP 'self' allows inline scripts (not strict enough)",
+        "web/static/app.js line 33: onclick=\"showDetail(${sw.id})\" - inline event handler",
+        "CSP should enforce script-src 'self' and no inline handlers"
+      ],
+      "impact": "Current CSP allows inline event handlers, reducing XSS protection. Strict CSP would prevent XSS from inline code.",
+      "fix": "Update CSP to strict policy: \"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'\". Remove all inline onclick handlers from app.js and replace with addEventListener()."
+    }
+  ],
+  "medium": [
+    {
+      "file": "app.py",
+      "line": 49,
+      "category": "A06:2021 - Vulnerable and Outdated Components (CWE-347: Improper Verification of Cryptographic Signature)",
+      "severity": "MEDIUM",
+      "issue": "API token provided in non-standard X-API-Token header instead of Authorization: Bearer format per RFC 6750. While hmac.compare_digest() is correct, header name is non-standard.",
+      "cwe": "CWE-347",
+      "evidence": [
+        "Line 49: token = request.headers.get('X-API-Token')",
+        "Line 59: hmac.compare_digest(token, expected_token) - correct constant-time comparison",
+        "Custom header 'X-API-Token' is non-standard; RFC 6750 specifies 'Authorization: Bearer'"
+      ],
+      "impact": "Non-standard header may be missed by security tools and HTTP middleware that expect Authorization header.",
+      "fix": "Update to standard Authorization header: token = request.headers.get('Authorization', '').replace('Bearer ', ''); Add validation: if not request.headers.get('Authorization', '').startswith('Bearer '): return 401"
+    },
+    {
+      "file": "core/collector.py",
+      "line": 39,
+      "category": "A03:2021 - Injection (CWE-400: Uncontrolled Resource Consumption)",
+      "severity": "MEDIUM",
+      "issue": "Queue size set to 100 with no rate limiting per IP or user. Multiple clients can hammer POST /api/switches/<id>/collect endpoint causing DoS by filling queue with 100 SSH attempts.",
+      "cwe": "CWE-400",
+      "evidence": [
+        "Line 39: _worker_queue = queue.Queue(maxsize=100)",
+        "No rate limiting middleware in app.py",
+        "Each SSH attempt spawns thread and waits 30s for connection timeout (line 170)"
+      ],
+      "impact": "Attacker can fill queue with 100 SSH attempts, consuming threads and memory. Thread exhaustion possible.",
+      "fix": "Add Flask-Limiter: pip install Flask-Limiter; @limiter.limit('5 per minute') on POST /api/switches/<id>/collect. Reduce SSH timeout in config: ssh_timeout: 10 (instead of 30)."
+    },
+    {
+      "file": "core/parsers/cisco_ios.py",
+      "line": 64,
+      "category": "A03:2021 - Injection (CWE-400: Uncontrolled Resource Consumption via Regex)",
+      "severity": "MEDIUM",
+      "issue": "Regular expressions without input length validation. Malicious CLI output with pathological strings could cause ReDoS (Regular Expression Denial of Service).",
+      "cwe": "CWE-400",
+      "evidence": [
+        "Line 64: re.match(r'\\s*(\\d+)\\s+([\\da-f:]+)\\s+(\\w+)\\s+(\\S+)', line, re.IGNORECASE)",
+        "Line 88: re.match(r'Internet\\s+([\\d.]+)\\s+\\d+\\s+([\\da-f:.]+)\\s+\\w+\\s+(\\S+)', line, re.IGNORECASE)",
+        "No check on output line length before regex"
+      ],
+      "impact": "If switch returns extremely long lines, regex backtracking could cause CPU spike.",
+      "fix": "Limit line length before regex: if len(line) > 500: continue; Use textfsm or safer parsers instead."
+    },
+    {
+      "file": "web/static/app.js",
+      "line": 99,
+      "category": "A04:2021 - Insecure Design (CWE-200: Exposure of Sensitive Information)",
+      "severity": "MEDIUM",
+      "issue": "collectSwitch() function sends empty body without credentials. Credentials must be provided separately in UI, exposing them in plaintext HTML inputs and JavaScript memory.",
+      "cwe": "CWE-200",
+      "evidence": [
+        "Line 99-112: collectSwitch() sends POST with empty body",
+        "Line 102: body: JSON.stringify({}) - credentials not in request"
+      ],
+      "impact": "UI must collect credentials in HTML inputs which are inspectable. JavaScript variables storing credentials are accessible.",
+      "fix": "Implement session-based credential storage: (1) Add POST /api/auth/connect for username/password exchange to session token. (2) Store token in sessionStorage. (3) collectSwitch() uses token instead of credentials."
+    },
+    {
+      "file": "core/utils.py",
+      "line": 20,
+      "category": "A09:2021 - Logging and Monitoring (CWE-532: Insertion of Sensitive Information into Log File)",
+      "severity": "MEDIUM",
+      "issue": "log_event() accepts any kwargs without sanitizing. If caller accidentally logs credentials or sensitive headers, they appear in JSON logs.",
+      "cwe": "CWE-532",
+      "evidence": [
+        "Line 19: data = {'event': event, **kwargs} - all kwargs logged as-is",
+        "No allowlist or schema validation of kwargs",
+        "If caller logs: log_event('debug', 'ssh', password=pwd), it leaks"
+      ],
+      "impact": "Accidental logging of sensitive data (credentials, tokens, headers) would appear in plaintext logs.",
+      "fix": "Add allowlist for kwargs: validate that only expected keys are logged. Alternatively, add schema validation that rejects unexpected keys."
+    },
+    {
+      "file": "core/config_loader.py",
+      "line": 159,
+      "category": "A02:2021 - Cryptographic Failures (CWE-798: Use of Hard-Coded Credentials)",
+      "severity": "MEDIUM",
+      "issue": "API token loaded from environment without validation of token strength. No minimum length, entropy, or pattern validation. Weak tokens (e.g., '123') accepted.",
+      "cwe": "CWE-798",
+      "evidence": [
+        "Line 159: api_token = os.getenv('API_TOKEN', data.get('api_token'))",
+        "No validation of token strength, minimum length, or format",
+        "Only checks if token exists, not if it's strong"
+      ],
+      "impact": "Weak API tokens can be brute-forced. Attacker with 100 common tokens could compromise API.",
+      "fix": "Validate token strength: if len(api_token) < 32: raise ValueError. Enforce randomness: api_token = secrets.token_urlsafe(32). Validate format: if not re.match(r'^[A-Za-z0-9_-]{32,}$', api_token): raise"
+    }
+  ],
+  "verdict": "FAIL",
+  "summary": "2 CRITICAL, 5 HIGH, 6 MEDIUM issues found. NetDash M3 fails Round 2 security review. CRITICAL vulnerabilities (DOM-based XSS in frontend + template interpolation anti-pattern) must be fixed before any deployment. The application shows progress from prior reviews (API token validation added, error sanitization added) but introduces new frontend XSS issues and underlying credential storage remains unsecured. RECOMMENDED IMMEDIATE ACTIONS: (1) Fix DOM XSS by replacing innerHTML with textContent/createElement in app.js. (2) Use render_template() instead of f-strings in app.py index route. (3) Implement secure credential handling with encryption. (4) Add IP validation for SSRF protection in collector.py. (5) Enable database encryption with SQLCipher. (6) Strengthen CSP headers to 'self' only, remove inline event handlers. (7) Add rate limiting to POST endpoints. RE-REVIEW REQUIRED after fixes."
+}

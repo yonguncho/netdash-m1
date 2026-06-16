@@ -1,6 +1,7 @@
 import sqlite3
 import logging
 import threading
+import os
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -116,6 +117,13 @@ def get_db(db_path):
     conn = None
     try:
         conn = sqlite3.connect(str(db_path))
+        # CRITICAL FIX (CWE-276): Restrict database file permissions to owner-only
+        # Prevents unauthorized access to sensitive network topology data
+        try:
+            os.chmod(str(db_path), 0o600)
+        except (OSError, NotImplementedError):
+            # Windows or systems without chmod support; skip gracefully
+            pass
         conn.row_factory = sqlite3.Row
         # Enable FOREIGN KEY constraints: SQLite defaults to OFF, explicit ON required (data integrity fix)
         conn.execute("PRAGMA foreign_keys = ON")

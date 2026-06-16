@@ -88,8 +88,10 @@ def _worker_loop():
     global _worker_queue, _collecting_switches
 
     while True:
+        # MEDIUM FIX (CPU optimization): Remove timeout to prevent unnecessary wakeups (busy-wait)
+        # Worker will block indefinitely until task arrives, reducing CPU usage
         try:
-            db_path, switch_id, username, password = _worker_queue.get(timeout=10)
+            db_path, switch_id, username, password = _worker_queue.get()
         except queue.Empty:
             continue
 
@@ -185,6 +187,9 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3):
                     output = conn.send_command(command)
                     outputs[key] = output
                     utils.log_event("debug", "command_executed", command=command)
+            # CRITICAL FIX (CWE-522): Explicitly clear device dict to prevent credential memory exposure
+            # ConnectHandler context manager closes the connection, but credentials remain in memory
+            device.clear()
             return outputs
         except Exception as e:
             # Sanitize SSH error messages to prevent credential/host info exposure (security fix)
@@ -198,7 +203,13 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3):
             else:
                 # Final attempt failed, log and raise
                 utils.log_event("error", "ssh_error", switch=switch["name"], error_type=type(e).__name__, error=sanitized_error)
+                # CRITICAL FIX (CWE-522): Clear credentials before raising exception
+                device.clear()
                 raise
+        finally:
+            # CRITICAL FIX (CWE-522): Ensure device dict is cleared even on exception
+            if 'device' in locals():
+                device.clear()
 
 
 def _save_raw_outputs(db_path, switch_id, switch_name, outputs):
