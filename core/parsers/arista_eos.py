@@ -125,7 +125,7 @@ def _parse_arps(arp_output, switch_id):
             ip, mac_addr, interface = match.groups()
 
             if utils.validate_ip(ip):
-                mac = utils.normalize_mac(mac_addr.replace(":", ""))
+                mac = utils.normalize_mac(mac_addr)  # normalize_mac handles all separator formats
                 interface = utils.normalize_port(interface)
 
                 if mac and interface:

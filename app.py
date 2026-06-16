@@ -19,9 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 def validate_credential(value, max_length=256):
-    """HIGH FIX (CWE-20): Validate credential string length, type, and character set.
+    """CRITICAL FIX (CWE-20): Validate credential string length and printable ASCII only.
 
-    Prevents DoS (oversized input), injection attacks (special characters).
+    Prevents DoS (oversized input), injection attacks (control chars).
+    Allows all printable ASCII characters (space-tilde) for flexibility with special chars.
     """
     if value is None:
         return None
@@ -31,9 +32,9 @@ def validate_credential(value, max_length=256):
         raise ValueError("credentials cannot be empty")
     if len(value) > max_length:
         raise ValueError(f"credentials max length {max_length}")
-    # Whitelist: alphanumeric + common special chars for usernames/passwords
-    if not re.match(r'^[a-zA-Z0-9._@\-!$#%&*+=?^`{|}~]+$', value):
-        raise ValueError("credentials contain invalid characters")
+    # CWE-20: Accept printable ASCII only; reject control chars, nulls, non-ASCII (prevents injection)
+    if not all(32 <= ord(c) <= 126 for c in value):
+        raise ValueError("credentials must contain only printable ASCII characters (no control chars, spaces allowed)")
     return value
 
 

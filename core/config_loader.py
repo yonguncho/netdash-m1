@@ -63,10 +63,14 @@ class Config:
 
 
 def _resolve_config_path(path: str = "config.yaml") -> str:
-    """Resolve config path from env var, project root, or cwd."""
-    # 1. Environment variable override
+    """Resolve config path from env var, project root, or cwd.
+
+    Env var paths are converted to absolute to prevent cwd-dependent behavior.
+    """
+    # 1. Environment variable override (convert to absolute path)
     if env_path := os.getenv("NETDASH_CONFIG"):
-        return env_path
+        env_path_resolved = str(Path(env_path).resolve())  # Normalize to absolute
+        return env_path_resolved
     # 2. Project root (parent of core/)
     project_root = Path(__file__).parent.parent
     project_config = project_root / path
@@ -156,7 +160,9 @@ def load_config(path: str = "config.yaml", demo_mode: bool = False) -> Config:
             utils.log_event("warning", "config_missing_key", key=key, action="using_default")
 
     # CWE-306 fix: Load api_token from environment variable (higher priority) or config file
+    api_token_source = "environment" if os.getenv("API_TOKEN") else "config_file"
     api_token = os.getenv("API_TOKEN", data.get("api_token"))
+    utils.log_event("info", "api_token_loaded", source=api_token_source)
 
     # Production mode: api_token is required (CWE-306: enforce authentication)
     if not demo_mode and not api_token:
