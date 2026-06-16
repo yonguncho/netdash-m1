@@ -199,12 +199,21 @@ def upsert_switch(db_path, row):
     with _db_lock:
         with get_db(db_path) as conn:
             cursor = conn.cursor()
+            # CRITICAL FIX (data integrity): INSERT OR REPLACE deletes + inserts atomically, losing original created_at.
+            # Use UPDATE + INSERT OR IGNORE to preserve created_at for existing switches, create new created_at for new ones.
+            switch_name = row.get("name")
             cursor.execute(
-                """INSERT OR REPLACE INTO switches
-                   (name, ip, vendor, model, status, created_at, last_collected)
-                   VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM switches WHERE name = ?), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)""",
-                (row.get("name"), row.get("ip"), row.get("vendor", ""), row.get("model"), row.get("status", "new"), row.get("name"))
+                """UPDATE switches SET ip = ?, vendor = ?, model = ?, status = ?, last_collected = CURRENT_TIMESTAMP
+                   WHERE name = ?""",
+                (row.get("ip"), row.get("vendor", ""), row.get("model"), row.get("status", "new"), switch_name)
             )
+            # If no rows updated (switch doesn't exist), insert new with auto-created_at
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    """INSERT INTO switches (name, ip, vendor, model, status)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (switch_name, row.get("ip"), row.get("vendor", ""), row.get("model"), row.get("status", "new"))
+                )
 
 
 def get_switch(db_path, switch_id):

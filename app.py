@@ -22,7 +22,7 @@ def validate_credential(value, max_length=256):
     """CRITICAL FIX (CWE-20): Validate credential string length and printable ASCII only.
 
     Prevents DoS (oversized input), injection attacks (control chars).
-    Allows all printable ASCII characters (space-tilde) for flexibility with special chars.
+    Allows printable ASCII characters except space (to prevent accidental whitespace in passwords).
     """
     if value is None:
         return None
@@ -32,9 +32,9 @@ def validate_credential(value, max_length=256):
         raise ValueError("credentials cannot be empty")
     if len(value) > max_length:
         raise ValueError(f"credentials max length {max_length}")
-    # CWE-20: Accept printable ASCII only; reject control chars, nulls, non-ASCII (prevents injection)
-    if not all(32 <= ord(c) <= 126 for c in value):
-        raise ValueError("credentials must contain only printable ASCII characters (no control chars, spaces allowed)")
+    # CWE-20: Accept printable ASCII only (ord 33-126); exclude space (ord 32) to prevent whitespace-only credentials
+    if not all(33 <= ord(c) <= 126 for c in value):
+        raise ValueError("credentials must contain only printable ASCII characters (no spaces, no control chars)")
     return value
 
 
@@ -216,11 +216,11 @@ def create_app(demo_mode=None):
 
 
 if __name__ == "__main__":
-    # CWE-306 fix: Production mode is default; demo_mode only if explicitly enabled via environment
-    demo_mode = os.getenv("DEMO_MODE", "").lower() == "true"
+    # Read config which already handles DEMO_MODE environment variable (no duplicate checking)
+    config = get_config()
+    demo_mode = config.app.get("demo_mode", False)
 
     app = create_app(demo_mode=demo_mode)
-    config = get_config()
 
     # CWE-306 fix: In production mode, API token MUST be configured
     if not demo_mode and not config.api_token:
@@ -234,12 +234,9 @@ if __name__ == "__main__":
 
     host = config.app.get("host", "127.0.0.1")
     port = config.app.get("port", 8082)
-    debug = config.app.get("debug", False)
-
-    # CRITICAL FIX (CWE-489): Force debug=False in production to prevent credential/stack-trace exposure
-    if not demo_mode:
-        debug = False
-        os.environ['DEBUG'] = 'false'  # Prevent runtime override
+    # CRITICAL FIX (CWE-489): In production mode, force debug=False to prevent credential/stack-trace exposure.
+    # Do NOT allow debug override via environment variables in production (app.run() receives final value here).
+    debug = config.app.get("debug", False) and demo_mode
 
     log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=config.app.get("demo_mode", False))
 

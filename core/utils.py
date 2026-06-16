@@ -28,12 +28,15 @@ def _mask_sensitive_data(obj):
 
 
 def log_event(level: str, event: str, **kwargs):
-    """JSON 형식으로 이벤트 로깅 (민감 정보 자동 필터링)
+    """Log events as JSON with automatic sensitive data redaction.
+
+    Prevents credentials, tokens, and secrets from being exposed in log output.
+    All sensitive fields are automatically masked with '***'.
 
     Args:
-        level: 로그 레벨 ('info', 'error', 'warning', 'debug')
-        event: 이벤트 이름
-        **kwargs: 추가 메타데이터 (민감 필드는 자동 마스킹)
+        level: Log level ('info', 'error', 'warning', 'debug')
+        event: Event name/identifier
+        **kwargs: Additional event metadata (sensitive fields auto-masked)
 
     Example:
         log_event('info', 'api_state', switches_count=5)

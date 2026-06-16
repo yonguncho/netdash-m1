@@ -90,10 +90,8 @@ def _worker_loop():
     while True:
         # MEDIUM FIX (CPU optimization): Remove timeout to prevent unnecessary wakeups (busy-wait)
         # Worker will block indefinitely until task arrives, reducing CPU usage
-        try:
-            db_path, switch_id, username, password = _worker_queue.get()
-        except queue.Empty:
-            continue
+        # Note: No timeout means queue.Empty will never be raised (unreachable code removed)
+        db_path, switch_id, username, password = _worker_queue.get()
 
         try:
             utils.log_event("info", "collect_start", switch_id=switch_id)

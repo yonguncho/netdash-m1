@@ -32,7 +32,8 @@ def normalize_port(port_str, vendor=None):
 
     port_str = port_str.strip()
 
-    if vendor == "extreme_exos" or ":" in port_str:
+    # Clarify operator precedence: check vendor OR colon syntax (both indicate port range format)
+    if vendor == "extreme_exos" or (":" in port_str):
         match = re.match(r"(\d+):(\d+)", port_str)
         if match:
             return f"Gi{match.group(1)}:{match.group(2)}"
