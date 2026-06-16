@@ -1,0 +1,18 @@
+SW-CORE-01#show mac address-table
+
+          Mac Address Table
+-------------------------------------------
+
+Vlan    Mac Address       Type        Ports
+----    -----------       --------    -----
+  10    aabb.cc00.0001    DYNAMIC     Gi0/3
+  10    aabb.cc00.0002    DYNAMIC     Gi0/4
+  20    aabb.cc00.0010    DYNAMIC     Gi0/5
+  30    aabb.cc00.0020    DYNAMIC     Gi0/6
+  30    aabb.cc00.0021    DYNAMIC     Gi0/7
+  40    aabb.cc00.0030    DYNAMIC     Gi0/9
+  40    aabb.cc00.0031    DYNAMIC     Gi0/10
+  50    aabb.cc00.0040    DYNAMIC     Gi0/11
+  50    aabb.cc00.0041    DYNAMIC     Gi0/12
+   1    aabb.cc00.0050    DYNAMIC     Gi0/1
+Total Mac Addresses for this criterion: 10

@@ -1,0 +1,4 @@
+Flask==3.0.3
+PyYAML==6.0.2
+Werkzeug==3.0.3
+click==8.1.7

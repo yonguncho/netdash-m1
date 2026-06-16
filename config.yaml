@@ -1,0 +1,13 @@
+db_path: netdash.db
+flap_threshold: 3
+upload_max_mb: 16
+api_token: "test-token-12345"
+
+switches:
+  - name: MY-SWITCH-01
+    ip: 192.168.1.1
+    vendor: cisco
+    model: "C2960X"
+    grp: core
+    service: network
+    location: "Server Room"

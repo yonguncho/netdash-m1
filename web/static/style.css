@@ -1,0 +1,122 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Segoe UI", "Malgun Gothic", Arial, sans-serif;
+  background: #f4f6f9;
+  color: #222;
+  min-height: 100vh;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  background: #1a2332;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,.3);
+}
+
+.header__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.header__ts {
+  margin-left: auto;
+  font-size: .8rem;
+  opacity: .7;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: .75rem;
+  font-weight: 700;
+  letter-spacing: .05em;
+}
+
+.badge--demo {
+  background: #e8a000;
+  color: #1a1a1a;
+}
+
+.main {
+  padding: 24px;
+}
+
+.section__title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 14px;
+  color: #334;
+}
+
+.switch-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.switch-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.1);
+  border-left: 4px solid #ccc;
+}
+
+.switch-card--done      { border-left-color: #2ecc71; }
+.switch-card--failed    { border-left-color: #e74c3c; }
+.switch-card--collecting{ border-left-color: #3498db; }
+.switch-card--pending   { border-left-color: #95a5a6; }
+
+.switch-card__name {
+  font-size: .95rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.switch-card__ip {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: .82rem;
+  color: #555;
+  margin-bottom: 10px;
+}
+
+.switch-card__meta {
+  display: flex;
+  gap: 16px;
+  font-size: .8rem;
+  color: #444;
+}
+
+.switch-card__stat span {
+  font-weight: 600;
+}
+
+.switch-card__status {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: .75rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #eee;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.loading {
+  color: #888;
+  font-size: .9rem;
+}
+
+.error-msg {
+  color: #c0392b;
+  font-size: .9rem;
+}

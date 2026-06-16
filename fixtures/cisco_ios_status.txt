@@ -1,0 +1,15 @@
+SW-CORE-01#show interfaces status
+
+Port      Name               Status       Vlan       Duplex  Speed Type
+Gi0/1     UPLINK-CORE        connected    trunk        full    1G   10/100/1000BaseTX
+Gi0/2     UPLINK-DIST        connected    trunk        full    1G   10/100/1000BaseTX
+Gi0/3     SERVER-01          connected    10           full  100M   10/100/1000BaseTX
+Gi0/4     SERVER-02          connected    10           full  100M   10/100/1000BaseTX
+Gi0/5     PRINTER-01         notconnect   20           auto   auto  10/100/1000BaseTX
+Gi0/6     WORKSTATION-A      connected    30           full  100M   10/100/1000BaseTX
+Gi0/7     WORKSTATION-B      connected    30           full  100M   10/100/1000BaseTX
+Gi0/8     WORKSTATION-C      notconnect   30           auto   auto  10/100/1000BaseTX
+Gi0/9     IP-PHONE-01        connected    40           full  100M   10/100/1000BaseTX
+Gi0/10    IP-PHONE-02        connected    40           full  100M   10/100/1000BaseTX
+Gi0/11    AP-FLOOR-1         connected    50           full    1G   10/100/1000BaseTX
+Gi0/12    AP-FLOOR-2         connected    50           full    1G   10/100/1000BaseTX
