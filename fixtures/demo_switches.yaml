@@ -1,21 +1,21 @@
 switches:
   - name: SW-CORE-01
     ip: 192.168.100.1
-    vendor: cisco
+    vendor: cisco_ios
     model: "C2960X-48FPD-L"
     grp: core
     service: "core-network"
     location: "IDC-A/Rack-01"
   - name: SW-ACCESS-01
     ip: 192.168.100.2
-    vendor: cisco
+    vendor: cisco_ios
     model: "C2960S-48TS-L"
     grp: access
     service: "office-floor-1"
     location: "Building-B/Floor-1"
   - name: SW-ARISTA-01
     ip: 192.168.100.3
-    vendor: arista
+    vendor: arista_eos
     model: "DCS-7050TX"
     grp: core
     service: "data-center"

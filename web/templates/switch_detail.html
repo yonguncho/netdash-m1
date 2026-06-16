@@ -1,0 +1,62 @@
+<div class="switch-detail" id="switch-detail-{id}">
+    <div class="switch-header">
+        <h2>{name}</h2>
+        <p>IP: {ip} | Vendor: {vendor}</p>
+        <button class="collect-btn" onclick="collectSwitch({id})">Collect Now</button>
+    </div>
+
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab(event, 'ports')">Ports</button>
+        <button class="tab-btn" onclick="switchTab(event, 'macs')">MAC</button>
+        <button class="tab-btn" onclick="switchTab(event, 'arps')">ARP</button>
+        <button class="tab-btn" onclick="switchTab(event, 'events')">Events</button>
+    </div>
+
+    <div id="ports" class="tab-content active">
+        <table>
+            <thead>
+                <tr>
+                    <th>Port</th>
+                    <th>Status</th>
+                    <th>VLAN</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody id="ports-table">
+            </tbody>
+        </table>
+    </div>
+
+    <div id="macs" class="tab-content">
+        <table>
+            <thead>
+                <tr>
+                    <th>VLAN</th>
+                    <th>MAC</th>
+                    <th>Port</th>
+                    <th>Type</th>
+                </tr>
+            </thead>
+            <tbody id="macs-table">
+            </tbody>
+        </table>
+    </div>
+
+    <div id="arps" class="tab-content">
+        <table>
+            <thead>
+                <tr>
+                    <th>IP</th>
+                    <th>MAC</th>
+                    <th>Interface</th>
+                </tr>
+            </thead>
+            <tbody id="arps-table">
+            </tbody>
+        </table>
+    </div>
+
+    <div id="events" class="tab-content">
+        <p>No events recorded (M3)</p>
+    </div>
+</div>

@@ -12,12 +12,31 @@ from core.parsers import get_parser
 
 logger = logging.getLogger(__name__)
 
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+
 
 def run_demo(config: Config) -> None:
     utils.log_event("info", "demo_start")
 
     db_path = config.get_db_path()
-    yaml_path = FIXTURES_DIR / "demo_switches.yaml"
+
+    # Check for demo_switches.yaml in multiple locations
+    yaml_paths = [
+        FIXTURES_DIR / "demo_switches.yaml",
+        Path("fixtures") / "demo_switches.yaml",
+        Path.cwd() / "fixtures" / "demo_switches.yaml"
+    ]
+
+    yaml_path = None
+    for p in yaml_paths:
+        if p.exists():
+            yaml_path = p
+            break
+
+    if yaml_path is None:
+        utils.log_event("error", "demo_switches_yaml_not_found", paths=str(yaml_paths))
+        return
+
     try:
         demo_data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
     except FileNotFoundError:

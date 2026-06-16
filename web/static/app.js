@@ -1,82 +1,118 @@
-(function () {
-  "use strict";
+const STATUS_COLORS = {
+    up: "#28a745",
+    down: "#dc3545",
+    "error-disabled": "#ffc107",
+    pending: "#ccc",
+    done: "#28a745",
+    failed: "#dc3545"
+};
 
-  var POLL_INTERVAL_MS = 3000;
-
-  function statusLabel(status) {
-    var map = {
-      done: "완료",
-      failed: "실패",
-      collecting: "수집 중",
-      pending: "대기",
-      unsupported: "미지원",
-    };
-    return map[status] || status;
-  }
-
-  function renderSwitches(switches) {
-    var container = document.getElementById("switch-list");
-    if (!switches || switches.length === 0) {
-      container.innerHTML = '<p class="loading">스위치 없음</p>';
-      return;
-    }
-
-    var html = switches
-      .map(function (sw) {
-        var cls = "switch-card switch-card--" + (sw.status || "pending");
-        return (
-          '<div class="' + cls + '">' +
-          '<div class="switch-card__name">' + escapeHtml(sw.name || "") + "</div>" +
-          '<div class="switch-card__ip">' + escapeHtml(sw.ip || "") + "</div>" +
-          '<div class="switch-card__meta">' +
-          '<div class="switch-card__stat">포트 <span>' + (sw.port_count || 0) + "</span></div>" +
-          '<div class="switch-card__stat">MAC <span>' + (sw.mac_count || 0) + "</span></div>" +
-          '<div class="switch-card__stat">벤더 <span>' + escapeHtml(sw.vendor || "-") + "</span></div>" +
-          "</div>" +
-          '<span class="switch-card__status">' + statusLabel(sw.status) + "</span>" +
-          "</div>"
-        );
-      })
-      .join("");
-
-    container.innerHTML = html;
-  }
-
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  function updateTimestamp(ts) {
-    var el = document.getElementById("last-updated");
-    if (el && ts) {
-      el.textContent = "갱신: " + ts.replace("T", " ").slice(0, 19) + " UTC";
-    }
-  }
-
-  function poll() {
+function pollState() {
     fetch("/api/state")
-      .then(function (res) {
-        if (!res.ok) {
-          throw new Error("HTTP " + res.status);
-        }
-        return res.json();
-      })
-      .then(function (data) {
-        renderSwitches(data.switches);
-        updateTimestamp(data.timestamp);
-      })
-      .catch(function (err) {
-        var container = document.getElementById("switch-list");
-        container.innerHTML = '<p class="error-msg">서버 연결 실패: ' + escapeHtml(err.message) + "</p>";
-      });
-  }
+        .then(r => r.json())
+        .then(data => {
+            console.log("State updated:", data);
+            updateSwitches(data.switches);
+        })
+        .catch(e => console.error("Poll error:", e));
+}
 
-  document.addEventListener("DOMContentLoaded", function () {
-    poll();
-    setInterval(poll, POLL_INTERVAL_MS);
-  });
-})();
+function updateSwitches(switches) {
+    const app = document.getElementById("app");
+    if (!app) return;
+
+    app.innerHTML = '<div class="switches">';
+    for (const sw of switches) {
+        const color = STATUS_COLORS[sw.status] || "#999";
+        const card = `
+            <div class="switch-card" style="border-left: 4px solid ${color}">
+                <h3>${sw.name}</h3>
+                <p>IP: ${sw.ip}</p>
+                <p>Vendor: ${sw.vendor}</p>
+                <p>Status: <span style="color: ${color}">${sw.status}</span></p>
+                <button onclick="showDetail(${sw.id})">Details</button>
+            </div>
+        `;
+        app.innerHTML += card;
+    }
+    app.innerHTML += "</div>";
+}
+
+function showDetail(switchId) {
+    fetch(`/api/switches/${switchId}/detail`)
+        .then(r => r.json())
+        .then(data => {
+            renderDetail(data);
+        })
+        .catch(e => console.error("Detail error:", e));
+}
+
+function renderDetail(data) {
+    const app = document.getElementById("app");
+    app.innerHTML = `
+        <div class="switch-detail">
+            <button onclick="pollState()">Back</button>
+            <h2>${data.switch.name}</h2>
+
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab(event, 'ports')">Ports</button>
+                <button class="tab-btn" onclick="switchTab(event, 'macs')">MAC</button>
+                <button class="tab-btn" onclick="switchTab(event, 'arps')">ARP</button>
+            </div>
+
+            <div id="ports" class="tab-content active">
+                <table>
+                    <tr><th>Port</th><th>Status</th><th>VLAN</th><th>Desc</th></tr>
+                    ${data.ports.map(p => `<tr><td>${p.name}</td><td>${p.status}</td><td>${p.vlan}</td><td>${p.description}</td></tr>`).join("")}
+                </table>
+            </div>
+
+            <div id="macs" class="tab-content">
+                <table>
+                    <tr><th>VLAN</th><th>MAC</th><th>Port</th></tr>
+                    ${data.macs.map(m => `<tr><td>${m.vlan}</td><td>${m.mac}</td><td>${m.port}</td></tr>`).join("")}
+                </table>
+            </div>
+
+            <div id="arps" class="tab-content">
+                <table>
+                    <tr><th>IP</th><th>MAC</th><th>Interface</th></tr>
+                    ${data.arps.map(a => `<tr><td>${a.ip}</td><td>${a.mac}</td><td>${a.interface}</td></tr>`).join("")}
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+function switchTab(event, tabName) {
+    const contents = document.querySelectorAll(".tab-content");
+    contents.forEach(c => c.classList.remove("active"));
+
+    const btns = document.querySelectorAll(".tab-btn");
+    btns.forEach(b => b.classList.remove("active"));
+
+    document.getElementById(tabName).classList.add("active");
+    event.target.classList.add("active");
+}
+
+function collectSwitch(switchId) {
+    fetch(`/api/switches/${switchId}/collect`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({})
+    })
+    .then(r => r.json())
+    .then(data => {
+        console.log("Collect started:", data);
+        alert("Collection started");
+    })
+    .catch(e => {
+        console.error("Collect error:", e);
+        alert("Error: " + e);
+    });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    pollState();
+    setInterval(pollState, 3000);
+});

@@ -1,0 +1,389 @@
+{
+  "review_metadata": {
+    "round": 3,
+    "date": "2026-06-16",
+    "reviewer": "AI_WORKPLACE_Director",
+    "project": "NetDash M2",
+    "scope": "OWASP Top 10 2021 Security Assessment",
+    "target_files": [
+      "app.py",
+      "config.py",
+      "core/collector.py",
+      "core/db.py",
+      "core/correlator.py"
+    ]
+  },
+  "critical_issues": [
+    {
+      "id": "SEC-001",
+      "cwe": "CWE-522: Insufficiently Protected Credentials",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "severity": "CRITICAL",
+      "title": "SSH credentials stored in plaintext",
+      "location": {
+        "file": "app.py",
+        "line": "41-57"
+      },
+      "description": "SSH credentials (username, password) from POST /api/switches/<id>/collect are queued for collection without encryption. If these are stored in database or raw_outputs, they will be in plaintext.",
+      "evidence": [
+        "app.py L48: password = data.get('password')",
+        "app.py L53: collector.collect_switch(db_path, switch_id, username, password)",
+        "core/collector.py L36: collect_switch(..., username=None, password=None)",
+        "No encryption applied before DB storage or file write"
+      ],
+      "impact": "Compromise of network device credentials; lateral movement; network reconnaissance",
+      "fix": {
+        "priority": "Immediate (before M2-1)",
+        "steps": [
+          "1. Hash credentials using PBKDF2-SHA256 before storage (non-reversible for comparison)",
+          "2. Alternatively: use OS-level secrets storage (Windows Credential Manager / DPAPI)",
+          "3. OR: use 3rd-party Secrets Manager (HashiCorp Vault, LastPass API)",
+          "4. Update core/collector.py to retrieve credentials from secure storage",
+          "5. Add unit test: test_credentials_not_logged_in_files()"
+        ]
+      }
+    },
+    {
+      "id": "SEC-002",
+      "cwe": "CWE-306: Missing Authentication for Critical Function",
+      "owasp": "A07:2021 - Authentication and Session Management",
+      "severity": "CRITICAL",
+      "title": "No API authentication required",
+      "location": {
+        "file": "app.py",
+        "lines": ["25-38", "41-57", "60-84"]
+      },
+      "description": "All API endpoints (/api/state, /api/switches/<id>/collect, /api/switches/<id>/detail) are accessible without authentication. Anyone on localhost can trigger switch collections or access network topology.",
+      "evidence": [
+        "app.py L25: @app.route('/api/state', methods=['GET']) - no auth decorator",
+        "app.py L41: @app.route('/api/switches/<int:switch_id>/collect', methods=['POST']) - no auth",
+        "app.py L60: @app.route('/api/switches/<int:switch_id>/detail', methods=['GET']) - no auth",
+        "No middleware checking API tokens or session cookies"
+      ],
+      "impact": "Unauthorized access to collected network topology; arbitrary collection triggers; DoS by queue saturation",
+      "fix": {
+        "priority": "Immediate (before M2-1)",
+        "steps": [
+          "1. Add Bearer token authentication via Authorization header (RFC 6750)",
+          "2. Implement token validation: @require_api_token decorator",
+          "3. Store API tokens hashed in database (PBKDF2-SHA256)",
+          "4. Endpoint: POST /api/auth/token (exchange credentials for token)",
+          "5. Token expiry: 24 hours by default",
+          "6. Add unit tests: test_auth_required_on_all_endpoints()"
+        ]
+      }
+    },
+    {
+      "id": "SEC-003",
+      "cwe": "CWE-532: Insertion of Sensitive Information into Log File",
+      "owasp": "A09:2021 - Logging and Monitoring",
+      "severity": "HIGH",
+      "title": "Sensitive information in error logs",
+      "location": {
+        "file": "core/collector.py",
+        "line": "151"
+      },
+      "description": "SSH errors from netmiko (line 151) are logged as-is via logger.error(). These can include partial credentials, device responses, or stack traces containing sensitive paths.",
+      "evidence": [
+        "core/collector.py L151: logger.error(json.dumps({'event': 'ssh_error', 'error': str(e)}))",
+        "Unfiltered exception messages may leak connection strings, credential hints, or internal IPs"
+      ],
+      "impact": "Credential hints or internal network details in log files; compliance violation (PCI-DSS 3.4, SOC 2)",
+      "fix": {
+        "priority": "Before M2-2 (Phase 2)",
+        "steps": [
+          "1. Create sanitize_error_message(error_str) function",
+          "2. Strip credentials patterns: /<password>.*/, /<username>.*/",
+          "3. Log error type only, not full exception message",
+          "4. Example: logger.error(json.dumps({'event': 'ssh_error', 'error_type': type(e).__name__, 'switch_id': switch_id}))",
+          "5. Add unit test: test_error_messages_sanitized()"
+        ]
+      }
+    }
+  ],
+  "high_issues": [
+    {
+      "id": "SEC-004",
+      "cwe": "CWE-94: Improper Control of Generation of Code",
+      "owasp": "A03:2021 - Injection",
+      "severity": "HIGH",
+      "title": "No input validation on JSON request bodies",
+      "location": {
+        "file": "app.py",
+        "line": "46"
+      },
+      "description": "request.get_json() is called without schema validation. Malformed JSON or unexpected fields could trigger unhandled exceptions or undefined behavior.",
+      "evidence": [
+        "app.py L46: data = request.get_json() or {}",
+        "No schema validation (e.g., jsonschema, pydantic)",
+        "app.py L47-48: Direct .get() on untrusted data"
+      ],
+      "impact": "HTTP 500 errors exposing stack traces; potential DoS via large payloads; type confusion attacks",
+      "fix": {
+        "priority": "Before M2-2",
+        "steps": [
+          "1. Define JSON schema using pydantic BaseModel",
+          "2. Example: class CollectRequest(BaseModel): switch_id: int; username: str; password: str",
+          "3. Validate in endpoint: data = CollectRequest(**request.json()).dict()",
+          "4. Catch ValidationError and return 400 with sanitized message",
+          "5. Add unit tests: test_invalid_json_rejected(), test_oversized_payload_rejected()"
+        ]
+      }
+    },
+    {
+      "id": "SEC-005",
+      "cwe": "CWE-798: Use of Hard-coded Credentials",
+      "owasp": "A04:2021 - Insecure Design",
+      "severity": "HIGH",
+      "title": "Debug mode can be enabled via environment variable in production",
+      "location": {
+        "file": "app.py",
+        "line": "101"
+      },
+      "description": "config.py L58-59 allows DEBUG environment variable to override config, enabling Flask debug mode. Debug mode exposes stack traces, request data, and interactive debugger access.",
+      "evidence": [
+        "app.py L101: debug = cfg.app.get('debug', False)",
+        "app.py L111: app.run(host=host, port=port, debug=debug)",
+        "config.py L58-59: os.getenv('DEBUG').lower() == 'true' overrides config.yaml"
+      ],
+      "impact": "Information disclosure (stack traces, source code); interactive debugger access; RCE if debugger PIN is guessable",
+      "fix": {
+        "priority": "Before M2-1",
+        "steps": [
+          "1. Remove DEBUG environment variable override",
+          "2. config.py L58-59: Delete os.getenv('DEBUG') handling",
+          "3. Set debug=False unconditionally in production (use FLASK_ENV=production)",
+          "4. If needed, use FLASK_ENV (standard Flask practice) instead",
+          "5. Add CI check: ensure debug=False in release builds"
+        ]
+      }
+    },
+    {
+      "id": "SEC-006",
+      "cwe": "CWE-770: Allocation of Resources Without Limits or Throttling",
+      "owasp": "A04:2021 - Insecure Design",
+      "severity": "HIGH",
+      "title": "No rate limiting on API endpoints",
+      "location": {
+        "file": "app.py",
+        "lines": ["41-57"]
+      },
+      "description": "POST /api/switches/<id>/collect can be called repeatedly without rate limiting. Queue size is 100 (core/collector.py L25), but no per-IP rate limit prevents abuse.",
+      "evidence": [
+        "core/collector.py L25: _worker_queue = queue.Queue(maxsize=100)",
+        "No @rate_limit decorator on endpoints",
+        "No per-IP request counting"
+      ],
+      "impact": "Queue saturation DoS; resource exhaustion; CPU spike from SSH connection attempts",
+      "fix": {
+        "priority": "Before M2-3 (Phase 3)",
+        "steps": [
+          "1. Install flask-limiter: pip install Flask-Limiter",
+          "2. Add @limiter.limit('5 per minute') decorator to POST /api/switches/<id>/collect",
+          "3. Add @limiter.limit('30 per minute') decorator to GET endpoints",
+          "4. Store limits in config.yaml (configurable per environment)",
+          "5. Add unit test: test_rate_limiting_enforced()"
+        ]
+      }
+    },
+    {
+      "id": "SEC-007",
+      "cwe": "CWE-434: Unrestricted Upload of File with Dangerous Type",
+      "owasp": "A01:2021 - Broken Access Control",
+      "severity": "MEDIUM",
+      "title": "No validation of SSH target IP address",
+      "location": {
+        "file": "core/collector.py",
+        "line": "134"
+      },
+      "description": "SSH connection is made to switch['ip'] (from database) without validation. No check for private IP ranges, localhost, or restricted networks prevents potential SSRF-like abuse.",
+      "evidence": [
+        "core/collector.py L134: 'ip': switch['ip'],",
+        "No IP validation (e.g., ipaddress.ip_address(switch['ip']).is_private)",
+        "No firewall/network boundary checking"
+      ],
+      "impact": "SSRF to internal services; access to RFC 1918 networks; access to localhost services",
+      "fix": {
+        "priority": "Before M2-2",
+        "steps": [
+          "1. Validate IP format: ipaddress.ip_address(switch['ip'])",
+          "2. Allow only RFC 1918 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) + site-local ranges",
+          "3. Reject localhost (127.0.0.1, ::1) and multicast ranges",
+          "4. Add to config: allowed_ip_ranges: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']",
+          "5. Add unit test: test_ssrf_protection_ip_validation()"
+        ]
+      }
+    }
+  ],
+  "medium_issues": [
+    {
+      "id": "SEC-008",
+      "cwe": "CWE-327: Use of a Broken or Risky Cryptographic Algorithm",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "severity": "MEDIUM",
+      "title": "SQLite database file has no encryption",
+      "location": {
+        "file": "core/db.py",
+        "line": "100"
+      },
+      "description": "SQLite database (netdash.db) is stored in plaintext. Contains switch credentials, network topology, and MAC/ARP tables. No filesystem encryption or database-level encryption applied.",
+      "evidence": [
+        "core/db.py L99-100: sqlite3.connect(str(db_path))",
+        "No cipher/encryption flag on SQLite connection",
+        "Stored in project root, accessible to any process with file permissions"
+      ],
+      "impact": "Disk access compromise exposes credentials, network topology, host inventory",
+      "fix": {
+        "priority": "M3 or M4 (defer to post-MVP)",
+        "steps": [
+          "1. Use SQLCipher (sqlite3 with AES-256 encryption): pip install sqlcipher3",
+          "2. OR use OS-level encryption (BitLocker on Windows, FileVault on macOS)",
+          "3. OR store DB in encrypted VM volume",
+          "4. Update core/db.py: sqlite3.connect(db_path, password='<encrypted-key>')",
+          "5. Note: Deferred to M4~M5 per PRD (M6 reserved for DPAPI)"
+        ]
+      }
+    },
+    {
+      "id": "SEC-009",
+      "cwe": "CWE-426: Untrusted Search Path",
+      "owasp": "A06:2021 - Vulnerable and Outdated Components",
+      "severity": "MEDIUM",
+      "title": "No pinned dependency versions in requirements.txt",
+      "location": {
+        "file": "requirements.txt"
+      },
+      "description": "Requirements file does not pin exact versions. This allows installation of vulnerable packages if latest versions have known CVEs.",
+      "evidence": [
+        "requirements.txt likely contains: flask, netmiko, pyyaml (without version pins)",
+        "No hash verification (--require-hashes)"
+      ],
+      "impact": "Transitive dependency vulnerabilities; supply chain compromise; CI/CD supply chain risk",
+      "fix": {
+        "priority": "Before M2-5 (Phase 5, Release)",
+        "steps": [
+          "1. Pin all direct dependencies: flask==3.0.0, netmiko==4.3.0, pyyaml==6.0.1",
+          "2. Generate lock file: pip freeze > requirements-lock.txt",
+          "3. Use pip-audit to scan for CVEs: pip install pip-audit && pip-audit",
+          "4. Update requirements.txt with pinned versions",
+          "5. Add CI check: pip audit on every build"
+        ]
+      }
+    },
+    {
+      "id": "SEC-010",
+      "cwe": "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor",
+      "owasp": "A01:2021 - Broken Access Control",
+      "severity": "MEDIUM",
+      "title": "No environment separation (dev/staging/prod)",
+      "location": {
+        "file": "config.yaml"
+      },
+      "description": "Single config.yaml for all environments. Secrets and environment-specific settings are not separated. Risk of deploying dev settings to production.",
+      "evidence": [
+        "C:\\AI_WORKPLACE\\today_product\\config.yaml is single file",
+        "No .env.prod, .env.staging, .env.local pattern",
+        "config.py L26-33: All settings loaded into single Config object"
+      ],
+      "impact": "Dev/staging credentials exposed in production; debug features enabled in prod; compliance violation",
+      "fix": {
+        "priority": "Before M2-4 (Phase 4, UI)",
+        "steps": [
+          "1. Create config/{dev,staging,prod}.yaml",
+          "2. Create .env.local (gitignore) for dev overrides",
+          "3. Add APP_ENV environment variable (dev/staging/prod)",
+          "4. config.py: load config/[APP_ENV].yaml based on APP_ENV",
+          "5. Separate secrets (credentials) from config (non-sensitive settings)",
+          "6. Add unit test: test_env_separation_enforced()"
+        ]
+      }
+    }
+  ],
+  "low_issues": [
+    {
+      "id": "SEC-011",
+      "cwe": "CWE-693: Protection Mechanism Failure",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "severity": "LOW",
+      "title": "No CORS headers or Content-Security-Policy",
+      "location": {
+        "file": "app.py",
+        "line": "15"
+      },
+      "description": "Flask app does not set HTTP security headers (CORS, CSP, X-Frame-Options, etc.). Web UI could be vulnerable to framing attacks.",
+      "evidence": [
+        "app.py: No response.headers.update() for security headers",
+        "No Flask-CORS or manual CORS setup"
+      ],
+      "impact": "Clickjacking (if web UI added); potential information disclosure from error pages",
+      "fix": {
+        "priority": "Before M2-4 (Phase 4, UI)",
+        "steps": [
+          "1. Install flask-cors: pip install Flask-CORS",
+          "2. Add CORS(app, origins=['127.0.0.1'], allow_headers=['Authorization'])",
+          "3. Add security headers in after_request: response.headers['X-Frame-Options'] = 'DENY'",
+          "4. Add response.headers['Content-Security-Policy'] = \"default-src 'self'\"",
+          "5. Add unit test: test_security_headers_present()"
+        ]
+      }
+    }
+  ],
+  "architectural_recommendations": [
+    {
+      "id": "ARCH-001",
+      "title": "Implement secure credential storage layer",
+      "description": "Create dedicated credentials.py module with encrypt/decrypt/hash methods. All credential operations flow through this layer.",
+      "affected_files": ["core/collector.py", "core/db.py"],
+      "implementation_order": 1,
+      "priority": "P1"
+    },
+    {
+      "id": "ARCH-002",
+      "title": "Add API authentication middleware",
+      "description": "Create auth.py with @require_api_token decorator. Protect all endpoints with this decorator.",
+      "affected_files": ["app.py"],
+      "implementation_order": 2,
+      "priority": "P1"
+    },
+    {
+      "id": "ARCH-003",
+      "title": "Implement input validation layer",
+      "description": "Create validators.py with pydantic models for all request bodies (CollectRequest, ConfigUpdate, etc.).",
+      "affected_files": ["app.py"],
+      "implementation_order": 3,
+      "priority": "P2"
+    },
+    {
+      "id": "ARCH-004",
+      "title": "Add error logging sanitizer",
+      "description": "Create logging.py with SanitizedFormatter to strip credentials, IPs, and sensitive paths from log messages.",
+      "affected_files": ["core/collector.py", "core/db.py"],
+      "implementation_order": 2,
+      "priority": "P2"
+    }
+  ],
+  "compliance_notes": [
+    "PCI-DSS 3.4: Sensitive authentication data must not be logged. Current logging fails this.",
+    "SOC 2: Requires encrypted credentials in storage and transmission. DPAPI deferral to M6 is a gap.",
+    "ISO 27001: Requires authentication controls on all sensitive data access. API lacks auth.",
+    "NIST SP 800-53 IA-2: Requires multi-factor authentication or strong single-factor for critical functions."
+  ],
+  "testing_coverage_required": [
+    "test_credentials_not_stored_plaintext",
+    "test_api_endpoints_require_authentication",
+    "test_error_messages_do_not_leak_credentials",
+    "test_ssh_targets_in_private_ip_ranges_only",
+    "test_rate_limiting_applied_to_collect_endpoint",
+    "test_json_validation_rejects_malformed_input",
+    "test_debug_mode_disabled_in_prod"
+  ],
+  "summary": {
+    "total_issues": 11,
+    "critical": 2,
+    "high": 5,
+    "medium": 3,
+    "low": 1,
+    "pass_fail": "FAIL",
+    "verdict": "Security review Round 3 identifies 2 CRITICAL vulnerabilities that must be fixed before M2-1 starts. Credential storage and API authentication are minimal requirements for any networked service. Additional HIGH/MEDIUM issues should be addressed within Phase 2~5 per implementation plan."
+  }
+}

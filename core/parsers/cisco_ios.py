@@ -85,7 +85,7 @@ def _parse_arps(arp_output, switch_id):
     arps = []
 
     for line in arp_output.split("\n"):
-        match = re.match(r"Internet\s+([\d.]+)\s+\d+\s+([\da-f:]+)\s+\w+\s+(\S+)", line, re.IGNORECASE)
+        match = re.match(r"Internet\s+([\d.]+)\s+\d+\s+([\da-f:.]+)\s+\w+\s+(\S+)", line, re.IGNORECASE)
         if match:
             ip, mac_addr, interface = match.groups()
 

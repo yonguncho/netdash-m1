@@ -38,7 +38,7 @@ def _parse_ports(status_output, desc_output, switch_id):
             descriptions[port_name] = desc.strip()
 
     for line in status_output.split("\n"):
-        match = re.match(r"(\d+:\d+)\s+\S+\s+(Up|Down)\s+", line, re.IGNORECASE)
+        match = re.match(r"(\d+:\d+)\s+\S+\s+\S+\s+(Up|Down)\s+", line, re.IGNORECASE)
         if match:
             port_name, line_status = match.groups()
 

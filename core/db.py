@@ -1,320 +1,486 @@
-import json
-import logging
 import sqlite3
+import logging
 import threading
-from datetime import datetime, timezone
-from typing import Any
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+
+from . import utils
 
 logger = logging.getLogger(__name__)
 
-_lock = threading.Lock()
+_db_lock = threading.Lock()
+_UNSET = object()  # Sentinel value to distinguish default None from explicit None
 
-SCHEMA_SQL = """
+
+CREATE_SWITCHES_TABLE = """
 CREATE TABLE IF NOT EXISTS switches (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    name          TEXT NOT NULL,
-    ip            TEXT NOT NULL UNIQUE,
-    vendor        TEXT,
-    model         TEXT,
-    grp           TEXT,
-    service       TEXT,
-    location      TEXT,
-    status        TEXT DEFAULT 'pending'
-                  CHECK(status IN ('pending','collecting','done','failed','unsupported')),
-    last_collected TEXT,
-    error         TEXT,
-    cred_blob     BLOB
-);
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    ip TEXT NOT NULL,
+    vendor TEXT NOT NULL,
+    model TEXT,
+    status TEXT DEFAULT 'new',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_collected TIMESTAMP
+)
+"""
 
+CREATE_SNAPSHOTS_TABLE = """
 CREATE TABLE IF NOT EXISTS snapshots (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    switch_id   INTEGER NOT NULL REFERENCES switches(id),
-    collected_at TEXT NOT NULL
-);
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    switch_id INTEGER NOT NULL,
+    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    duration_seconds INTEGER,
+    FOREIGN KEY (switch_id) REFERENCES switches(id)
+)
+"""
 
+CREATE_PORTS_TABLE = """
 CREATE TABLE IF NOT EXISTS ports (
-    snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
-    switch_id   INTEGER NOT NULL REFERENCES switches(id),
-    name        TEXT,
-    link        TEXT,
-    vlan        TEXT,
-    speed       TEXT,
-    descr       TEXT,
-    flap_count  INTEGER DEFAULT 0
-);
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    switch_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT,
+    vlan INTEGER,
+    speed TEXT,
+    description TEXT,
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
+    FOREIGN KEY (switch_id) REFERENCES switches(id),
+    UNIQUE(snapshot_id, switch_id, name)
+)
+"""
 
+CREATE_MAC_ENTRIES_TABLE = """
 CREATE TABLE IF NOT EXISTS mac_entries (
-    snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
-    switch_id   INTEGER NOT NULL REFERENCES switches(id),
-    vlan        TEXT,
-    mac         TEXT,
-    port        TEXT
-);
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    switch_id INTEGER NOT NULL,
+    vlan INTEGER,
+    mac TEXT NOT NULL,
+    port TEXT NOT NULL,
+    entry_type TEXT,
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
+    FOREIGN KEY (switch_id) REFERENCES switches(id),
+    UNIQUE(snapshot_id, switch_id, vlan, mac, port)
+)
+"""
 
+CREATE_ARP_ENTRIES_TABLE = """
 CREATE TABLE IF NOT EXISTS arp_entries (
-    snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
-    switch_id   INTEGER NOT NULL REFERENCES switches(id),
-    ip          TEXT,
-    mac         TEXT,
-    interface   TEXT
-);
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    switch_id INTEGER NOT NULL,
+    ip TEXT NOT NULL,
+    mac TEXT NOT NULL,
+    interface TEXT,
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
+    FOREIGN KEY (switch_id) REFERENCES switches(id),
+    UNIQUE(snapshot_id, switch_id, ip)
+)
+"""
 
+CREATE_HOSTS_TABLE = """
 CREATE TABLE IF NOT EXISTS hosts (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    ip            TEXT NOT NULL UNIQUE,
-    hostname      TEXT,
-    grp           TEXT,
-    building      TEXT,
-    service       TEXT,
-    note          TEXT,
-    ledger_switch TEXT,
-    ledger_port   TEXT,
-    ping          INTEGER,
-    ping_at       TEXT
-);
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip TEXT NOT NULL UNIQUE,
+    mac TEXT,
+    switch_id INTEGER,
+    port TEXT,
+    located BOOLEAN DEFAULT 0,
+    confidence REAL DEFAULT 0.0,
+    reason TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (switch_id) REFERENCES switches(id)
+)
+"""
 
+CREATE_EVENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS events (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    switch_id  INTEGER REFERENCES switches(id),
-    port       TEXT,
-    type       TEXT CHECK(type IN ('flapping','disconnected')),
-    detail     TEXT,
-    created_at TEXT NOT NULL
-);
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    event_name TEXT NOT NULL,
+    switch_id INTEGER,
+    snapshot_id INTEGER,
+    data TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (switch_id) REFERENCES switches(id),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+)
 """
 
 
-def _connect(db_path: str) -> sqlite3.Connection:
-    # Use check_same_thread=True and timeout=10s for thread-safe concurrent access
-    # WAL mode improves concurrency for multi-threaded Flask apps
-    conn = sqlite3.connect(db_path, check_same_thread=True, timeout=10)
-    conn.row_factory = sqlite3.Row
-    # Enable WAL (Write-Ahead Logging) for better concurrency
-    conn.execute("PRAGMA journal_mode=WAL")
-    # Enable foreign key constraint enforcement
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def init_db(db_path: str) -> None:
-    with _lock:
-        try:
-            conn = _connect(db_path)
-            conn.executescript(SCHEMA_SQL)
-            conn.commit()
-            conn.close()
-            logger.info(json.dumps({"event": "db_initialized", "db_path": db_path}))
-        except sqlite3.Error as e:
-            logger.error(json.dumps({"event": "db_init_error", "db_path": db_path, "error": str(e)}))
-            raise
-
-
-def get_switches(db_path: str) -> list[dict[str, Any]]:
-    """Fetch all switches. Raises sqlite3.Error if DB operation fails."""
-    # Protect read with lock to prevent race conditions with concurrent upserts
-    with _lock:
-        conn = _connect(db_path)
-        try:
-            rows = conn.execute("SELECT * FROM switches ORDER BY id").fetchall()
-            return [dict(r) for r in rows]
-        finally:
+@contextmanager
+def get_db(db_path):
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        # Enable FOREIGN KEY constraints: SQLite defaults to OFF, explicit ON required (data integrity fix)
+        conn.execute("PRAGMA foreign_keys = ON")
+        yield conn
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        utils.log_event("error", "db_error", error=str(e))
+        raise
+    finally:
+        if conn:
             conn.close()
 
 
-def upsert_switch(db_path: str, row: dict[str, Any]) -> int:
-    """Upsert a switch and return its ID (using INSERT RETURNING to avoid N+1 query)."""
-    if not row.get("ip"):
-        raise ValueError("upsert_switch: ip is required")
-    with _lock:
-        conn = None
-        try:
-            conn = _connect(db_path)
-            cur = conn.execute(
-                """
-                INSERT INTO switches (name, ip, vendor, model, grp, service, location, status)
-                VALUES (:name, :ip, :vendor, :model, :grp, :service, :location, :status)
-                ON CONFLICT(ip) DO UPDATE SET
-                    name=excluded.name,
-                    vendor=excluded.vendor,
-                    model=excluded.model,
-                    grp=excluded.grp,
-                    service=excluded.service,
-                    location=excluded.location,
-                    status=excluded.status
-                RETURNING id
-                """,
-                {
-                    "name": row.get("name", ""),
-                    "ip": row["ip"],
-                    "vendor": row.get("vendor"),
-                    "model": row.get("model"),
-                    "grp": row.get("grp"),
-                    "service": row.get("service"),
-                    "location": row.get("location"),
-                    "status": row.get("status", "pending"),
-                },
-            )
-            switch_id = cur.fetchone()[0]
+def init_schema(db_path):
+    utils.log_event("info", "db_init", db_path=str(db_path))
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            for table_sql in [
+                CREATE_SWITCHES_TABLE,
+                CREATE_SNAPSHOTS_TABLE,
+                CREATE_PORTS_TABLE,
+                CREATE_MAC_ENTRIES_TABLE,
+                CREATE_ARP_ENTRIES_TABLE,
+                CREATE_HOSTS_TABLE,
+                CREATE_EVENTS_TABLE
+            ]:
+                cursor.execute(table_sql)
             conn.commit()
-            logger.info(json.dumps({"event": "upsert_switch", "ip": row["ip"], "switch_id": switch_id}))
-            return switch_id
-        except sqlite3.Error as e:
-            if conn:
-                conn.rollback()
-            logger.error(json.dumps({"event": "upsert_switch_error", "ip": row.get("ip"), "error": str(e)}))
-            raise
-        finally:
-            if conn:
-                conn.close()
+            utils.log_event("info", "schema_created", tables=7)
 
 
-def save_snapshot(db_path: str, switch_id: int, parsed: dict) -> int:
-    if parsed is None:
-        raise ValueError("save_snapshot: parsed cannot be None")
-    with _lock:
-        conn = None
-        try:
-            conn = _connect(db_path)
-            now = datetime.now(timezone.utc).isoformat()
-            cur = conn.execute(
-                "INSERT INTO snapshots (switch_id, collected_at) VALUES (?, ?)",
-                (switch_id, now),
+def init_db(db_path):
+    """Alias for init_schema (backward compatibility)."""
+    return init_schema(db_path)
+
+
+def validate_schema(db_path):
+    required_tables = {"switches", "snapshots", "ports", "mac_entries", "arp_entries", "hosts", "events"}
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing = {row[0] for row in cursor.fetchall()}
+        missing = required_tables - existing
+        if missing:
+            raise RuntimeError(f"Missing tables: {missing}")
+    utils.log_event("info", "schema_validated", tables=len(required_tables))
+
+
+def save_switch(db_path, name, ip, vendor):
+    utils.log_event("info", "save_switch", name=name, vendor=vendor)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR IGNORE INTO switches (name, ip, vendor) VALUES (?, ?, ?)",
+                (name, ip, vendor)
             )
-            snapshot_id = cur.lastrowid
+            cursor.execute("SELECT id FROM switches WHERE name = ?", (name,))
+            row = cursor.fetchone()
+            return row[0] if row else None
 
-            for p in parsed.get("ports") or []:
-                conn.execute(
-                    "INSERT INTO ports (snapshot_id, switch_id, name, link, vlan, speed, descr, flap_count) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (snapshot_id, switch_id,
-                     p.get("name"), p.get("link"), p.get("vlan"),
-                     p.get("speed"), p.get("descr"), p.get("flap_count", 0)),
-                )
 
-            for m in parsed.get("mac_entries") or []:
-                conn.execute(
-                    "INSERT INTO mac_entries (snapshot_id, switch_id, vlan, mac, port) VALUES (?, ?, ?, ?, ?)",
-                    (snapshot_id, switch_id, m.get("vlan"), m.get("mac"), m.get("port")),
-                )
+def upsert_switch(db_path, row):
+    # upsert_switch updates or inserts a switch record
+    utils.log_event("info", "upsert_switch", name=row.get("name"))
 
-            for a in parsed.get("arp_entries") or []:
-                conn.execute(
-                    "INSERT INTO arp_entries (snapshot_id, switch_id, ip, mac, interface) VALUES (?, ?, ?, ?, ?)",
-                    (snapshot_id, switch_id, a.get("ip"), a.get("mac"), a.get("interface")),
-                )
+    if "ip" not in row:
+        raise ValueError("ip is required for upsert_switch")
 
-            conn.commit()
-            logger.info(json.dumps({"event": "save_snapshot", "switch_id": switch_id, "snapshot_id": snapshot_id}))
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT OR REPLACE INTO switches
+                   (name, ip, vendor, model, status, created_at, last_collected)
+                   VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM switches WHERE name = ?), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)""",
+                (row.get("name"), row.get("ip"), row.get("vendor", ""), row.get("model"), row.get("status", "new"), row.get("name"))
+            )
+
+
+def get_switch(db_path, switch_id):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, ip, vendor, model, status, last_collected FROM switches WHERE id = ?", (switch_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def latest_snapshot_id(db_path, switch_id):
+    # latest_snapshot_id returns the most recent snapshot ID for a switch
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM snapshots WHERE switch_id = ? ORDER BY id DESC LIMIT 1",
+            (switch_id,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
+def get_switches(db_path):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, ip, vendor, model, status, last_collected FROM switches ORDER BY id")
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def set_switch_status(db_path, switch_id, status, error=None):
+    utils.log_event("info", "set_switch_status", switch_id=switch_id, status=status)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE switches SET status = ? WHERE id = ?",
+                (status, switch_id)
+            )
+
+
+def update_switch_status(db_path, switch_id, status, error=None):
+    # update_switch_status updates status and last_collected timestamp
+    utils.log_event("info", "update_switch_status", switch_id=switch_id, status=status)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE switches SET status = ?, last_collected = CURRENT_TIMESTAMP WHERE id = ?",
+                (status, switch_id)
+            )
+
+
+def save_snapshot(db_path, switch_id, parsed_or_duration=_UNSET, duration_seconds=None):
+    """Create a snapshot and optionally save parsed data.
+
+    Backward compatibility note: This function supports multiple signatures:
+    1. save_snapshot(db_path, switch_id)           → creates empty snapshot
+    2. save_snapshot(db_path, switch_id, parsed)   → creates snapshot + saves ports/macs/arps
+    3. save_snapshot(db_path, switch_id, duration) → legacy: creates snapshot with duration only
+
+    Complexity note: Uses sentinel value to distinguish default (empty snapshot) from explicit None (error).
+    Consider splitting into separate functions in future refactor (e.g., save_snapshot() + save_snapshot_with_data()).
+    Current approach maintains backward compatibility with existing call sites.
+    """
+    if parsed_or_duration is _UNSET:
+        # Default case: no args provided, create empty snapshot
+        parsed = None
+        duration = None
+    elif parsed_or_duration is None:
+        # Explicit None provided: treat as error (caller must provide dict or duration)
+        raise ValueError("save_snapshot requires either parsed dict or duration_seconds, not explicit None")
+    elif isinstance(parsed_or_duration, dict):
+        # New signature: save_snapshot(db_path, switch_id, parsed)
+        parsed = parsed_or_duration
+        duration = duration_seconds
+    else:
+        # Legacy signature: save_snapshot(db_path, switch_id, duration_seconds)
+        parsed = None
+        duration = parsed_or_duration
+
+    utils.log_event("info", "save_snapshot", switch_id=switch_id)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO snapshots (switch_id, duration_seconds) VALUES (?, ?)",
+                (switch_id, duration)
+            )
+            snapshot_id = cursor.lastrowid
+
+            # If parsed data provided, save all related entries
+            if parsed:
+                if "ports" in parsed and parsed["ports"]:
+                    for port in parsed["ports"]:
+                        cursor.execute(
+                            """INSERT OR REPLACE INTO ports
+                               (snapshot_id, switch_id, name, status, vlan, speed, description)
+                               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                            (snapshot_id, switch_id, port.get("name"), port.get("status") or port.get("link"),
+                             port.get("vlan"), port.get("speed"), port.get("descr", ""))
+                        )
+
+                # Support both "macs" (actual code) and "mac_entries" (test code)
+                mac_entries = parsed.get("mac_entries") or parsed.get("macs") or []
+                if mac_entries:
+                    for mac_entry in mac_entries:
+                        cursor.execute(
+                            """INSERT OR REPLACE INTO mac_entries
+                               (snapshot_id, switch_id, vlan, mac, port, entry_type)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (snapshot_id, switch_id, mac_entry.get("vlan"), mac_entry.get("mac"),
+                             mac_entry.get("port"), mac_entry.get("type"))
+                        )
+
+                # Support both "arp_entries" (test code) and "arps" (actual code)
+                arp_entries = parsed.get("arp_entries") or parsed.get("arps") or []
+                if arp_entries:
+                    for arp_entry in arp_entries:
+                        cursor.execute(
+                            """INSERT OR REPLACE INTO arp_entries
+                               (snapshot_id, switch_id, ip, mac, interface)
+                               VALUES (?, ?, ?, ?, ?)""",
+                            (snapshot_id, switch_id, arp_entry.get("ip"), arp_entry.get("mac"),
+                             arp_entry.get("interface"))
+                        )
+
             return snapshot_id
-        except sqlite3.Error as e:
-            if conn:
-                conn.rollback()
-            logger.error(json.dumps({"event": "save_snapshot_error", "switch_id": switch_id, "error": str(e)}))
-            raise
-        finally:
-            if conn:
-                conn.close()
 
 
-def latest_snapshot_id(db_path: str, switch_id: int) -> int | None:
-    """Fetch latest snapshot ID for a switch. Raises sqlite3.Error if DB operation fails."""
-    # Protect read with lock to prevent race conditions with concurrent saves
-    with _lock:
-        conn = _connect(db_path)
-        try:
-            row = conn.execute(
-                "SELECT id FROM snapshots WHERE switch_id=? ORDER BY id DESC LIMIT 1",
-                (switch_id,),
-            ).fetchone()
-            return row["id"] if row else None
-        finally:
-            conn.close()
-
-
-def get_ports(db_path: str, snapshot_id: int) -> list[dict[str, Any]]:
-    """Fetch ports for a snapshot. Raises sqlite3.Error if DB operation fails."""
-    # Protect read with lock to prevent race conditions with concurrent inserts
-    with _lock:
-        conn = _connect(db_path)
-        try:
-            rows = conn.execute(
-                "SELECT * FROM ports WHERE snapshot_id=?", (snapshot_id,)
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
-
-
-def get_mac_count(db_path: str, snapshot_id: int) -> int:
-    """Count MAC entries for a snapshot. Raises sqlite3.Error if DB operation fails."""
-    # Protect read with lock to prevent race conditions with concurrent inserts
-    with _lock:
-        conn = _connect(db_path)
-        try:
-            row = conn.execute(
-                "SELECT COUNT(*) AS cnt FROM mac_entries WHERE snapshot_id=?", (snapshot_id,)
-            ).fetchone()
-            return row["cnt"] if row else 0
-        finally:
-            conn.close()
-
-
-def get_switches_with_snapshot_info(db_path: str) -> list[dict[str, Any]]:
-    """Fetch all switches with their latest snapshot info (snapshot_id, port_count, mac_count) in a single query.
-    Optimizes N+1 query pattern by using SQL aggregation instead of multiple individual queries."""
-    # Fix for WARNING: N+1 Query Pattern in /api/state endpoint
-    with _lock:
-        conn = _connect(db_path)
-        try:
-            rows = conn.execute("""
-                WITH latest_snapshots AS (
-                  SELECT switch_id, MAX(id) as id
-                  FROM snapshots
-                  GROUP BY switch_id
-                ),
-                port_counts AS (
-                  SELECT snapshot_id, COUNT(*) as port_count
-                  FROM ports
-                  GROUP BY snapshot_id
-                ),
-                mac_counts AS (
-                  SELECT snapshot_id, COUNT(*) as mac_count
-                  FROM mac_entries
-                  GROUP BY snapshot_id
+def save_ports(db_path, snapshot_id, switch_id, ports):
+    if not ports:
+        return 0
+    utils.log_event("info", "save_ports", snapshot_id=snapshot_id, count=len(ports))
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            for port in ports:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO ports
+                       (snapshot_id, switch_id, name, status, vlan, speed, description)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (snapshot_id, switch_id, port.get("name"), port.get("status"),
+                     port.get("vlan"), port.get("speed"), port.get("description"))
                 )
-                SELECT
-                  s.id, s.name, s.ip, s.vendor, s.model, s.status, s.last_collected,
-                  ls.id as snapshot_id,
-                  COALESCE(pc.port_count, 0) as port_count,
-                  COALESCE(mc.mac_count, 0) as mac_count
-                FROM switches s
-                LEFT JOIN latest_snapshots ls ON s.id = ls.switch_id
-                LEFT JOIN port_counts pc ON ls.id = pc.snapshot_id
-                LEFT JOIN mac_counts mc ON ls.id = mc.snapshot_id
-                ORDER BY s.id
-            """).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
+            return len(ports)
 
 
-def update_switch_status(db_path: str, switch_id: int, status: str, error: str | None = None) -> None:
-    with _lock:
-        conn = None
-        try:
-            now = datetime.now(timezone.utc).isoformat()
-            conn = _connect(db_path)
-            conn.execute(
-                "UPDATE switches SET status=?, last_collected=?, error=? WHERE id=?",
-                (status, now, error, switch_id),
-            )
-            conn.commit()
-            logger.info(json.dumps({"event": "update_switch_status", "switch_id": switch_id, "status": status}))
-        except sqlite3.Error as e:
-            if conn:
-                conn.rollback()
-            logger.error(json.dumps({"event": "update_switch_status_error", "switch_id": switch_id, "error": str(e)}))
-            raise
-        finally:
-            if conn:
-                conn.close()
+def save_mac_entries(db_path, snapshot_id, switch_id, macs):
+    if not macs:
+        return 0
+    utils.log_event("info", "save_mac_entries", snapshot_id=snapshot_id, count=len(macs))
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            for mac_entry in macs:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO mac_entries
+                       (snapshot_id, switch_id, vlan, mac, port, entry_type)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (snapshot_id, switch_id, mac_entry.get("vlan"), mac_entry.get("mac"),
+                     mac_entry.get("port"), mac_entry.get("type"))
+                )
+            return len(macs)
+
+
+def save_arp_entries(db_path, snapshot_id, switch_id, arps):
+    if not arps:
+        return 0
+    utils.log_event("info", "save_arp_entries", snapshot_id=snapshot_id, count=len(arps))
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            for arp_entry in arps:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO arp_entries
+                       (snapshot_id, switch_id, ip, mac, interface)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (snapshot_id, switch_id, arp_entry.get("ip"), arp_entry.get("mac"),
+                     arp_entry.get("interface"))
+                )
+            return len(arps)
+
+
+def save_hosts(db_path, hosts):
+    if not hosts:
+        return 0
+    utils.log_event("info", "save_hosts", count=len(hosts))
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            for ip, host_data in hosts.items():
+                cursor.execute(
+                    """INSERT OR REPLACE INTO hosts
+                       (ip, mac, switch_id, port, located, confidence, reason)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (ip, host_data.get("mac"), host_data.get("switch_id"),
+                     host_data.get("port"), host_data.get("located", False),
+                     host_data.get("confidence", 0.0), host_data.get("reason"))
+                )
+            return len(hosts)
+
+
+def get_ports(db_path, snapshot_id):
+    # get_ports retrieves ports for a specific snapshot
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM ports WHERE snapshot_id = ? ORDER BY id",
+            (snapshot_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_ports_by_switch(db_path, switch_id):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM ports WHERE switch_id = ? ORDER BY id DESC LIMIT 1000",
+            (switch_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_mac_count(db_path, snapshot_id):
+    # get_mac_count returns the number of MAC entries in a snapshot
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM mac_entries WHERE snapshot_id = ?",
+            (snapshot_id,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
+
+def get_mac_entries_by_switch(db_path, switch_id):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM mac_entries WHERE switch_id = ? ORDER BY id DESC LIMIT 1000",
+            (switch_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_arp_entries_by_switch(db_path, switch_id):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM arp_entries WHERE switch_id = ? ORDER BY id DESC LIMIT 1000",
+            (switch_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_arp_entries(db_path):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM arp_entries ORDER BY id DESC LIMIT 10000")
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_mac_entries(db_path):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM mac_entries ORDER BY id DESC LIMIT 10000")
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_hosts_by_switch(db_path, switch_id):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM hosts WHERE switch_id = ? OR switch_id IS NULL ORDER BY ip",
+            (switch_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_snapshots(db_path, limit=100):
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, switch_id, collected_at, duration_seconds FROM snapshots ORDER BY id DESC LIMIT ?",
+            (limit,)
+        )
+        return [dict(row) for row in cursor.fetchall()]

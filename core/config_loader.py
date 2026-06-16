@@ -155,19 +155,28 @@ def load_config(path: str = "config.yaml", demo_mode: bool = False) -> Config:
         if key not in data:
             utils.log_event("warning", "config_missing_key", key=key, action="using_default")
 
-    # Production mode requires an api_token for API authentication
-    if not demo_mode and not data.get("api_token"):
-        utils.log_event("error", "config_validation_error", error="api_token is required in production mode")
-        raise ValueError("api_token is required in production mode")
+    # CWE-306 fix: Load api_token from environment variable (higher priority) or config file
+    api_token = os.getenv("API_TOKEN", data.get("api_token"))
+
+    # Production mode: api_token is required (CWE-306: enforce authentication)
+    if not demo_mode and not api_token:
+        raise ValueError("api_token is required in production mode (set API_TOKEN environment variable or api_token in config)")
 
     utils.log_event("info", "config_loaded", path=resolved_path, mode="demo" if demo_mode else "production")
+    # Ensure app config has correct demo_mode (override from file if needed)
+    app_config = data.get("app", {})
+    if not isinstance(app_config, dict):
+        app_config = {}
+    app_config = {**{"debug": False, "host": "127.0.0.1", "port": 8082}, **app_config}
+    app_config["demo_mode"] = demo_mode  # Override with computed demo_mode
+
     return Config(
         switches=data.get("switches") or [],
         flap_threshold=data.get("flap_threshold", 3),
         upload_max_mb=data.get("upload_max_mb", 16),
         db_path=data.get("db_path", "netdash.db"),
-        api_token=data.get("api_token"),
-        app=data.get("app", {"debug": False, "host": "127.0.0.1", "port": 8082, "demo_mode": demo_mode}),
+        api_token=api_token,
+        app=app_config,
         collector=data.get("collector", _get_default_collector_config()),
         correlator=data.get("correlator", {"uplink_mac_threshold": 4}),
         database=data.get("database", {"path": "netdash.db"}),
@@ -208,23 +217,3 @@ def _get_default_collector_config() -> dict:
                             "mac": "show mac-address", "arp": "show arp"}
         }
     }
-
-
-def get_db_path(config: Config) -> Path:
-    """Get database path from config."""
-    return Path(config.db_path)
-
-
-def get_raw_outputs_path(config: Config) -> Path:
-    """Get raw outputs path from config."""
-    return Path(config.raw_outputs.get("path", "raw_outputs"))
-
-
-def get_max_concurrent(config: Config) -> int:
-    """Get max concurrent workers from config."""
-    return config.collector.get("max_concurrent", 3)
-
-
-def get_uplink_threshold(config: Config) -> int:
-    """Get uplink threshold from config."""
-    return config.correlator.get("uplink_mac_threshold", 4)

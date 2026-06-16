@@ -1,45 +1,67 @@
-from core.parsers.stub import parse, COMMANDS
-from core.parsers import get_parser, PARSERS
+import pytest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core import fixtures
+from core.parsers import cisco_ios, arista_eos, extreme_exos
 
 
-def test_stub_parse_returns_correct_structure():
-    result = parse({})
-    assert "ports" in result
-    assert "mac_entries" in result
-    assert "arp_entries" in result
+class TestCiscoIOSParser:
+    def test_parse_cisco_ios(self):
+        outputs = fixtures.get_cisco_ios_outputs()
+        result = cisco_ios.parse(outputs, 1)
+
+        assert "ports" in result
+        assert "macs" in result
+        assert "arps" in result
+
+        assert len(result["ports"]) > 0
+        assert len(result["macs"]) > 0
+        assert len(result["arps"]) > 0
+
+    def test_cisco_ports_have_required_fields(self):
+        outputs = fixtures.get_cisco_ios_outputs()
+        result = cisco_ios.parse(outputs, 1)
+
+        for port in result["ports"]:
+            assert "name" in port
+            assert "status" in port
+            assert port["switch_id"] == 1
+
+    def test_cisco_macs_deduplicated(self):
+        outputs = fixtures.get_cisco_ios_outputs()
+        result = cisco_ios.parse(outputs, 1)
+
+        macs = [m["mac"] for m in result["macs"]]
+        assert len(macs) == len(set(macs)), "Duplicate MACs found"
 
 
-def test_stub_parse_ports_have_required_fields():
-    result = parse({})
-    for port in result["ports"]:
-        assert "name" in port
-        assert "link" in port
-        assert "flap_count" in port
+class TestAristaEOSParser:
+    def test_parse_arista_eos(self):
+        outputs = fixtures.get_arista_eos_outputs()
+        result = arista_eos.parse(outputs, 2)
+
+        assert "ports" in result
+        assert "macs" in result
+        assert "arps" in result
+        assert len(result["ports"]) > 0
 
 
-def test_stub_parse_non_empty_lists():
-    result = parse({})
-    assert len(result["ports"]) >= 2
-    assert len(result["mac_entries"]) >= 2
-    assert len(result["arp_entries"]) >= 2
+class TestExtremeEXOSParser:
+    def test_parse_extreme_exos(self):
+        outputs = fixtures.get_extreme_exos_outputs()
+        result = extreme_exos.parse(outputs, 3)
 
+        assert "ports" in result
+        assert "macs" in result
+        assert "arps" in result
+        assert len(result["ports"]) > 0
 
-def test_stub_commands_has_status_mac_arp():
-    assert "status" in COMMANDS
-    assert "mac" in COMMANDS
-    assert "arp" in COMMANDS
+    def test_extreme_port_normalization(self):
+        outputs = fixtures.get_extreme_exos_outputs()
+        result = extreme_exos.parse(outputs, 3)
 
-
-def test_get_parser_unknown_vendor_returns_stub():
-    import core.parsers.stub as stub_module
-    result = get_parser("nonexistent_vendor_xyz")
-    assert result is stub_module
-
-
-def test_get_parser_cisco_returns_stub_in_m1():
-    import core.parsers.stub as stub_module
-    assert get_parser("cisco") is stub_module
-
-
-def test_parsers_registry_empty_in_m1():
-    assert PARSERS == {}
+        for port in result["ports"]:
+            assert ":" in port["name"] or "/" in port["name"], f"Port {port['name']} not normalized"

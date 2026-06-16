@@ -1,13 +1,50 @@
-db_path: netdash.db
-flap_threshold: 3
-upload_max_mb: 16
-api_token: "test-token-12345"
+# NetDash M2 설정 파일
+# 작성일: 2026-06-16
 
-switches:
-  - name: MY-SWITCH-01
-    ip: 192.168.1.1
-    vendor: cisco
-    model: "C2960X"
-    grp: core
-    service: network
-    location: "Server Room"
+# Security: API authentication token (required in production mode)
+# IMPORTANT: Set this via API_TOKEN environment variable, not in this file!
+# Keeping secrets in version control is a security risk. Use environment variables in production.
+api_token: null  # Will be overridden by API_TOKEN environment variable if set
+
+app:
+  debug: false
+  host: "127.0.0.1"
+  port: 8082
+  demo_mode: false  # Set DEMO_MODE=true environment variable to enable demo mode
+
+collector:
+  max_concurrent: 3
+  ssh_timeout: 30
+  read_timeout: 60
+
+  commands:
+    cisco_ios:
+      status: "show interfaces"
+      description: "show interfaces description"
+      mac: "show mac address-table dynamic"
+      arp: "show arp"
+    arista_eos:
+      status: "show interfaces"
+      description: "show interfaces description"
+      mac: "show mac address-table dynamic"
+      arp: "show ip arp"
+    extreme_exos:
+      status: "show ports"
+      description: "show ports description"
+      mac: "show mac-address"
+      arp: "show arp"
+
+correlator:
+  uplink_mac_threshold: 4
+
+database:
+  path: "netdash.db"
+
+raw_outputs:
+  path: "raw_outputs"
+
+logging:
+  level: "INFO"
+  format: "json"
+  filters:
+    exclude_paramiko: true

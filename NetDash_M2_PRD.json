@@ -1,0 +1,730 @@
+{
+  "metadata": {
+    "title": "NetDash M2 개선 기능 (M1 완료 → M2 진행)",
+    "version": "1.0",
+    "date": "2026-06-16",
+    "author": "AI_WORKPLACE_Senior_Manager",
+    "status": "in_progress",
+    "phase": "M2",
+    "baseline": "M1 Phase 1 완료: 23/23 태스크, 31/31 테스트 PASS"
+  },
+  "executive_summary": {
+    "vision": "M2는 M1의 기능 완성 기반 위에서 **자동 네트워크 탐지 (수집/파싱/연관)**을 고도화하고, UI를 추가하여 DevOps 엔지니어가 VDI 환경에서 실시간 네트워크 가시성을 얻을 수 있도록 함",
+    "goal": "M2 완료 후 → M3~M5에서 Flapping/Diff/위협 탐지 등 고급 기능 추가, M6에서 독립 실행파일(PyInstaller) + 인증 암호화(DPAPI) 완성",
+    "timeline": "2026-06-16 ~ 2026-07-06 (3주)",
+    "key_constraint": "M2는 **read-only show 명령**만 사용. SSH 쓰기/SNMP 쓰기 0. localhost:8082에서만 Web 접근 (LAN 차단)."
+  },
+  "scope": {
+    "in_scope": [
+      {
+        "id": "F1",
+        "name": "다중 스위치 수집 (Collector)",
+        "description": "다중 VDI 스위치에 SSH 접속, 1스레드 단위 show 명령, netmiko + demo mode fixture",
+        "details": [
+          "POST /api/switches/<switch_id>/collect 엔드포인트",
+          "요청: {username, password} (demo 모드에는 불필요)",
+          "응답: {status: queued, queue_position: 1}",
+          "MAX_CONCURRENT=3 스레드",
+          "terminal length 0 설정 → 페이지 제약 해제",
+          "raw_outputs/<switch_name>/<YYYYmmdd_HHMMSS>/ 디렉토리에 텍스트 파일 저장",
+          "SQLite: switches.status 상태 전이 (pending → collecting → done / failed)"
+        ]
+      },
+      {
+        "id": "F2",
+        "name": "파서 3개 (Cisco/Arista/Extreme)",
+        "description": "show 명령 텍스트를 정규화된 JSON으로 변환. 입출력 스키마 정의",
+        "details": [
+          "Cisco IOS show 명령: interfaces, interfaces description, mac address-table, arp",
+          "Arista EOS 동일 명령",
+          "Extreme EXOS 동일 (port 표기: 1:12 → normalize_port)",
+          "출력: {ports: [], macs: [], arps: []} (각 항목에 switch_id, vlan, ip, mac, port 등)",
+          "정확도: 95% (fixture 기준)"
+        ]
+      },
+      {
+        "id": "F3",
+        "name": "상관 분석 (Correlator)",
+        "description": "ARP+MAC 데이터로 IP → 호스트(MAC, 위치) 연관성 도출",
+        "details": [
+          "ARP: IP ↔ MAC 매핑",
+          "MAC: MAC → (switch_id, port) 매핑",
+          "호스트 정의: IP에 대해 MAC, switch_id, port, located(true/false) 결정",
+          "상관 규칙: 4개 스위치 초과 MAC 중복 → FIFO 최근값 선택",
+          "데이터 정확도: 85% (demo 기준, 실제 샘플 기준 달라질 수 있음)"
+        ]
+      },
+      {
+        "id": "F4",
+        "name": "UI 읽기 화면 (Switch Detail)",
+        "description": "수집 결과(포트/MAC/ARP)를 HTML+Vanilla JS로 표시",
+        "details": [
+          "4개 탭: Port List, MAC Table, ARP Table, History (M3에서)",
+          "상태 표시: up(초록), down(빨강), error-disabled(노랑)",
+          "3초 주기 /api/state 폴링으로 실시간 갱신",
+          "VDI 1920x1080 해상도 기준 최적화",
+          "CSS: 인라인 또는 로컬 style.css (CDN 0)",
+          "JS: Vanilla (React/Vue 금지)"
+        ]
+      },
+      {
+        "id": "raw_outputs",
+        "name": "원본 show 명령 저장소",
+        "description": "수집된 show 명령 출력을 텍스트 파일로 저장. 디버깅·재파싱 용도",
+        "details": [
+          "경로: raw_outputs/<switch_name>/<YYYYmmdd_HHMMSS>/*.txt",
+          "파일명: status.txt, descr.txt, mac.txt, arp.txt 등",
+          "용도: 파서 오류 추적, M3에서 diff 기준"
+        ]
+      },
+      {
+        "id": "testing",
+        "name": "단위·통합 테스트 + M1 회귀",
+        "description": "pytest 기반 테스트, M1 기능 완료 상태 유지",
+        "details": [
+          "test_parsers.py: 각 파서 정확도 95%",
+          "test_correlator.py: 상관 분석 정확도 85%",
+          "integration test: 3개 스위치 수집 → 60초 내 완료",
+          "커버리지: 80% 이상 (collector, parser, correlator)",
+          "M1 회귀: 36개 기존 테스트 모두 PASS"
+        ]
+      }
+    ],
+    "out_of_scope": [
+      {
+        "feature": "스냅샷 diff (Snapshot Diffing)",
+        "reason": "시간 기반 변화 추적 필요",
+        "phase": "M3"
+      },
+      {
+        "feature": "Flapping 탐지 (show logging 기반)",
+        "reason": "로그 파싱 + 알림 로직 필요",
+        "phase": "M3"
+      },
+      {
+        "feature": "DPAPI 암호화 (Windows credential 저장)",
+        "reason": "VDI 환경 통합 필요, 현재 sqlite 평문 가능",
+        "phase": "M6"
+      },
+      {
+        "feature": "고급 상관 (Excel, Reconcile)",
+        "reason": "UI/보고서 생성 로직 필요",
+        "phase": "M4~M5"
+      },
+      {
+        "feature": "PyInstaller onedir 실행파일",
+        "reason": "VDI 배포 최적화 (현재 py 직접 실행)",
+        "phase": "M6"
+      },
+      {
+        "feature": "Extreme EXOS 고급 지원",
+        "reason": "포트 표기 정규화 후 M6에서 고도화",
+        "phase": "M6"
+      }
+    ]
+  },
+  "success_criteria": {
+    "functional": [
+      {
+        "id": "SC-F1",
+        "criterion": "Collector 안정성",
+        "metric": "3개 스위치 × 5회 수집 → 60초 내 완료",
+        "target": "100% (demo 기준)",
+        "test": "integration test, demo 실행"
+      },
+      {
+        "id": "SC-F2",
+        "criterion": "Parser 정확도",
+        "metric": "show 출력 → {ports, macs, arps} 변환",
+        "target": "95% (fixture 기준)",
+        "test": "pytest test_parsers.py 정확도 0"
+      },
+      {
+        "id": "SC-F3",
+        "criterion": "Correlator 정확도",
+        "metric": "ARP+MAC → host 매핑",
+        "target": "85% (데모 샘플 기준)",
+        "test": "pytest test_correlator.py, demo 결과 수동 검증"
+      },
+      {
+        "id": "SC-F4",
+        "criterion": "UI 표시",
+        "metric": "포트/MAC/ARP 화면 표시 + 3초 폴링",
+        "target": "100%",
+        "test": "demo 실행 후 UI 시각적 확인"
+      }
+    ],
+    "nonfunctional": [
+      {
+        "id": "SC-NF1",
+        "criterion": "Code Coverage",
+        "metric": "pytest --cov collector, parser, correlator",
+        "target": "80% 이상",
+        "test": "pytest --cov"
+      },
+      {
+        "id": "SC-NF2",
+        "criterion": "성능 (응답 시간)",
+        "metric": "UI 폴링 /api/state",
+        "target": "200ms 이내",
+        "test": "브라우저 DevTools, 실제 수집 후 측정"
+      },
+      {
+        "id": "SC-NF3",
+        "criterion": "보안 (read-only + localhost)",
+        "metric": "show 명령 write 0, API/CDN 외부 호출 0, localhost:8082",
+        "target": "100%",
+        "test": "코드 리뷰 + 요청 모니터 확인"
+      },
+      {
+        "id": "SC-NF4",
+        "criterion": "M1 회귀",
+        "metric": "M1 36개 기존 테스트",
+        "target": "100% PASS",
+        "test": "pytest 실행"
+      }
+    ]
+  },
+  "requirements": {
+    "functional": [
+      {
+        "id": "FR-01",
+        "name": "다중 스위치 수집 (Collector)",
+        "description": "사용자가 여러 VDI 스위치에 SSH 접속해 show 명령 자동 수집 → DB 저장",
+        "input": {
+          "api_endpoint": "POST /api/switches/<switch_id>/collect",
+          "request_body": {
+            "username": "admin",
+            "password": "***"
+          },
+          "note": "demo 모드에서는 불필요"
+        },
+        "output": {
+          "response": {
+            "status": "queued",
+            "switch_id": 123,
+            "queue_position": 1
+          }
+        },
+        "implementation": [
+          "수집 큐에 (switch_id, username, password) 등록",
+          "_worker_loop() MAX_CONCURRENT=3 스레드 처리",
+          "netmiko ConnectHandler(device_type=<type>) SSH 연결",
+          "각 COMMANDS 실행 (show interfaces, show mac, show arp 등)",
+          "terminal length 0 설정으로 페이지 제약 제거",
+          "raw_outputs/<switch_name>/<YYYYmmdd_HHMMSS>/ 에 텍스트 저장",
+          "show 파싱 전 DB snapshot, ports, mac_entries, arp_entries 테이블 기록",
+          "switches.status: pending → collecting → done / failed 상태 전이",
+          "완료 시 모든 show 파싱 결과를 DB 저장"
+        ],
+        "error_handling": [
+          "SSH 연결 실패/타임아웃 → status=failed, error 필드 기록, snapshot은 생성 안함",
+          "show 명령 출력이 비어 있음 → 해당 항목 skip (예: show logging 없음)",
+          "demo 모드: fixtures/<type>/ 에서 미리 저장된 show 출력 사용 (SSH 0)"
+        ]
+      },
+      {
+        "id": "FR-02",
+        "name": "파서 3개 (Cisco/Arista/Extreme)",
+        "description": "show 텍스트 → JSON 정규화",
+        "supported_types": ["cisco_ios", "arista_eos", "extreme_exos"],
+        "commands": {
+          "status": "show interfaces",
+          "descr": "show interfaces description",
+          "mac": "show mac address-table dynamic",
+          "arp": "show arp",
+          "log": "show logging | include changed state"
+        },
+        "output_schema": {
+          "ports": [
+            {
+              "switch_id": 123,
+              "name": "Gi1/0/1",
+              "status": "up",
+              "vlan": 10,
+              "speed": "1000M",
+              "descr": "VLAN10-PC01"
+            }
+          ],
+          "macs": [
+            {
+              "switch_id": 123,
+              "vlan": 1,
+              "mac": "00:11:22:33:44:55",
+              "port": "Gi1/0/1",
+              "type": "dynamic"
+            }
+          ],
+          "arps": [
+            {
+              "switch_id": 123,
+              "ip": "10.0.1.100",
+              "mac": "00:11:22:33:44:55",
+              "interface": "Gi1/0/1"
+            }
+          ]
+        },
+        "accuracy_target": "95% (fixture 기준)",
+        "notes": [
+          "Extreme EXOS 포트 표기: 1:12 (1/0/1로 정규화 필요)",
+          "fixtures/<type>/ 에 미리 수집한 show 출력 저장 후 정확도 검증",
+          "불완전한 출력 skip (재시도 불가)"
+        ]
+      },
+      {
+        "id": "FR-03",
+        "name": "상관 분석 (Correlator)",
+        "description": "ARP + MAC 데이터로 IP → 호스트 위치 추론",
+        "logic": [
+          "1. 모든 스위치의 MAC을 수집 → MAC 테이블 구성",
+          "2. 같은 MAC이 여러 포트에 나타나면 (루프/BPDU 등) FIFO 선택 (최근 4시간 기준)",
+          "3. ARP에서 IP → MAC 매핑",
+          "4. 각 IP에 대해: MAC이 switch_id/port에 위치 → host[ip] = {mac, switch_id, port, located: true}",
+          "5. ARP에는 있지만 MAC 테이블에 없으면 → located: false, reason: 'MAC not found'"
+        ],
+        "output_schema": {
+          "hosts": {
+            "10.0.1.100": {
+              "mac": "00:11:22:33:44:55",
+              "switch_id": 123,
+              "switch_name": "CORE-SW01",
+              "port": "Gi1/0/5",
+              "located": true,
+              "confidence": 0.95
+            },
+            "10.0.1.101": {
+              "mac": "00:11:22:33:44:66",
+              "switch_id": null,
+              "port": null,
+              "located": false,
+              "reason": "MAC not found in any port"
+            }
+          }
+        },
+        "accuracy_target": "85% (데모 샘플)",
+        "edge_cases": [
+          "같은 MAC이 여러 포트: FIFO (4시간 내 최근)",
+          "ARP는 있지만 MAC 없음: located=false",
+          "MAC은 있지만 ARP 없음: 호스트 항목 생성 안함 (IPv6 등)",
+          "MAC 중복 임계값: config.yaml UPLINK_MAC_THRESHOLD 설정"
+        ],
+        "test_criteria": [
+          "demo 5개 IP 위치 추론",
+          "실제 샘플 3개, 오류 15개 → 85% 정확도"
+        ]
+      },
+      {
+        "id": "FR-04",
+        "name": "UI 읽기 화면 (Switch Detail View)",
+        "description": "Flask 웹 UI: 포트/MAC/ARP 탭 표시 + 3초 폴링",
+        "layout": [
+          {
+            "tab": "포트 목록 (Ports)",
+            "columns": ["포트명", "상태 (up/down)", "VLAN", "속도", "설명"],
+            "status_colors": {"up": "green", "down": "red", "error-disabled": "yellow"}
+          },
+          {
+            "tab": "MAC 테이블",
+            "columns": ["VLAN", "MAC 주소", "포트"]
+          },
+          {
+            "tab": "ARP 테이블",
+            "columns": ["IP 주소", "MAC 주소", "인터페이스"]
+          },
+          {
+            "tab": "History (M3)",
+            "note": "M3에서 추가 예정"
+          }
+        ],
+        "technology": "Vanilla JS + CSS (CDN 0, 외부 프레임워크 금지)",
+        "api": "3초 주기 GET /api/state → JSON 갱신",
+        "resolution": "1920x1080 VDI 최적화",
+        "error_states": [
+          "수집 대기 (pending): 진행률 표시",
+          "수집 실패 (failed): 오류 메시지 + 재시도 버튼"
+        ]
+      }
+    ],
+    "nonfunctional": [
+      {
+        "id": "NFR-01",
+        "name": "보안 (Security)",
+        "requirements": [
+          {
+            "req": "read-only show 명령만 사용",
+            "implementation": "collector.py COMMANDS 에서 write 명령 0",
+            "test": "코드 리뷰"
+          },
+          {
+            "req": "SSH 인증 정보 보호",
+            "implementation": "credentials.py 에서 DB cred_blob 로 암호화 저장 (M6 DPAPI 완료 전까지)",
+            "test": "코드 리뷰, M6 DPAPI 적용 전 평문 저장 불가"
+          },
+          {
+            "req": "외부 API/CDN/인프라 호출 0",
+            "implementation": "requests/urllib 사용 금지, style.css 로컬 또는 <link> 인라인",
+            "test": "네트워크 모니터 확인"
+          },
+          {
+            "req": "localhost:8082 LAN 접근 차단",
+            "implementation": "app.py host='127.0.0.1' (0.0.0.0 금지)",
+            "test": "netstat, VDI 내부 테스트"
+          },
+          {
+            "req": "Injection 방지 (OWASP A03)",
+            "implementation": "불완전한 show 출력 crash 방지, 파싱 실패 시 skip + 로깅",
+            "test": "malformed 데이터 입력 테스트"
+          }
+        ]
+      },
+      {
+        "id": "NFR-02",
+        "name": "성능 (Performance)",
+        "requirements": [
+          {
+            "req": "수집 시간",
+            "target": "3개 스위치 × 5회 = 60초 이내",
+            "test": "integration test, demo 실행"
+          },
+          {
+            "req": "UI 응답 시간",
+            "target": "/api/state 200ms 이내",
+            "test": "브라우저 DevTools Network"
+          },
+          {
+            "req": "DB 크기",
+            "target": "100개 스위치 × 5회 = 50MB 이내",
+            "test": "sqlite3 .dbstat"
+          }
+        ]
+      },
+      {
+        "id": "NFR-03",
+        "name": "안정성 (Reliability)",
+        "requirements": [
+          {
+            "req": "raw_outputs 충돌 방지",
+            "implementation": "<YYYYmmdd_HHMMSS> 타임스탐프 + show 크래시 시 복구",
+            "test": "오류 후 재실행 → 성공 여부 확인"
+          },
+          {
+            "req": "SQLite 동시성",
+            "implementation": "threading.Lock 을 통한 write 직렬화 (3개 worker)",
+            "test": "stress test"
+          },
+          {
+            "req": "M1 기능 회귀 0",
+            "implementation": "M1 36개 기존 테스트 모두 통과",
+            "test": "pytest"
+          }
+        ]
+      },
+      {
+        "id": "NFR-04",
+        "name": "테스트 커버리지 (Testing)",
+        "requirements": [
+          {
+            "req": "코드 커버리지",
+            "target": "80% 이상 (collector, parser, correlator)",
+            "test": "pytest --cov"
+          },
+          {
+            "req": "주석 품질",
+            "target": "복잡한 로직만 WHY 주석 (Jayden 기준)",
+            "test": "코드 리뷰"
+          }
+        ]
+      }
+    ]
+  },
+  "technical_stack": {
+    "backend": {
+      "framework": "Flask 2.0+",
+      "language": "Python",
+      "http_server": "127.0.0.1:8082"
+    },
+    "connectivity": {
+      "ssh": "Netmiko 4.0+ (ConnectHandler)",
+      "note": "write 명령 0, show 명령만"
+    },
+    "database": {
+      "engine": "SQLite 3.x",
+      "encryption": "평문 (M6에서 DPAPI 추가)"
+    },
+    "frontend": {
+      "style": "Vanilla JS + CSS",
+      "note": "HTML5, 외부 CDN 금지, React/Vue 금지"
+    },
+    "utilities": {
+      "regex": "Python re",
+      "json": "Python json"
+    },
+    "packaging": {
+      "executable": "PyInstaller --onedir (M6)",
+      "note": "현재는 Python 직접 실행"
+    },
+    "credentials": {
+      "windows_encryption": "pywin32 DPAPI (M6)",
+      "note": "현재는 M2에서 구현 안함"
+    }
+  },
+  "milestones": [
+    {
+      "id": "M2-1",
+      "name": "Collector 구현",
+      "description": "SSH 다중 수집 + demo fixture",
+      "start": "2026-06-16",
+      "due": "2026-06-20",
+      "owner": "Associate",
+      "artifacts": ["collector.py", "test_collector.py"],
+      "acceptance": [
+        "POST /api/switches/<id>/collect 엔드포인트 동작",
+        "MAX_CONCURRENT=3 워커",
+        "demo 모드 fixture 동작",
+        "원본 show 출력 raw_outputs/ 저장"
+      ]
+    },
+    {
+      "id": "M2-2",
+      "name": "파서 3개 + 테스트",
+      "description": "Cisco/Arista/Extreme show → JSON",
+      "start": "2026-06-20",
+      "due": "2026-06-24",
+      "owner": "Associate",
+      "artifacts": [
+        "core/parsers/cisco_ios.py",
+        "core/parsers/arista_eos.py",
+        "core/parsers/extreme_exos.py",
+        "fixtures/",
+        "test_parsers.py"
+      ],
+      "acceptance": [
+        "95% 정확도 (fixture 기준)",
+        "fixtures 테스트 데이터 검증"
+      ]
+    },
+    {
+      "id": "M2-3",
+      "name": "Correlator 구현",
+      "description": "ARP + MAC → 호스트 위치 추론",
+      "start": "2026-06-24",
+      "due": "2026-06-28",
+      "owner": "Associate",
+      "artifacts": ["core/correlator.py", "test_correlator.py"],
+      "acceptance": [
+        "85% 정확도 (demo 샘플)",
+        "host[ip] = {mac, switch_id, port, located} 스키마"
+      ]
+    },
+    {
+      "id": "M2-4",
+      "name": "UI 구현 (포트/MAC/ARP 탭)",
+      "description": "Flask 웹 화면 + Vanilla JS",
+      "start": "2026-06-28",
+      "due": "2026-07-02",
+      "owner": "Associate",
+      "artifacts": [
+        "web/templates/switch_detail.html",
+        "web/static/app.js",
+        "web/static/style.css"
+      ],
+      "acceptance": [
+        "4개 탭 표시 (포트/MAC/ARP/History)",
+        "3초 폴링 갱신",
+        "상태 색상 (up=초록, down=빨강, error-disabled=노랑)"
+      ]
+    },
+    {
+      "id": "M2-5",
+      "name": "테스트 + 회귀",
+      "description": "pytest, M1 36개 기존 테스트, 커버리지 80%+",
+      "start": "2026-07-02",
+      "due": "2026-07-06",
+      "owner": "Senior_Manager",
+      "artifacts": [
+        "test_*.py (전체)",
+        "pytest coverage report"
+      ],
+      "acceptance": [
+        "pytest 전체 PASS",
+        "커버리지 80% 이상",
+        "M1 36개 기존 테스트 모두 PASS"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "id": "R1",
+      "name": "Extreme EXOS 포트 표기",
+      "impact": "파서 오류 → 위치 추론 실패",
+      "probability": "높음",
+      "mitigation": [
+        "normalize_port() 함수로 1:12 → 1/0/1 변환",
+        "fixtures에 실제 show 출력 저장 후 검증",
+        "M6에서 고도화"
+      ]
+    },
+    {
+      "id": "R2",
+      "name": "netmiko 타임아웃",
+      "impact": "show 명령 수집 지연 → 60초 내 완료 불가",
+      "probability": "중간",
+      "mitigation": [
+        "fast_cli=False, read_timeout=60 설정",
+        "requirements.txt netmiko 4.x 명시",
+        "VDI SSH 환경 사전 테스트"
+      ]
+    },
+    {
+      "id": "R3",
+      "name": "SQLite 동시성",
+      "impact": "3개 워커 write 충돌 → DB 손상",
+      "probability": "중간",
+      "mitigation": [
+        "threading.Lock 직렬화",
+        "WAL 모드 검토 (M5에서 추가 검증)"
+      ]
+    },
+    {
+      "id": "R4",
+      "name": "show 출력 불완전",
+      "impact": "파서 crash → 수집 실패",
+      "probability": "낮음",
+      "mitigation": [
+        "불완전한 출력 skip + 로깅",
+        "demo fixture로 안정성 검증"
+      ]
+    },
+    {
+      "id": "R5",
+      "name": "PyInstaller 의존성",
+      "impact": "M6에서 sys._MEIPASS 패치 필요",
+      "probability": "낮음",
+      "mitigation": [
+        "M6 계획에 포함",
+        "현재는 Python 직접 실행"
+      ]
+    },
+    {
+      "id": "R6",
+      "name": "DPAPI 암호화 지연",
+      "impact": "M6까지 평문 저장",
+      "probability": "낮음",
+      "mitigation": [
+        "M2~M5 동안 localhost 접근 제한 (LAN 차단)",
+        "M6에서 pywin32 적용"
+      ]
+    }
+  ],
+  "definition_of_done": {
+    "code": [
+      "모든 코드는 git 커밋 (Associate)",
+      "코드 리뷰 + Codex R1/R2 승인",
+      "py lint 0 (PEP8 준수)"
+    ],
+    "tests": [
+      "pytest 전체 PASS",
+      "커버리지 80% 이상",
+      "M1 36개 기존 테스트 모두 PASS"
+    ],
+    "documentation": [
+      "README 업데이트 (API, 기술 스택)",
+      "API 엔드포인트 명세",
+      "show 명령 샘플 (fixtures)"
+    ],
+    "demo": [
+      "3개 스위치 × 5회 수집 → 60초 내 완료",
+      "UI에서 포트/MAC/ARP 표시",
+      "E2E: 수집 → 파싱 → 상관 → UI 표시까지 자동화 확인"
+    ],
+    "security": [
+      "show 명령 write 0 검증 (코드 리뷰)",
+      "API/CDN 외부 호출 0 (네트워크 모니터)",
+      "localhost:8082 LAN 차단 (netstat)"
+    ]
+  },
+  "open_questions": [
+    {
+      "q": "Extreme EXOS 포트 표기 표준화",
+      "context": "1:12 vs 1/0/1 정규화 방식",
+      "owner": "Associate",
+      "deadline": "M2-2 시작 전"
+    },
+    {
+      "q": "netmiko 4.x 옵션 확인",
+      "context": "fast_cli=False, read_timeout=60 적절한가?",
+      "owner": "Associate",
+      "deadline": "M2-1 시작 전"
+    },
+    {
+      "q": "SQLite WAL 모드 적용 시점",
+      "context": "M2에서 바로 적용 vs M5 이후?",
+      "owner": "Senior_Manager",
+      "deadline": "M2-3 시작 전"
+    },
+    {
+      "q": "IP 주소 표기 (CIDR vs IP)",
+      "context": "10.0.1.100 vs 10.0.1.100/32 정규화",
+      "owner": "Associate",
+      "deadline": "M2-3 시작 전"
+    }
+  ],
+  "alternatives_considered": [
+    {
+      "name": "Cisco Prime / Arista CVX API 사용",
+      "pros": ["구조화된 데이터", "공식 지원"],
+      "cons": ["비용 (라이선스)", "설치 복잡성"],
+      "decision": "M2는 show 명령 기반, M4 이후 검토"
+    },
+    {
+      "name": "SNMP 수집",
+      "pros": ["비인증 가능 (공개 커뮤니티)"],
+      "cons": ["쓰기 위험 (RW community)", "데이터 한정 (MIB 의존)"],
+      "decision": "read-only SSH show 우선, SNMP는 M5+ 대안"
+    },
+    {
+      "name": "Netbox IPAM 통합",
+      "pros": ["중앙 집중식 인벤토리"],
+      "cons": ["외부 시스템 의존", 기존 데이터 품질 이슈"],
+      "decision": "M4 이후 선택적 통합"
+    }
+  ],
+  "go_to_market": {
+    "strategy": "GitHub 공개 (무료) → Pro 라이선스 (유료)",
+    "phases": [
+      {
+        "phase": "M2 완료 → GitHub Release",
+        "audience": "DevOps / 네트워크 엔지니어",
+        "channels": ["r/sysadmin", "Hacker News", "Korea Linux/OSS 커뮤니티"],
+        "messaging": "**네트워크 가시성 100배**: 자동 VDI 스위치 탐지 → 실시간 대시보드"
+      },
+      {
+        "phase": "M5 이후: Pro 라이선스 ($49/yr)",
+        "features": ["스냅샷 Diff", "Flapping 탐지", "구독 로그"],
+        "target": "소규모 팀 (5~50명)"
+      },
+      {
+        "phase": "M6 이후: Enterprise ($500~$2000/yr)",
+        "features": ["맞춤 보고서", "SIEM 연동", "SLA 지원"],
+        "target": "대규모 조직 (500명+)"
+      }
+    ]
+  },
+  "prd_validation": {
+    "success_metrics_defined": true,
+    "mvp_features_clear": true,
+    "security_requirements": false,
+    "qa_plan_exists": true,
+    "score": 3,
+    "issues": ["보안 요구사항 명확화 필요 (M6 DPAPI 일정, 평문 저장 위험성)"],
+    "passed": true,
+    "validation_notes": {
+      "success_metrics_defined": "M2 완료 기준 명확 (테스트 커버리지, 정확도, 응답 시간)",
+      "mvp_features_clear": "5개 기능 (Collector, Parser, Correlator, UI, Testing)",
+      "security_requirements": "read-only/localhost 정의했지만, 암호화(DPAPI) 일정 불명확 → M6 미루기 결정",
+      "qa_plan_exists": "pytest 커버리지 80%, M1 회귀, demo 3단계 명확",
+      "score_rationale": "기본 구조 완성했으나 DPAPI 계획 추가 필요 → score 3 (보완 필요)",
+      "passed_logic": "score 3 + 4개 중 3개 만족 (security_requirements 제외) → passed=true"
+    }
+  }
+}

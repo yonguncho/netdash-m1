@@ -1,0 +1,252 @@
+{
+  "validation_metadata": {
+    "date": "2026-06-16",
+    "validator": "AI_WORKPLACE_Director",
+    "prd_file": "NetDash_M2_PRD.json",
+    "version": "1.0"
+  },
+  "evaluation": {
+    "success_metrics_defined": {
+      "value": true,
+      "rationale": "FR-01~04 + NFR-01~04 에서 KPI 정의: 정확도(95%/85%), 응답시간(200ms), 커버리지(80%), 완료시간(60초)",
+      "evidence": [
+        "FR-01: 수집 3개×5회 60초 내",
+        "FR-02: Parser 정확도 95% (fixture)",
+        "FR-03: Correlator 정확도 85% (demo)",
+        "NFR-02: 응답시간 200ms, 커버리지 80%",
+        "Definition of Done: 명확한 체크리스트"
+      ],
+      "score": "PASS"
+    },
+    "mvp_features_clear": {
+      "value": true,
+      "rationale": "M2 In-scope 5개 기능 명확, Out-of-scope 6개 기능 명시, 각 기능별 입출력 스키마 정의",
+      "evidence": [
+        "F1: Collector (multi-switch SSH + demo fixture)",
+        "F2: Parser 3개 (Cisco/Arista/Extreme) → {ports, macs, arps}",
+        "F3: Correlator (ARP+MAC → host location)",
+        "F4: UI 4탭 (Port/MAC/ARP/History)",
+        "Testing: pytest + M1 regression",
+        "Out-of-scope: Snapshot Diff (M3), Flapping (M3), DPAPI (M6), Excel (M4~M5) 등"
+      ],
+      "score": "PASS"
+    },
+    "security_requirements": {
+      "value": false,
+      "rationale": "read-only + localhost 정의했으나, 암호화(DPAPI, credentials blob) 구현 일정 불명확 및 M6 미루기 결정",
+      "evidence": [
+        "✓ read-only show commands only (FR-01)",
+        "✓ localhost:8082 LAN 차단 (NFR-01)",
+        "✓ API/CDN/외부 호출 0 (NFR-01)",
+        "✗ DPAPI 암호화 → M6 미루기 (현재 M2 평문 저장 허용)",
+        "✗ SSH credentials 보호 방식 불명확 (cred_blob 암호화 시점)",
+        "✗ 개발 환경/프로덕션 환경 분리 정의 없음"
+      ],
+      "issues": [
+        "DPAPI 일정이 M6(PyInstaller 이후)로 너무 뒤로 밀렸음 → M4~M5 검토 권장",
+        "credentials blob 암호화 시점 명시 필요 (현재 '평문 허용' 상태)",
+        "Secrets Manager (LastPass, 1Password) 통합 고려 필요"
+      ],
+      "score": "FAIL (보안 강화 필요)"
+    },
+    "qa_plan_exists": {
+      "value": true,
+      "rationale": "pytest 커버리지 80%, M1 36개 기존 테스트 회귀, demo 3단계(수집→파싱→UI) 명확",
+      "evidence": [
+        "M2-5 마일스톤: pytest + coverage",
+        "M1 회귀: 36개 기존 테스트 모두 PASS",
+        "Demo E2E: 3개 스위치 × 5회 → UI까지 자동화",
+        "Integration test: 60초 내 완료",
+        "Acceptance criteria: 각 마일스톤별 명시",
+        "NFR-04: 코드 커버리지 80% 이상, 주석 품질 (WHY)"
+      ],
+      "score": "PASS"
+    }
+  },
+  "score_calculation": {
+    "score": 3,
+    "rationale": "기본 구조는 완성했으나 보안 요구사항(DPAPI) 일정 불명확",
+    "breakdown": [
+      "✓ Success Metrics: 1점",
+      "✓ MVP Features: 1점",
+      "✓ QA Plan: 1점",
+      "✗ Security Requirements: 0점 (DPAPI 미정)",
+      "= 총 3점 (만점 4점)"
+    ],
+    "interpretation": "점수 3 = 기본 요구사항 충족, 보안 강화 권장"
+  },
+  "pass_fail_logic": {
+    "rule": "passed = (score >= 3) AND (number_of_true_criteria >= 3 OR all_4_true)",
+    "calculation": {
+      "score": 3,
+      "score_check": "score >= 3",
+      "score_result": true,
+      "true_criteria": [
+        "success_metrics_defined",
+        "mvp_features_clear",
+        "qa_plan_exists"
+      ],
+      "true_count": 3,
+      "true_count_check": "true_count >= 3 OR all_4_true",
+      "true_count_result": true,
+      "final_result": true
+    },
+    "passed": true
+  },
+  "issues_detailed": [
+    {
+      "severity": "P1",
+      "category": "Security",
+      "title": "DPAPI 암호화 일정 불명확",
+      "description": "M6에서 구현 예정인 DPAPI (Windows Credential 저장) 적용 시점이 너무 뒤로 밀림. M2~M5 동안 SQLite에 SSH credentials을 평문으로 저장할 위험 존재.",
+      "recommendation": [
+        "1. 즉시: credentials blob을 MD5/SHA256 hashing으로 보호 (복호화 불가, 비교만 가능)",
+        "2. M4 또는 M5: DPAPI 또는 3rd-party Secrets Manager (LastPass API) 도입 검토",
+        "3. M6: PyInstaller 통합 시 최종 암호화"
+      ],
+      "owner": "Senior_Manager",
+      "deadline": "M2-1 시작 전"
+    },
+    {
+      "severity": "P2",
+      "category": "Architecture",
+      "title": "환경 분리 (dev/staging/prod) 정의 필요",
+      "description": "현재 localhost:8082 single mode. dev/staging/prod 환경 변수 분리 방식 미정.",
+      "recommendation": [
+        "1. .env.local (dev, gitignore)",
+        "2. .env.staging (staging, gitignore)",
+        "3. .env.prod (production secrets manager)",
+        "4. M4에서 상세 계획 수립"
+      ],
+      "owner": "Assistant_Manager",
+      "deadline": "M2-4 UI 시작 전"
+    },
+    {
+      "severity": "P2",
+      "category": "Documentation",
+      "title": "API 문서 + 파서 스키마 예제",
+      "description": "FR-02/FR-03 출력 스키마만 정의. 실제 show 명령 샘플 + 파서 코드 예제 필요.",
+      "recommendation": [
+        "1. fixtures/<type>/show_interfaces.txt (샘플)",
+        "2. API 문서: /api/switches/{id}/collect 요청/응답 샘플",
+        "3. README: Quick Start (3 스텝: 설정 → 수집 → UI)"
+      ],
+      "owner": "Associate",
+      "deadline": "M2-5 완료"
+    }
+  ],
+  "recommendations": {
+    "immediate": [
+      {
+        "action": "DPAPI 대안 수립",
+        "rationale": "M2~M5 동안 평문 저장 위험 → M4 검토 필요",
+        "owner": "Senior_Manager"
+      },
+      {
+        "action": "Extreme EXOS 포트 표기 정규화 확인",
+        "rationale": "1:12 vs 1/0/1 파서 구현 전 명확화",
+        "owner": "Assistant_Manager",
+        "deadline": "M2-1 시작 전"
+      }
+    ],
+    "before_milestone": [
+      {
+        "milestone": "M2-1",
+        "action": "netmiko 4.x fast_cli/read_timeout 설정 검증",
+        "owner": "Associate"
+      },
+      {
+        "milestone": "M2-2",
+        "action": "fixtures 샘플 show 출력 수집 (실제 장비 또는 공개 저장소)",
+        "owner": "Associate"
+      },
+      {
+        "milestone": "M2-3",
+        "action": "SQLite WAL 모드 도입 vs M5 지연 결정",
+        "owner": "Senior_Manager"
+      },
+      {
+        "milestone": "M2-4",
+        "action": "UI/CSS 로컬 리소스만 사용 확인 (CDN 0)",
+        "owner": "Associate"
+      },
+      {
+        "milestone": "M2-5",
+        "action": "pytest coverage 80% 도달 계획",
+        "owner": "Senior_Manager"
+      }
+    ],
+    "longer_term": [
+      {
+        "phase": "M3",
+        "action": "Flapping 탐지 (show logging) 로직 설계",
+        "rationale": "M2 범위 밖, 기본 수집/파싱 완성 후 진행"
+      },
+      {
+        "phase": "M4~M5",
+        "action": "환경 분리 + Secrets Manager 도입",
+        "rationale": "credentials 암호화 강화"
+      },
+      {
+        "phase": "M6",
+        "action": "PyInstaller + DPAPI 최종 완성",
+        "rationale": "VDI 배포 준비"
+      }
+    ]
+  },
+  "prd_strengths": [
+    "명확한 5개 기능 + Out-of-scope 분리",
+    "FR/NFR 상세 정의 (입출력 스키마, 정확도 목표)",
+    "5단계 마일스톤 + 주간 일정",
+    "위험/대안 검토 포함",
+    "Go-to-Market 전략 (GitHub → Pro → Enterprise)"
+  ],
+  "prd_gaps": [
+    "DPAPI/암호화 일정 불명확 (M6 미루기 결정 재검토)",
+    "환경 분리 (dev/staging/prod) 미정의",
+    "API 문서 예제 부족",
+    "show 명령 샘플 (fixtures) 아직 미수집",
+    "성능 목표 (응답시간, DB 크기) 측정 계획 미상세"
+  ],
+  "next_actions": [
+    {
+      "order": 1,
+      "action": "이 JSON 파일 저장 → C:\\AI_WORKPLACE\\today_product\\NetDash_M2_PRD.json",
+      "status": "✓ 완료"
+    },
+    {
+      "order": 2,
+      "action": "DPAPI 일정 재검토 (Senior_Manager)",
+      "deadline": "M2-1 시작 전"
+    },
+    {
+      "order": 3,
+      "action": "Associate 위임: M2-1 (Collector) 태스크 분해",
+      "deadline": "2026-06-16 18:00"
+    },
+    {
+      "order": 4,
+      "action": "GitHub Issue #1~5 생성 (M2-1~M2-5)",
+      "deadline": "2026-06-17 09:00"
+    },
+    {
+      "order": 5,
+      "action": "Director 승인 판정: passed=true, score=3, DPAPI 강화 권장",
+      "deadline": "현재"
+    }
+  ],
+  "director_verdict": {
+    "status": "APPROVED WITH NOTES",
+    "passed": true,
+    "score": 3,
+    "recommendation": "M2 진행 승인. 단, 보안 요구사항 강화(DPAPI 또는 Secrets Manager) 검토 필수.",
+    "approval_notes": [
+      "✓ M2 기본 구조 완성",
+      "✓ 5개 기능 명확, Out-of-scope 분리",
+      "✓ 테스트 계획 구체적 (커버리지 80%, M1 회귀)",
+      "⚠ DPAPI 일정 (M6) 재검토 권장 → M4~M5 가능성 검토",
+      "⚠ 환경 분리 계획 추가 필요",
+      "→ M2-1 시작 가능, 위의 P1/P2 이슈는 M2-1 중 해결"
+    ]
+  }
+}

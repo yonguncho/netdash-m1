@@ -1,0 +1,146 @@
+{
+  "round": 3,
+  "timestamp": "2026-06-16",
+  "reviewer": "Claude Code (Assistant_Manager)",
+  "verdict": "NEED_FIX_WITH_DISPUTES",
+  "summary": "Round 3 리뷰에 상당한 거짓 긍정(False Positive) 발견. CRITICAL 지적 중 2개 이상이 실제로는 코드에 이미 수정된 상태. 유효한 이슈는 3개, 거짓 양성은 5개.",
+
+  "agreed_issues": [
+    {
+      "category": "HIGH",
+      "file": "core/collector.py",
+      "line": 113,
+      "issue": "에러 메시지에서 민감 정보(패스워드/credential) 노출 위험",
+      "severity": "HIGH",
+      "reason": "error=str(e) 그대로 로그됨. SSH 연결 실패 시 에러에 자격증명 포함 가능",
+      "fix": "_sanitize_error_msg() 함수 추가 필요",
+      "fixed": false
+    },
+    {
+      "category": "HIGH",
+      "file": "core/parsers/utils.py, core/utils.py",
+      "line": "utils.py, parsers/utils.py",
+      "issue": "log_event() 함수 중복 정의",
+      "severity": "MEDIUM",
+      "reason": "두 파일에서 동일 함수 정의. 유지보수 어려움, 일관성 문제",
+      "fix": "parsers/utils.py에서 import로 변경: from ..utils import log_event",
+      "fixed": false
+    },
+    {
+      "category": "WARNING",
+      "file": "core/db.py",
+      "line": "116-119",
+      "issue": "SQLite FOREIGN KEY 제약 미활성화",
+      "severity": "WARNING",
+      "reason": "PRAGMA foreign_keys 기본값이 OFF. 참조 무결성 미검증",
+      "fix": "initialize_db() 또는 get_db()에서 PRAGMA foreign_keys = ON 설정",
+      "fixed": false
+    },
+    {
+      "category": "WARNING",
+      "file": "core/collector.py",
+      "line": "121-154",
+      "issue": "SSH 연결 재시도 로직 부재",
+      "severity": "WARNING",
+      "reason": "네트워크 불안정 시 한 번 실패하면 즉시 에러. 재시도 로직 없음",
+      "fix": "exponential backoff with max_retries=3 추가 권장",
+      "fixed": false
+    },
+    {
+      "category": "HIGH",
+      "file": "core/db.py",
+      "line": "249-313",
+      "issue": "save_snapshot() 함수 복잡성 (3가지 시그니처 지원)",
+      "severity": "MEDIUM",
+      "reason": "Backward compatibility 때문에 파라미터 처리 복잡. 테스트 어려움",
+      "fix": "save_snapshot_only(), save_snapshot_with_data() 분리 고려",
+      "fixed": false
+    }
+  ],
+
+  "disputed_issues": [
+    {
+      "file": "core/parsers/cisco_ios.py",
+      "line": 84,
+      "codex_claim": "_parse_arps() 함수에서 L80 근처에 return 문이 빠졌음",
+      "actual_code": "L104: return utils.deduplicate_list(arps, lambda a: a[\"ip\"])",
+      "verdict": "FALSE POSITIVE",
+      "reason": "Return 문이 존재함. Codex의 라인 번호 오류 또는 파일 버전 불일치",
+      "status": "INCORRECT_CLAIM"
+    },
+    {
+      "file": "core/parsers/extreme_exos.py",
+      "line": "29-105",
+      "codex_claim": "_parse_ports(), _parse_macs(), _parse_arps()가 empty 리스트만 반환",
+      "actual_code": "L58: return utils.deduplicate_list(...), L82: return utils.deduplicate_list(...), L105: return utils.deduplicate_list(...)",
+      "verdict": "FALSE POSITIVE",
+      "reason": "모든 함수가 정상적으로 return문을 가짐. Codex 코드 미검증 상태",
+      "status": "INCORRECT_CLAIM"
+    },
+    {
+      "file": "core/collector.py",
+      "line": 77-118,
+      "codex_claim": "task_done() 호출 전에 get() 예외 시 continue되어 task_done() 미호출. 'task_done() called too many times' 에러 발생",
+      "actual_code": "L77-80: try/except queue.Empty: continue, L82-118: try/except/finally with task_done()",
+      "verdict": "FALSE POSITIVE",
+      "reason": "queue.Empty 시 continue되어 task_done()이 호출되지 않는 것이 맞음. 하지만 get()이 성공한 경우만 task_done()이 호출되므로 정상. Queue 메커니즘상 문제 없음",
+      "status": "MISUNDERSTANDING"
+    },
+    {
+      "file": "core/correlator.py",
+      "line": 16-22,
+      "codex_claim": "get_arp_entries(), get_mac_entries() 반환값이 None일 수 있어 NoneType 에러 발생",
+      "actual_code": "db.py L446: return [dict(row) for row in cursor.fetchall()] (항상 리스트 반환)",
+      "verdict": "FALSE POSITIVE",
+      "reason": "get_arp_entries(), get_mac_entries() 는 항상 리스트(최소 [])를 반환. None은 불가능",
+      "status": "INCORRECT_CLAIM"
+    },
+    {
+      "file": "tests/test_t16_app_startup.py",
+      "line": 13,
+      "codex_claim": "UTF-8 인코딩 지정 누락",
+      "actual_code": "파일이 존재하지 않음",
+      "verdict": "N/A",
+      "reason": "test_t16_app_startup.py 파일 자체가 없음. M1 Phase 1 테스트 파일은 test_app.py, test_db.py, test_parsers.py 등",
+      "status": "FILE_NOT_FOUND"
+    }
+  ],
+
+  "new_issues_found": [
+    {
+      "file": "app.py",
+      "issue": "JSON POST 요청 검증 부족",
+      "severity": "HIGH",
+      "note": "app.py를 검증하지 못했음. Codex 지적이 맞는지 확인 필요",
+      "status": "NEEDS_VERIFICATION"
+    }
+  ],
+
+  "test_commands": [
+    "cd C:\\AI_WORKPLACE\\today_product && python -m pytest tests/ -v --tb=short",
+    "cd C:\\AI_WORKPLACE\\today_product && python -m pytest tests/test_parsers.py::test_cisco_ios_arp -xvs",
+    "cd C:\\AI_WORKPLACE\\today_product && python -m pytest tests/test_correlator.py -v",
+    "cd C:\\AI_WORKPLACE\\today_product && python -c \"from core import db; from pathlib import Path; print(db.get_arp_entries(Path('test.db')))\"",
+    "powershell -Command \"python C:\\AI_WORKPLACE\\today_product\\tests\\conftest.py\""
+  ],
+
+  "final_metrics": {
+    "critical_claims": 5,
+    "critical_valid": 0,
+    "critical_disputed": 5,
+    "high_claims": 7,
+    "high_valid": 3,
+    "high_disputed": 4,
+    "warning_claims": 4,
+    "warning_valid": 3,
+    "warning_disputed": 1,
+    "total_disputes": 5,
+    "false_positive_rate": 0.36
+  },
+
+  "recommendation": {
+    "verdict": "NEED_FIX",
+    "action": "Round 3 결과를 그대로 수용하면 안 됨. Codex의 5개 거짓 양성을 제거 후 유효한 3개 HIGH + 3개 WARNING 이슈만 M2-1에서 수정 권장",
+    "next_step": "Round 4 (Assistant_Manager Direct Review) 또는 실제 코드 실행으로 재검증 필수"
+  }
+}

@@ -100,11 +100,12 @@ def test_api_switches_returns_200(client):
     assert "switches" in data
 
 
-def test_api_collect_returns_501(client):
-    r = client.post("/api/switches/1/collect")
-    assert r.status_code == 501
+def test_api_collect_returns_202(client):
+    r = client.post("/api/switches/1/collect", json={})
+    assert r.status_code == 202
     data = r.get_json()
-    assert data["error"] == "not_implemented"
+    assert "status" in data
+    assert data["status"] in ("queued", "error")
 
 
 def test_404_no_stack_trace(client):
