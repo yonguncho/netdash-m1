@@ -1,171 +1,112 @@
-import argparse
-import hmac
-import json
 import logging
-import socket
-import sqlite3
-from datetime import datetime, timezone
+from flask import Flask, jsonify, request
+from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
-from werkzeug.exceptions import HTTPException
-
-from core.config_loader import load_config
-from core import db
-from core.demo import run_demo
+from config import get_config, reset_config
+from core import db, collector, correlator
+from core.utils import log_event
 
 logging.basicConfig(
     level=logging.INFO,
-    format='{"time":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":%(message)s}',
+    format='{"time":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":"%(message)s"}'
 )
-logging.getLogger("paramiko").setLevel(logging.WARNING)
-
 logger = logging.getLogger(__name__)
 
-_config = None
 
+def create_app(demo_mode=None):
+    """Factory function to create and configure Flask app."""
+    app = Flask(__name__)
 
-def _pick_port(preferred: int = 8082) -> int:
-    for port in range(preferred, preferred + 10):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                logger.info(json.dumps({"event": "port_selected", "port": port}))
-                return port
-            except OSError:
-                logger.info(json.dumps({"event": "port_in_use", "port": port}))
-    raise RuntimeError(f"No available port in range {preferred}–{preferred + 9}")
+    # Reset config singleton to allow fresh load in tests
+    reset_config()
+    config = get_config(demo_mode=demo_mode)
 
+    db_path = config.get_db_path()
+    db.init_schema(db_path)
+    db.validate_schema(db_path)
 
-def _sanitize_switch(sw: dict) -> dict:
-    """Remove sensitive fields (cred_blob, error) from switch record for API response."""
-    return {
-        k: v for k, v in sw.items()
-        if k not in ("cred_blob", "error")
-    }
+    collector.init_collector()
 
-
-def create_app(demo_mode: bool = False) -> Flask:
-    global _config
-
-    app = Flask(
-        __name__,
-        template_folder="web/templates",
-        static_folder="web/static",
-    )
-    app.config["DEMO_MODE"] = demo_mode
-
-    _config = load_config("config.yaml", demo_mode=demo_mode)
-    db.init_db(_config.db_path)
-
-    if demo_mode:
-        logger.info(json.dumps({"event": "demo_mode_enabled"}))
-        run_demo(_config)
-
-    def _require_api_token():
-        """Validate X-API-Token header when an api_token is configured (production mode).
-
-        Demo mode has no token configured, so all requests are allowed. When a token
-        is set, every /api/ request must present a matching X-API-Token header.
-        """
-        if app.config["DEMO_MODE"]:
-            return None
-        expected = getattr(_config, "api_token", None)
-        if not expected:
-            return None
-        provided = request.headers.get("X-API-Token", "")
-        if not provided or not hmac.compare_digest(str(provided), str(expected)):
-            logger.warning(json.dumps({"event": "auth_rejected", "path": request.path}))
-            return jsonify({"error": "unauthorized"}), 401
-        return None
-
-    @app.before_request
-    def before_request():
-        if request.path.startswith("/api/"):
-            result = _require_api_token()
-            if result:
-                return result
-
-    @app.after_request
-    def add_security_headers(response):
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        # Fix for WARNING: No Cache-Control headers (prevents stale data caching by proxies)
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        return response
-
-    @app.errorhandler(Exception)
-    def handle_error(e):
-        if isinstance(e, HTTPException):
-            return jsonify({"error": e.name}), e.code
-        logger.error(json.dumps({"event": "unhandled_exception", "error": str(e)}))
-        return jsonify({"error": "internal_server_error"}), 500
-
-    @app.route("/")
-    def index():
-        logger.info(json.dumps({"event": "request", "method": "GET", "path": "/"}))
-        return render_template("index.html", demo_mode=app.config["DEMO_MODE"])
-
-    @app.route("/api/state")
-    def api_state():
-        logger.info(json.dumps({"event": "request", "method": "GET", "path": "/api/state"}))
+    @app.route("/api/state", methods=["GET"])
+    def get_state():
+        log_event("info", "api_state")
         try:
-            # Fix for WARNING: N+1 Query Pattern - use single JOIN query instead of loop
-            switches = db.get_switches_with_snapshot_info(_config.db_path)
-            result = [
-                {
-                    "id": sw["id"],
-                    "name": sw["name"],
-                    "ip": sw["ip"],
-                    "vendor": sw["vendor"],
-                    "model": sw["model"],
-                    "status": sw["status"],
-                    "last_collected": sw["last_collected"],
-                    "port_count": sw["port_count"],
-                    "mac_count": sw["mac_count"],
-                    "snapshot_id": sw["snapshot_id"],
-                }
-                for sw in switches
-            ]
-            payload = {
-                "demo": app.config["DEMO_MODE"],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "switches": result,
-            }
-            logger.info(json.dumps({"event": "response", "status": 200, "path": "/api/state", "count": len(result)}))
-            return jsonify(payload), 200
-        except sqlite3.Error as e:
-            logger.error(json.dumps({"event": "db_error", "path": "/api/state", "error": str(e)}))
-            return jsonify({"error": "database_error"}), 500
+            switches = db.get_switches(db_path)
+            snapshots = db.get_snapshots(db_path)
 
-    @app.route("/api/switches")
-    def api_switches():
-        logger.info(json.dumps({"event": "request", "method": "GET", "path": "/api/switches"}))
-        try:
-            switches_raw = db.get_switches(_config.db_path)
-            switches = [_sanitize_switch(sw) for sw in switches_raw]
-            logger.info(json.dumps({"event": "response", "status": 200, "path": "/api/switches", "count": len(switches)}))
-            return jsonify({"switches": switches}), 200
-        except sqlite3.Error as e:
-            logger.error(json.dumps({"event": "db_error", "path": "/api/switches", "error": str(e)}))
-            return jsonify({"error": "database_error"}), 500
+            return jsonify({
+                "switches": switches,
+                "snapshots": snapshots
+            })
+        except Exception as e:
+            log_event("error", "api_state_error", error=str(e))
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/api/switches/<int:switch_id>/collect", methods=["POST"])
-    def api_collect(switch_id: int):
-        logger.info(json.dumps({"event": "request", "method": "POST", "path": f"/api/switches/{switch_id}/collect"}))
-        return jsonify({"error": "not_implemented", "milestone": "M2"}), 501
+    def collect_switch_endpoint(switch_id):
+        log_event("info", "collect_requested", switch_id=switch_id)
+
+        try:
+            data = request.get_json() or {}
+            username = data.get("username")
+            password = data.get("password")
+
+            if not config.app.get("demo_mode") and (not username or not password):
+                return jsonify({"error": "username and password required"}), 400
+
+            result = collector.collect_switch(db_path, switch_id, username, password)
+            return jsonify(result)
+        except Exception as e:
+            log_event("error", "collect_error", switch_id=switch_id, error=str(e))
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/switches/<int:switch_id>/detail", methods=["GET"])
+    def get_switch_detail(switch_id):
+        log_event("info", "detail_requested", switch_id=switch_id)
+
+        try:
+            switch = db.get_switch(db_path, switch_id)
+            if not switch:
+                return jsonify({"error": "Switch not found"}), 404
+
+            ports = db.get_ports_by_switch(db_path, switch_id)
+            macs = db.get_mac_entries_by_switch(db_path, switch_id)
+            arps = db.get_arp_entries_by_switch(db_path, switch_id)
+            hosts = db.get_hosts_by_switch(db_path, switch_id)
+
+            return jsonify({
+                "switch": switch,
+                "ports": ports,
+                "macs": macs,
+                "arps": arps,
+                "hosts": hosts
+            })
+        except Exception as e:
+            log_event("error", "detail_error", switch_id=switch_id, error=str(e))
+            return jsonify({"error": str(e)}), 500
+
+    @app.errorhandler(404)
+    def not_found(e):
+        return jsonify({"error": "Not found"}), 404
+
+    @app.errorhandler(500)
+    def internal_error(e):
+        log_event("error", "internal_error", error=str(e))
+        return jsonify({"error": "Internal server error"}), 500
 
     return app
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="NetDash M1")
-    parser.add_argument("--demo", action="store_true", help="Run in demo mode (no real SSH)")
-    args = parser.parse_args()
+# WSGI application instance for production servers
+app = create_app()
 
-    app = create_app(demo_mode=args.demo)
-    port = _pick_port(8082)
-    print(f"[NetDash] Starting on http://127.0.0.1:{port}  demo={args.demo}")
-    app.run(host="127.0.0.1", port=port, threaded=True)
+
+if __name__ == "__main__":
+    config = get_config()
+    host = config.app.get("host", "127.0.0.1")
+    port = config.app.get("port", 8082)
+    debug = config.app.get("debug", False)
+
+    log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=config.app.get("demo_mode", False))
+
+    app.run(host=host, port=port, debug=debug)
