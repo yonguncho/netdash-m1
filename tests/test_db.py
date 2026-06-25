@@ -14,14 +14,14 @@ def tmp_db(tmp_path):
     return path
 
 
-def test_init_db_creates_seven_tables(tmp_path):
+def test_init_db_creates_eight_tables(tmp_path):
     path = str(tmp_path / "new.db")
     db.init_db(path)
     import sqlite3
     conn = sqlite3.connect(path)
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()}
     conn.close()
-    expected = {"switches", "snapshots", "ports", "mac_entries", "arp_entries", "hosts", "events"}
+    expected = {"switches", "snapshots", "ports", "mac_entries", "arp_entries", "hosts", "events", "port_events"}
     assert expected == tables
 
 

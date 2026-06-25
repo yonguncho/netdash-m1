@@ -3,26 +3,185 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NetDash{% if demo_mode %} [DEMO MODE]{% endif %}</title>
+  <title>NetDash{% if demo_mode %} [DEMO]{% endif %}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <!-- 헤더 -->
   <header class="header">
-    <h1 class="header__title">NetDash M1</h1>
-    {% if demo_mode %}
-    <span class="badge badge--demo">[DEMO MODE]</span>
-    {% endif %}
-    <span id="last-updated" class="header__ts"></span>
+    <div class="header__left">
+      <span class="header__logo">NetDash</span>
+      {% if demo_mode %}<span class="badge badge--demo">DEMO</span>{% endif %}
+    </div>
+    <div class="header__search">
+      <input id="ip-search-input" type="text" placeholder="IP 검색 (예: 192.168.1.10)" autocomplete="off">
+      <button id="ip-search-btn">검색</button>
+    </div>
+    <div class="header__right">
+      <span id="last-updated" class="header__ts"></span>
+    </div>
   </header>
 
-  <main class="main" data-demo-mode="{{ 'true' if demo_mode else 'false' }}">
-    <section class="section">
-      <h2 class="section__title">스위치 현황</h2>
-      <div id="switch-list" class="switch-list">
-        <p class="loading">데이터 로딩 중…</p>
+  <!-- 탭 네비게이션 -->
+  <nav class="tab-nav">
+    <button class="tab-nav__btn active" data-tab="dashboard">현황판</button>
+    <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
+    <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
+    <button class="tab-nav__btn" data-tab="vlan">VLAN</button>
+  </nav>
+
+  <!-- 탭 컨텐츠 -->
+  <main class="main">
+
+    <!-- 현황판 탭 -->
+    <div id="tab-dashboard" class="tab-pane active">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">TPS 스위치 현황판</span>
+        <div class="pane-toolbar__actions">
+          <button id="btn-add-manual" class="btn btn--secondary">+ 수동 추가</button>
+          <button id="btn-import-excel" class="btn btn--primary">엑셀 가져오기</button>
+          <input id="excel-file-input" type="file" accept=".xlsx,.xls" style="display:none">
+        </div>
       </div>
-    </section>
+      <div id="switch-grid" class="switch-grid">
+        <p class="placeholder">스위치를 추가하거나 엑셀 파일을 가져오세요.</p>
+      </div>
+    </div>
+
+    <!-- 방화벽 현황 탭 -->
+    <div id="tab-firewall" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">방화벽 현황</span>
+      </div>
+      <div class="coming-soon">
+        <p>방화벽 모니터링 기능은 다음 버전에서 제공됩니다.</p>
+      </div>
+    </div>
+
+    <!-- 스위치 현황 탭 -->
+    <div id="tab-switch" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">스위치 현황 상세</span>
+      </div>
+      <div id="switch-table-wrap" class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>이름</th><th>IP</th><th>호스트네임</th><th>벤더</th>
+              <th>위치</th><th>상태</th><th>경보</th><th>마지막 수집</th>
+            </tr>
+          </thead>
+          <tbody id="switch-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- VLAN 탭 -->
+    <div id="tab-vlan" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">VLAN 현황</span>
+      </div>
+      <div id="vlan-table-wrap" class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>VLAN</th><th>스위치</th><th>스위치 IP</th><th>MAC 수</th></tr>
+          </thead>
+          <tbody id="vlan-table-body"></tbody>
+        </table>
+      </div>
+    </div>
   </main>
+
+  <!-- 계정 입력 모달 -->
+  <div id="modal-credential" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box">
+      <div class="modal__header">
+        <span id="modal-cred-title">스위치 접속</span>
+        <button class="modal__close" data-close="modal-credential">&times;</button>
+      </div>
+      <div class="modal__body">
+        <div class="switch-info-box" id="modal-cred-info"></div>
+        <label>아이디</label>
+        <input id="cred-username" type="text" placeholder="admin" autocomplete="off">
+        <label>패스워드</label>
+        <input id="cred-password" type="password" placeholder="••••••••" autocomplete="new-password">
+      </div>
+      <div class="modal__footer">
+        <button id="btn-collect" class="btn btn--primary">정보 수집</button>
+        <button class="btn btn--ghost" data-close="modal-credential">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 수동 추가 모달 -->
+  <div id="modal-add-switch" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box">
+      <div class="modal__header">
+        <span>스위치 수동 추가</span>
+        <button class="modal__close" data-close="modal-add-switch">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label>이름 (선택)</label>
+        <input id="add-name" type="text" placeholder="TPS-SW-01">
+        <label>IP <span class="required">*</span></label>
+        <input id="add-ip" type="text" placeholder="192.168.1.1">
+        <label>호스트네임</label>
+        <input id="add-hostname" type="text" placeholder="switch01.local">
+        <label>벤더</label>
+        <select id="add-vendor">
+          <option value="unknown">알 수 없음</option>
+          <option value="cisco">Cisco</option>
+          <option value="arista">Arista</option>
+          <option value="extreme">Extreme</option>
+          <option value="juniper">Juniper</option>
+        </select>
+        <label>위치</label>
+        <input id="add-location" type="text" placeholder="서버실 1번 랙">
+      </div>
+      <div class="modal__footer">
+        <button id="btn-add-confirm" class="btn btn--primary">추가</button>
+        <button class="btn btn--ghost" data-close="modal-add-switch">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IP 검색 결과 모달 -->
+  <div id="modal-search-result" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box">
+      <div class="modal__header">
+        <span>IP 검색 결과</span>
+        <button class="modal__close" data-close="modal-search-result">&times;</button>
+      </div>
+      <div class="modal__body" id="search-result-body"></div>
+    </div>
+  </div>
+
+  <!-- 스위치 상세 패널 -->
+  <div id="detail-overlay" class="detail-overlay hidden"></div>
+  <div id="detail-panel" class="detail-panel hidden">
+    <div class="detail-panel__header">
+      <div>
+        <span id="detail-title" class="detail-panel__title">스위치 상세</span>
+        <span id="detail-subtitle" class="detail-panel__subtitle"></span>
+      </div>
+      <button id="detail-close" class="btn btn--ghost">&times; 닫기</button>
+    </div>
+    <div class="detail-panel__tabs">
+      <button class="detail-tab active" data-dtab="ports">포트</button>
+      <button class="detail-tab" data-dtab="macs">MAC 테이블</button>
+      <button class="detail-tab" data-dtab="arps">ARP</button>
+      <button class="detail-tab" data-dtab="events">이벤트 로그</button>
+    </div>
+    <div class="detail-panel__body">
+      <div id="dtab-ports" class="dtab-pane active"></div>
+      <div id="dtab-macs" class="dtab-pane"></div>
+      <div id="dtab-arps" class="dtab-pane"></div>
+      <div id="dtab-events" class="dtab-pane"></div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

@@ -1,118 +1,379 @@
-const STATUS_COLORS = {
-    up: "#28a745",
-    down: "#dc3545",
-    "error-disabled": "#ffc107",
-    pending: "#ccc",
-    done: "#28a745",
-    failed: "#dc3545"
-};
+/* NetDash — 메인 UI 스크립트 */
 
-function pollState() {
-    fetch("/api/state")
-        .then(r => r.json())
-        .then(data => {
-            console.log("State updated:", data);
-            updateSwitches(data.switches);
-        })
-        .catch(e => console.error("Poll error:", e));
-}
+"use strict";
 
-function updateSwitches(switches) {
-    const app = document.getElementById("app");
-    if (!app) return;
+// ─── 전역 상태 ────────────────────────────────────────────────────
+let _switches = [];
+let _currentSwitchId = null;
+let _pollTimer = null;
 
-    app.innerHTML = '<div class="switches">';
-    for (const sw of switches) {
-        const color = STATUS_COLORS[sw.status] || "#999";
-        const card = `
-            <div class="switch-card" style="border-left: 4px solid ${color}">
-                <h3>${sw.name}</h3>
-                <p>IP: ${sw.ip}</p>
-                <p>Vendor: ${sw.vendor}</p>
-                <p>Status: <span style="color: ${color}">${sw.status}</span></p>
-                <button onclick="showDetail(${sw.id})">Details</button>
-            </div>
-        `;
-        app.innerHTML += card;
-    }
-    app.innerHTML += "</div>";
-}
-
-function showDetail(switchId) {
-    fetch(`/api/switches/${switchId}/detail`)
-        .then(r => r.json())
-        .then(data => {
-            renderDetail(data);
-        })
-        .catch(e => console.error("Detail error:", e));
-}
-
-function renderDetail(data) {
-    const app = document.getElementById("app");
-    app.innerHTML = `
-        <div class="switch-detail">
-            <button onclick="pollState()">Back</button>
-            <h2>${data.switch.name}</h2>
-
-            <div class="tabs">
-                <button class="tab-btn active" onclick="switchTab(event, 'ports')">Ports</button>
-                <button class="tab-btn" onclick="switchTab(event, 'macs')">MAC</button>
-                <button class="tab-btn" onclick="switchTab(event, 'arps')">ARP</button>
-            </div>
-
-            <div id="ports" class="tab-content active">
-                <table>
-                    <tr><th>Port</th><th>Status</th><th>VLAN</th><th>Desc</th></tr>
-                    ${data.ports.map(p => `<tr><td>${p.name}</td><td>${p.status}</td><td>${p.vlan}</td><td>${p.description}</td></tr>`).join("")}
-                </table>
-            </div>
-
-            <div id="macs" class="tab-content">
-                <table>
-                    <tr><th>VLAN</th><th>MAC</th><th>Port</th></tr>
-                    ${data.macs.map(m => `<tr><td>${m.vlan}</td><td>${m.mac}</td><td>${m.port}</td></tr>`).join("")}
-                </table>
-            </div>
-
-            <div id="arps" class="tab-content">
-                <table>
-                    <tr><th>IP</th><th>MAC</th><th>Interface</th></tr>
-                    ${data.arps.map(a => `<tr><td>${a.ip}</td><td>${a.mac}</td><td>${a.interface}</td></tr>`).join("")}
-                </table>
-            </div>
-        </div>
-    `;
-}
-
-function switchTab(event, tabName) {
-    const contents = document.querySelectorAll(".tab-content");
-    contents.forEach(c => c.classList.remove("active"));
-
-    const btns = document.querySelectorAll(".tab-btn");
-    btns.forEach(b => b.classList.remove("active"));
-
-    document.getElementById(tabName).classList.add("active");
-    event.target.classList.add("active");
-}
-
-function collectSwitch(switchId) {
-    fetch(`/api/switches/${switchId}/collect`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({})
-    })
-    .then(r => r.json())
-    .then(data => {
-        console.log("Collect started:", data);
-        alert("Collection started");
-    })
-    .catch(e => {
-        console.error("Collect error:", e);
-        alert("Error: " + e);
-    });
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-    pollState();
-    setInterval(pollState, 3000);
+// ─── 탭 전환 ─────────────────────────────────────────────────────
+document.querySelectorAll(".tab-nav__btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-nav__btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+    if (btn.dataset.tab === "vlan") loadVlans();
+    if (btn.dataset.tab === "switch") renderSwitchTable(_switches);
+  });
 });
+
+// ─── 상세 패널 탭 ────────────────────────────────────────────────
+document.querySelectorAll(".detail-tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".detail-tab").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".dtab-pane").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("dtab-" + btn.dataset.dtab).classList.add("active");
+  });
+});
+
+// ─── 모달 닫기 ───────────────────────────────────────────────────
+document.querySelectorAll("[data-close]").forEach(btn => {
+  btn.addEventListener("click", () => closeModal(btn.dataset.close));
+});
+document.querySelectorAll(".modal__backdrop").forEach(bd => {
+  bd.addEventListener("click", () => {
+    document.querySelectorAll(".modal:not(.hidden)").forEach(m => closeModal(m.id));
+  });
+});
+
+function openModal(id) { document.getElementById(id).classList.remove("hidden"); }
+function closeModal(id) { document.getElementById(id).classList.add("hidden"); }
+
+// ─── 상세 패널 ───────────────────────────────────────────────────
+document.getElementById("detail-close").addEventListener("click", closeDetailPanel);
+document.getElementById("detail-overlay").addEventListener("click", closeDetailPanel);
+
+function openDetailPanel(sw) {
+  _currentSwitchId = sw.id;
+  document.getElementById("detail-title").textContent = sw.name;
+  document.getElementById("detail-subtitle").textContent =
+    sw.ip + (sw.hostname ? " · " + sw.hostname : "");
+  document.getElementById("detail-panel").classList.remove("hidden");
+  document.getElementById("detail-overlay").classList.remove("hidden");
+
+  document.querySelectorAll(".detail-tab").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".dtab-pane").forEach(p => p.classList.remove("active"));
+  document.querySelector('[data-dtab="ports"]').classList.add("active");
+  document.getElementById("dtab-ports").classList.add("active");
+
+  loadDetailData(sw.id);
+}
+
+function closeDetailPanel() {
+  document.getElementById("detail-panel").classList.add("hidden");
+  document.getElementById("detail-overlay").classList.add("hidden");
+  _currentSwitchId = null;
+}
+
+function loadDetailData(switchId) {
+  Promise.all([
+    fetch("/api/switches/" + switchId + "/detail").then(r => r.json()),
+    fetch("/api/switches/" + switchId + "/events").then(r => r.json()),
+  ]).then(function(results) {
+    var detail = results[0], evts = results[1];
+    renderPortsTab(detail.ports || []);
+    renderMacsTab(detail.macs || []);
+    renderArpsTab(detail.arps || []);
+    renderEventsTab(evts.events || []);
+  }).catch(function(e) { console.error("detail load error:", e); });
+}
+
+function renderPortsTab(ports) {
+  var el = document.getElementById("dtab-ports");
+  if (!ports.length) { el.innerHTML = "<p style='color:#64748b'>포트 정보 없음</p>"; return; }
+  el.innerHTML = "<table class='data-table'><thead><tr><th>포트</th><th>상태</th><th>VLAN</th><th>속도</th><th>설명</th></tr></thead><tbody>" +
+    ports.map(function(p) {
+      return "<tr><td>" + escHtml(p.name) + "</td><td><span class='status-badge status-badge--" +
+        (p.status === "up" ? "ok" : "critical") + "'>" + escHtml(p.status || "-") + "</span></td><td>" +
+        (p.vlan != null ? p.vlan : "-") + "</td><td>" + escHtml(p.speed || "-") + "</td><td>" + escHtml(p.description || "-") + "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
+function renderMacsTab(macs) {
+  var el = document.getElementById("dtab-macs");
+  if (!macs.length) { el.innerHTML = "<p style='color:#64748b'>MAC 정보 없음</p>"; return; }
+  el.innerHTML = "<table class='data-table'><thead><tr><th>VLAN</th><th>MAC 주소</th><th>포트</th><th>타입</th></tr></thead><tbody>" +
+    macs.map(function(m) {
+      return "<tr><td>" + (m.vlan != null ? m.vlan : "-") + "</td><td><code>" + escHtml(m.mac) + "</code></td><td>" + escHtml(m.port) + "</td><td>" + escHtml(m.entry_type || "-") + "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
+function renderArpsTab(arps) {
+  var el = document.getElementById("dtab-arps");
+  if (!arps.length) { el.innerHTML = "<p style='color:#64748b'>ARP 정보 없음</p>"; return; }
+  el.innerHTML = "<table class='data-table'><thead><tr><th>IP</th><th>MAC 주소</th><th>인터페이스</th></tr></thead><tbody>" +
+    arps.map(function(a) {
+      return "<tr><td>" + escHtml(a.ip) + "</td><td><code>" + escHtml(a.mac) + "</code></td><td>" + escHtml(a.interface || "-") + "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
+function renderEventsTab(events) {
+  var el = document.getElementById("dtab-events");
+  if (!events.length) { el.innerHTML = "<p style='color:#64748b'>감지된 이벤트 없음</p>"; return; }
+  el.innerHTML = "<table class='data-table'><thead><tr><th>포트</th><th>유형</th><th>횟수</th><th>최초</th><th>최근</th></tr></thead><tbody>" +
+    events.map(function(e) {
+      return "<tr><td>" + escHtml(e.port_name) + "</td><td><span class='status-badge status-badge--" +
+        (e.event_type === "looping" ? "critical" : "warning") + "'>" + escHtml(e.event_type) + "</span></td><td>" +
+        e.count + "</td><td>" + fmtTime(e.first_seen) + "</td><td>" + fmtTime(e.last_seen) + "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
+// ─── 스위치 카드 렌더링 ──────────────────────────────────────────
+function renderSwitchGrid(switches) {
+  var grid = document.getElementById("switch-grid");
+  if (!switches.length) {
+    grid.innerHTML = "<p class='placeholder'>스위치를 추가하거나 엑셀 파일을 가져오세요.</p>";
+    return;
+  }
+  grid.innerHTML = switches.map(swCardHTML).join("");
+  switches.forEach(function(sw) {
+    var card = document.getElementById("swcard-" + sw.id);
+    if (!card) return;
+    card.addEventListener("click", function() { openCredentialModal(sw); });
+  });
+}
+
+function swCardHTML(sw) {
+  var alertClass = sw.alert === "critical" ? "sw-card--critical"
+    : sw.alert === "warning" ? "sw-card--warning"
+    : sw.status === "done" ? "sw-card--ok"
+    : sw.status === "collecting" ? "sw-card--collecting"
+    : "sw-card--new";
+
+  var alertBadge = (sw.alert && sw.alert !== "none")
+    ? "<span class='sw-card__alert-badge badge--" + sw.alert + "'>" + (sw.alert === "critical" ? "⚠ LOOP" : "⚠ FLAP") + "</span>"
+    : "";
+
+  var dotClass = sw.alert === "critical" ? "dot--critical"
+    : sw.alert === "warning" ? "dot--warning"
+    : sw.status === "done" ? "dot--ok"
+    : sw.status === "collecting" ? "dot--collecting"
+    : "dot--new";
+
+  var statusLabel = sw.status === "done" ? "정상"
+    : sw.status === "collecting" ? "수집중"
+    : sw.status === "failed" ? "오류"
+    : "미수집";
+
+  var swJson = encodeURIComponent(JSON.stringify(sw));
+
+  return "<div id='swcard-" + sw.id + "' class='sw-card " + alertClass + "' title='" +
+    escHtml(sw.ip) + (sw.hostname ? "\n" + escHtml(sw.hostname) : "") + "'>" +
+    alertBadge +
+    "<div class='sw-card__icon'><div class='sw-icon'><div class='sw-icon__ports'>" +
+    renderMiniPorts(sw) +
+    "</div></div></div>" +
+    "<div class='sw-card__name'>" + escHtml(sw.name) + "</div>" +
+    "<div class='sw-card__meta'>" +
+    "<span>" + escHtml(sw.ip) + "</span>" +
+    (sw.hostname ? "<span>" + escHtml(sw.hostname) + "</span>" : "") +
+    (sw.location ? "<span style='font-size:10px'>" + escHtml(sw.location) + "</span>" : "") +
+    "</div>" +
+    "<div class='sw-card__status'>" +
+    "<span class='dot " + dotClass + "'></span>" +
+    "<span>" + escHtml(sw.vendor || "unknown") + " · " + statusLabel + "</span>" +
+    "</div>" +
+    "<div class='sw-card__actions'>" +
+    "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
+    "onclick=\"event.stopPropagation();openDetailPanel(JSON.parse(decodeURIComponent('" + swJson + "')))\">상세보기</button>" +
+    "</div>" +
+    "</div>";
+}
+
+function renderMiniPorts(sw) {
+  var count = 24;
+  var html = "";
+  for (var i = 0; i < count; i++) {
+    var cls = sw.status === "done" ? (i % 7 === 0 ? "sw-port--down" : "sw-port--up") : "";
+    html += "<span class='sw-port " + cls + "'></span>";
+  }
+  return html;
+}
+
+// ─── 스위치 테이블 (스위치 현황 탭) ─────────────────────────────
+function renderSwitchTable(switches) {
+  var tbody = document.getElementById("switch-table-body");
+  tbody.innerHTML = switches.map(function(sw) {
+    var sc = swStatusClass(sw);
+    return "<tr><td>" + escHtml(sw.name) + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
+      escHtml(sw.hostname || "-") + "</td><td>" + escHtml(sw.vendor || "-") + "</td><td>" +
+      escHtml(sw.location || "-") + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
+      escHtml(sw.status) + "</span></td><td>" +
+      (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "-") +
+      "</td><td>" + fmtTime(sw.last_collected) + "</td></tr>";
+  }).join("");
+}
+
+function swStatusClass(sw) {
+  if (sw.alert === "critical") return "critical";
+  if (sw.alert === "warning") return "warning";
+  if (sw.status === "done") return "ok";
+  if (sw.status === "collecting") return "collecting";
+  return "new";
+}
+
+// ─── VLAN 탭 ─────────────────────────────────────────────────────
+function loadVlans() {
+  fetch("/api/vlans").then(function(r) { return r.json(); }).then(function(data) {
+    var tbody = document.getElementById("vlan-table-body");
+    var vlans = data.vlans || [];
+    if (!vlans.length) {
+      tbody.innerHTML = "<tr><td colspan=4 style='color:#64748b'>VLAN 정보 없음</td></tr>";
+      return;
+    }
+    tbody.innerHTML = vlans.map(function(v) {
+      return "<tr><td><strong>VLAN " + v.vlan + "</strong></td><td>" + escHtml(v.switch_name) +
+        "</td><td><code>" + escHtml(v.switch_ip) + "</code></td><td>" + v.mac_count + "</td></tr>";
+    }).join("");
+  }).catch(function(e) { console.error("vlan load:", e); });
+}
+
+// ─── 계정 입력 모달 ──────────────────────────────────────────────
+var _selectedSwitch = null;
+
+function openCredentialModal(sw) {
+  _selectedSwitch = sw;
+  document.getElementById("modal-cred-title").textContent = sw.name + " 접속";
+  document.getElementById("modal-cred-info").innerHTML =
+    "<strong>IP:</strong> " + escHtml(sw.ip) +
+    (sw.hostname ? "&nbsp;&nbsp;<strong>호스트네임:</strong> " + escHtml(sw.hostname) : "") +
+    (sw.location ? "<br><strong>위치:</strong> " + escHtml(sw.location) : "");
+  document.getElementById("cred-username").value = "";
+  document.getElementById("cred-password").value = "";
+  openModal("modal-credential");
+}
+
+document.getElementById("btn-collect").addEventListener("click", function() {
+  if (!_selectedSwitch) return;
+  var username = document.getElementById("cred-username").value.trim();
+  var password = document.getElementById("cred-password").value;
+  if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
+  closeModal("modal-credential");
+  collectSwitch(_selectedSwitch.id, username, password);
+});
+
+function collectSwitch(switchId, username, password) {
+  fetch("/api/switches/" + switchId + "/collect", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({username: username, password: password}),
+  }).then(function(r) { return r.json(); }).then(function() {
+    pollState();
+  }).catch(function(e) { console.error("collect error:", e); });
+}
+
+// ─── 수동 추가 모달 ──────────────────────────────────────────────
+document.getElementById("btn-add-manual").addEventListener("click", function() {
+  ["add-name","add-ip","add-hostname","add-location"].forEach(function(id) {
+    document.getElementById(id).value = "";
+  });
+  document.getElementById("add-vendor").value = "unknown";
+  openModal("modal-add-switch");
+});
+
+document.getElementById("btn-add-confirm").addEventListener("click", function() {
+  var ip = document.getElementById("add-ip").value.trim();
+  if (!ip) { alert("IP를 입력하세요."); return; }
+  fetch("/api/switches/manual", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      name: document.getElementById("add-name").value.trim(),
+      ip: ip,
+      hostname: document.getElementById("add-hostname").value.trim(),
+      vendor: document.getElementById("add-vendor").value,
+      location: document.getElementById("add-location").value.trim(),
+    }),
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.ok) { closeModal("modal-add-switch"); pollState(); }
+    else alert(data.error || "추가 실패");
+  }).catch(function(e) { console.error(e); alert("서버 오류"); });
+});
+
+// ─── 엑셀 가져오기 ───────────────────────────────────────────────
+document.getElementById("btn-import-excel").addEventListener("click", function() {
+  document.getElementById("excel-file-input").click();
+});
+document.getElementById("excel-file-input").addEventListener("change", function() {
+  var file = this.files[0];
+  if (!file) return;
+  var fd = new FormData();
+  fd.append("file", file);
+  fetch("/api/switches/import", {method: "POST", body: fd})
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) { alert(data.imported + "개 스위치 등록 완료"); pollState(); }
+      else alert(data.error || "가져오기 실패");
+    })
+    .catch(function(e) { console.error(e); alert("서버 오류"); });
+  this.value = "";
+});
+
+// ─── IP 검색 ─────────────────────────────────────────────────────
+document.getElementById("ip-search-btn").addEventListener("click", doSearch);
+document.getElementById("ip-search-input").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") doSearch();
+});
+
+function doSearch() {
+  var ip = document.getElementById("ip-search-input").value.trim();
+  if (!ip) return;
+  fetch("/api/search?ip=" + encodeURIComponent(ip))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var body = document.getElementById("search-result-body");
+      if (data.found && data.result) {
+        var r = data.result;
+        body.innerHTML =
+          "<p><strong>IP:</strong> " + escHtml(r.ip) + "</p>" +
+          "<p><strong>MAC:</strong> " + escHtml(r.mac || "-") + "</p>" +
+          "<p><strong>연결 스위치:</strong> " + escHtml(r.switch_name || "-") + " (" + escHtml(r.switch_ip || "-") + ")</p>" +
+          "<p><strong>포트:</strong> " + escHtml(r.port || "-") + "</p>" +
+          "<p><strong>신뢰도:</strong> " + (r.confidence ? (r.confidence * 100).toFixed(0) + "%" : "-") + "</p>" +
+          (r.reason ? "<p style='margin-top:8px;color:#64748b;font-size:12px'>" + escHtml(r.reason) + "</p>" : "");
+      } else {
+        body.innerHTML = "<p style='color:#64748b'>IP <strong>" + escHtml(ip) + "</strong> 의 위치 정보가 없습니다. 해당 스위치의 정보를 먼저 수집하세요.</p>";
+      }
+      openModal("modal-search-result");
+    })
+    .catch(function(e) { console.error(e); alert("검색 오류"); });
+}
+
+// ─── 폴링 ────────────────────────────────────────────────────────
+function pollState() {
+  fetch("/api/state")
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      _switches = data.switches || [];
+      renderSwitchGrid(_switches);
+      renderSwitchTable(_switches);
+
+      if (_currentSwitchId) {
+        var sw = _switches.find(function(s) { return s.id === _currentSwitchId; });
+        if (sw) {
+          document.getElementById("detail-title").textContent = sw.name;
+          document.getElementById("detail-subtitle").textContent =
+            sw.ip + (sw.hostname ? " · " + sw.hostname : "");
+        }
+      }
+      document.getElementById("last-updated").textContent = "갱신: " + new Date().toLocaleTimeString("ko-KR");
+    })
+    .catch(function(e) { console.error("poll error:", e); });
+}
+
+// ─── 유틸 ────────────────────────────────────────────────────────
+function escHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function fmtTime(ts) {
+  if (!ts) return "-";
+  try { return new Date(ts).toLocaleString("ko-KR"); } catch(e) { return String(ts); }
+}
+
+// ─── 초기화 ──────────────────────────────────────────────────────
+pollState();
+_pollTimer = setInterval(pollState, 5000);

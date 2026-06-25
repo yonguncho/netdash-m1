@@ -19,11 +19,28 @@ CREATE TABLE IF NOT EXISTS switches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     ip TEXT NOT NULL,
-    vendor TEXT NOT NULL,
+    hostname TEXT,
+    vendor TEXT NOT NULL DEFAULT 'unknown',
     model TEXT,
+    location TEXT,
     status TEXT DEFAULT 'new',
+    alert TEXT DEFAULT 'none',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_collected TIMESTAMP
+    last_collected TIMESTAMP,
+    cred_blob TEXT
+)
+"""
+
+CREATE_PORT_EVENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS port_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    switch_id INTEGER NOT NULL,
+    port_name TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    count INTEGER DEFAULT 1,
+    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (switch_id) REFERENCES switches(id)
 )
 """
 
@@ -151,11 +168,22 @@ def init_schema(db_path):
                 CREATE_MAC_ENTRIES_TABLE,
                 CREATE_ARP_ENTRIES_TABLE,
                 CREATE_HOSTS_TABLE,
-                CREATE_EVENTS_TABLE
+                CREATE_EVENTS_TABLE,
+                CREATE_PORT_EVENTS_TABLE,
             ]:
                 cursor.execute(table_sql)
+            # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
+            for col, definition in [
+                ("hostname", "TEXT"),
+                ("location", "TEXT"),
+                ("alert", "TEXT DEFAULT 'none'"),
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
             conn.commit()
-            utils.log_event("info", "schema_created", tables=7)
+            utils.log_event("info", "schema_created", tables=8)
 
 
 def init_db(db_path):
@@ -164,7 +192,7 @@ def init_db(db_path):
 
 
 def validate_schema(db_path):
-    required_tables = {"switches", "snapshots", "ports", "mac_entries", "arp_entries", "hosts", "events"}
+    required_tables = {"switches", "snapshots", "ports", "mac_entries", "arp_entries", "hosts", "events", "port_events"}
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -173,6 +201,109 @@ def validate_schema(db_path):
         if missing:
             raise RuntimeError(f"Missing tables: {missing}")
     utils.log_event("info", "schema_validated", tables=len(required_tables))
+
+
+def import_switches_bulk(db_path, rows):
+    """엑셀에서 파싱한 스위치 목록을 DB에 일괄 등록. rows: [{name, ip, hostname, vendor, location}]"""
+    results = []
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            for row in rows:
+                name = row.get("name") or row.get("hostname") or row.get("ip")
+                ip = row.get("ip", "")
+                hostname = row.get("hostname", "")
+                vendor = row.get("vendor", "unknown")
+                location = row.get("location", "")
+                cursor.execute(
+                    """INSERT INTO switches (name, ip, hostname, vendor, location, status, alert)
+                       VALUES (?, ?, ?, ?, ?, 'new', 'none')
+                       ON CONFLICT(name) DO UPDATE SET
+                         ip=excluded.ip, hostname=excluded.hostname,
+                         vendor=excluded.vendor, location=excluded.location""",
+                    (name, ip, hostname, vendor, location),
+                )
+                cursor.execute("SELECT id FROM switches WHERE name = ?", (name,))
+                row_id = cursor.fetchone()
+                results.append(row_id[0] if row_id else None)
+    utils.log_event("info", "import_switches_bulk", count=len(rows))
+    return results
+
+
+def search_host_by_ip(db_path, ip):
+    """IP로 호스트 위치(어느 스위치·포트)를 조회."""
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT h.ip, h.mac, h.port, h.confidence, h.reason,
+                      s.id as switch_id, s.name as switch_name, s.ip as switch_ip, s.hostname
+               FROM hosts h
+               LEFT JOIN switches s ON h.switch_id = s.id
+               WHERE h.ip = ?""",
+            (ip,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_vlan_summary(db_path):
+    """전체 VLAN 목록과 스위치별 사용 현황."""
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT m.vlan, s.name as switch_name, s.ip as switch_ip, COUNT(*) as mac_count
+               FROM mac_entries m
+               JOIN switches s ON m.switch_id = s.id
+               GROUP BY m.vlan, m.switch_id
+               ORDER BY m.vlan, s.name""",
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def upsert_port_event(db_path, switch_id, port_name, event_type):
+    """포트 이벤트(flapping/looping) 기록 및 카운트 증가."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT id, count FROM port_events
+                   WHERE switch_id=? AND port_name=? AND event_type=?""",
+                (switch_id, port_name, event_type),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute(
+                    "UPDATE port_events SET count=count+1, last_seen=CURRENT_TIMESTAMP WHERE id=?",
+                    (existing[0],),
+                )
+            else:
+                cursor.execute(
+                    """INSERT INTO port_events (switch_id, port_name, event_type)
+                       VALUES (?, ?, ?)""",
+                    (switch_id, port_name, event_type),
+                )
+
+
+def get_port_events(db_path, switch_id):
+    """스위치의 포트 이벤트 목록 조회."""
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT port_name, event_type, count, first_seen, last_seen
+               FROM port_events WHERE switch_id=? ORDER BY last_seen DESC""",
+            (switch_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def set_switch_alert(db_path, switch_id, alert):
+    """스위치 alert 상태 설정 (none / warning / critical)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE switches SET alert=? WHERE id=?", (alert, switch_id)
+            )
 
 
 def save_switch(db_path, name, ip, vendor):
@@ -219,7 +350,10 @@ def upsert_switch(db_path, row):
 def get_switch(db_path, switch_id):
     with get_db(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, ip, vendor, model, status, last_collected FROM switches WHERE id = ?", (switch_id,))
+        cursor.execute(
+            "SELECT id, name, ip, hostname, vendor, model, location, status, alert, last_collected FROM switches WHERE id = ?",
+            (switch_id,)
+        )
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -239,7 +373,9 @@ def latest_snapshot_id(db_path, switch_id):
 def get_switches(db_path):
     with get_db(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, ip, vendor, model, status, last_collected FROM switches ORDER BY id")
+        cursor.execute(
+            "SELECT id, name, ip, hostname, vendor, model, location, status, alert, last_collected FROM switches ORDER BY id"
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -264,6 +400,61 @@ def update_switch_status(db_path, switch_id, status, error=None):
                 "UPDATE switches SET status = ?, last_collected = CURRENT_TIMESTAMP WHERE id = ?",
                 (status, switch_id)
             )
+
+
+def update_cred_blob(db_path, switch_id, cred_blob):
+    """Update DPAPI-encrypted credential blob for a switch."""
+    utils.log_event("info", "update_cred_blob", switch_id=switch_id)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE switches SET cred_blob = ? WHERE id = ?",
+                (cred_blob, switch_id)
+            )
+
+
+def get_macs_by_snapshot(db_path, snapshot_id):
+    """Get MAC entries for a snapshot: list of (vlan, mac, port) tuples."""
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT vlan, mac, port FROM mac_entries WHERE snapshot_id = ? ORDER BY mac, port",
+            (snapshot_id,)
+        )
+        return [(row[0], row[1], row[2]) for row in cursor.fetchall()]
+
+
+def _detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs):
+    """Detect disconnected MAC entries (prev_macs - curr_macs) and record events.
+
+    prev_snapshot_id: snapshot ID from previous collection
+    curr_macs: list of (vlan, mac, port) from current snapshot
+    """
+    if prev_snapshot_id is None:
+        # No previous snapshot to compare
+        return
+
+    prev_macs_set = set(get_macs_by_snapshot(db_path, prev_snapshot_id))
+    curr_macs_set = set(curr_macs)
+
+    # Find MACs that disappeared
+    disconnected_macs = prev_macs_set - curr_macs_set
+
+    # Record each disconnected MAC as an event
+    if disconnected_macs:
+        utils.log_event("info", "disconnected_macs_detected",
+                       switch_id=switch_id, count=len(disconnected_macs))
+        with _db_lock:
+            with get_db(db_path) as conn:
+                cursor = conn.cursor()
+                for vlan, mac, port in disconnected_macs:
+                    cursor.execute(
+                        """INSERT INTO events (event_type, event_name, switch_id, data, created_at)
+                           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                        ("disconnected", f"disconnected:{mac}:{port}", switch_id,
+                         f'{{"vlan":{vlan},"mac":"{mac}","port":"{port}"}}')
+                    )
 
 
 def save_snapshot(db_path, switch_id, parsed_or_duration=_UNSET, duration_seconds=None):

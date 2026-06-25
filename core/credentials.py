@@ -1,0 +1,146 @@
+import base64
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Windows DPAPI support (optional)
+try:
+    import win32crypt
+    IS_WINDOWS = True
+except ImportError:
+    IS_WINDOWS = False
+    logger.info("pywin32 not installed; DPAPI persistence disabled (memory-only mode)")
+
+
+# Session-only credentials (in-memory, cleared on exit)
+_session = {}
+_last = {}
+
+
+def save_credential(switch_id, username, password, persist=False):
+    """Save credentials to session memory or DPAPI-encrypted DB.
+
+    Args:
+        switch_id: Switch ID
+        username: SSH username
+        password: SSH password
+        persist: If True, encrypt with DPAPI and save to DB (requires Windows)
+
+    Returns:
+        dict with 'ok' status and optional 'encrypted' flag
+    """
+    global _last
+    _session[switch_id] = {"username": username, "password": password}
+    _last = {"username": username, "password": password}
+
+    result = {"ok": True, "encrypted": False}
+
+    # DPAPI encryption for persistent storage
+    if persist and IS_WINDOWS:
+        try:
+            encrypted_data = encrypt_credential(username, password)
+            if encrypted_data:
+                # Caller (app.py or collector.py) must handle DB update
+                result["encrypted"] = True
+                result["cred_blob"] = encrypted_data
+                logger.info(f"[DPAPI] Credential encrypted for switch {switch_id}")
+        except Exception as e:
+            logger.warning(f"[DPAPI] Encryption failed: {e}; falling back to session-only")
+
+    return result
+
+
+def load_credential(switch_id):
+    """Load credentials from session memory.
+
+    Returns:
+        dict with 'username' and 'password', or None if not found
+    """
+    cred = _session.get(switch_id)
+    if cred:
+        logger.info(f"Credential loaded from session for switch {switch_id}")
+        return cred
+
+    # Fallback to last used credentials
+    if _last:
+        logger.info(f"No session credential; using last known credentials")
+        return _last
+
+    return None
+
+
+def load_credential_from_blob(cred_blob):
+    """Decrypt DPAPI-encrypted credential blob (for DB-persisted credentials).
+
+    Args:
+        cred_blob: base64-encoded encrypted data from DB
+
+    Returns:
+        dict with 'username' and 'password', or None if decryption fails
+    """
+    if not cred_blob or not IS_WINDOWS:
+        return None
+
+    try:
+        decrypted_str = decrypt_credential(cred_blob)
+        if decrypted_str:
+            parts = decrypted_str.split("|", 1)
+            if len(parts) == 2:
+                return {"username": parts[0], "password": parts[1]}
+    except Exception as e:
+        logger.warning(f"[DPAPI] Decryption failed: {e}")
+
+    return None
+
+
+def encrypt_credential(username, password):
+    """Encrypt username:password with Windows DPAPI.
+
+    Args:
+        username: SSH username
+        password: SSH password
+
+    Returns:
+        base64-encoded encrypted blob, or None if encryption fails
+    """
+    if not IS_WINDOWS:
+        return None
+
+    try:
+        plaintext = f"{username}|{password}"
+        encrypted_bytes = win32crypt.CryptProtectData(plaintext.encode("utf-8"), None, None, None, None, 0x01)
+        cred_blob = base64.b64encode(encrypted_bytes).decode("ascii")
+        return cred_blob
+    except Exception as e:
+        logger.error(f"[DPAPI] Encryption error: {e}")
+        return None
+
+
+def decrypt_credential(cred_blob):
+    """Decrypt DPAPI blob back to plaintext.
+
+    Args:
+        cred_blob: base64-encoded encrypted data
+
+    Returns:
+        plaintext string (username|password), or None if decryption fails
+    """
+    if not IS_WINDOWS or not cred_blob:
+        return None
+
+    try:
+        encrypted_bytes = base64.b64decode(cred_blob)
+        decrypted_bytes = win32crypt.CryptUnprotectData(encrypted_bytes, None, None, None, 0)
+        plaintext = decrypted_bytes[0].decode("utf-8")
+        return plaintext
+    except Exception as e:
+        logger.error(f"[DPAPI] Decryption error: {e}")
+        return None
+
+
+def clear_session():
+    """Clear session credentials (e.g., on app shutdown)."""
+    global _session, _last
+    _session.clear()
+    _last.clear()
+    logger.info("Session credentials cleared")

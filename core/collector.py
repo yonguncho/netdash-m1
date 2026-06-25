@@ -36,6 +36,8 @@ def init_collector():
     global _worker_queue, _worker_threads
     config = get_config()
     max_workers = config.get_max_concurrent()
+
+    # Replace queue and start fresh workers (old workers are daemon threads, auto-cleanup)
     _worker_queue = queue.Queue(maxsize=100)
     _worker_threads = []
 
@@ -115,6 +117,14 @@ def _worker_loop():
 
             parsed_data = _parse_outputs(vendor, outputs, switch_id)
 
+            # M3: Detect disconnected MAC entries before saving new snapshot
+            prev_snapshot_id = db.latest_snapshot_id(db_path, switch_id)
+            if prev_snapshot_id is not None:
+                # Build (vlan, mac, port) tuples from current parsed data
+                curr_macs = [(m.get("vlan"), m.get("mac"), m.get("port"))
+                            for m in parsed_data.get("macs", [])]
+                db._detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs)
+
             snapshot_id = db.save_snapshot(db_path, switch_id)
             db.save_ports(db_path, snapshot_id, switch_id, parsed_data.get("ports", []))
             db.save_mac_entries(db_path, snapshot_id, switch_id, parsed_data.get("macs", []))
@@ -134,7 +144,12 @@ def _worker_loop():
             password = None
             with _collector_lock:
                 _collecting_switches.discard(switch_id)
-            _worker_queue.task_done()
+            # CRITICAL: Safely call task_done() even if queue was replaced during test teardown
+            try:
+                _worker_queue.task_done()
+            except ValueError:
+                # Queue was replaced during reinit; ignore this error (happens in tests)
+                pass
 
 
 def _ssh_collect(switch, username, password, vendor, max_retries=3):

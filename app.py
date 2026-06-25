@@ -2,12 +2,15 @@ import logging
 import hmac
 import os
 import re
-from flask import Flask, jsonify, request, render_template_string
+import io
+import argparse
+from flask import Flask, jsonify, request, render_template_string, render_template
 from pathlib import Path
 
 from config import get_config, reset_config
-from core import db, collector, correlator
+from core import db, collector, correlator, credentials
 from core.demo import run_demo
+from core import flapping as flapping_mod
 from core.utils import log_event
 from core.collector import _sanitize_error_msg
 
@@ -40,7 +43,9 @@ def validate_credential(value, max_length=256):
 
 def create_app(demo_mode=None):
     """Factory function to create and configure Flask app."""
-    app = Flask(__name__)
+    app = Flask(__name__,
+                template_folder=str(Path(__file__).parent / "web" / "templates"),
+                static_folder=str(Path(__file__).parent / "web" / "static"))
 
     # Reset config singleton to allow fresh load in tests
     reset_config()
@@ -93,27 +98,8 @@ def create_app(demo_mode=None):
 
     @app.route("/", methods=["GET"])
     def index():
-        demo_badge = "DEMO MODE" if config.app.get("demo_mode") else ""
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>NetDash</title>
-            <style>
-                body {{ font-family: sans-serif; margin: 20px; }}
-                h1 {{ color: #333; }}
-                .demo {{ background: #ffe6cc; padding: 10px; margin: 10px 0; border-radius: 4px; }}
-            </style>
-        </head>
-        <body>
-            <h1>NetDash</h1>
-            {f'<div class="demo">⚠️ {demo_badge}</div>' if demo_badge else ''}
-            <p>Network dashboard and monitoring system.</p>
-            <p><a href="/api/state">API State</a></p>
-        </body>
-        </html>
-        """
-        return html, 200
+        demo_mode = config.app.get("demo_mode", False)
+        return render_template("index.html", demo_mode=demo_mode)
 
     @app.route("/api/state", methods=["GET"])
     def get_state():
@@ -145,6 +131,115 @@ def create_app(demo_mode=None):
             log_event("error", "api_switches_error", error_type=type(e).__name__, error=sanitized_error)
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/switches/manual", methods=["POST"])
+    def add_switch_manual():
+        """수동으로 스위치 1대 등록."""
+        try:
+            data = request.get_json() or {}
+            name = data.get("name", "").strip()
+            ip = data.get("ip", "").strip()
+            hostname = data.get("hostname", "").strip()
+            vendor = data.get("vendor", "unknown").strip()
+            location = data.get("location", "").strip()
+
+            if not ip:
+                return jsonify({"error": "ip is required"}), 400
+            if not name:
+                name = hostname or ip
+
+            rows = [{"name": name, "ip": ip, "hostname": hostname, "vendor": vendor, "location": location}]
+            ids = db.import_switches_bulk(db_path, rows)
+            return jsonify({"ok": True, "switch_id": ids[0]}), 201
+        except Exception as e:
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "add_switch_manual_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/import", methods=["POST"])
+    def import_switches_excel():
+        """엑셀 파일(xlsx)로 스위치 목록 일괄 등록.
+        컬럼 순서: name, ip, hostname, vendor, location (헤더 행 필수)
+        """
+        try:
+            import openpyxl
+        except ImportError:
+            return jsonify({"error": "openpyxl not installed"}), 500
+
+        if "file" not in request.files:
+            return jsonify({"error": "file field required"}), 400
+
+        file = request.files["file"]
+        if not file.filename.endswith((".xlsx", ".xls")):
+            return jsonify({"error": "xlsx file required"}), 400
+
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(file.read()), read_only=True)
+            ws = wb.active
+            rows_iter = ws.iter_rows(values_only=True)
+            header = [str(c).lower().strip() if c else "" for c in next(rows_iter)]
+
+            parsed_rows = []
+            for row in rows_iter:
+                row_dict = dict(zip(header, row))
+                ip = str(row_dict.get("ip", "") or "").strip()
+                if not ip:
+                    continue
+                parsed_rows.append({
+                    "name": str(row_dict.get("name", "") or "").strip() or ip,
+                    "ip": ip,
+                    "hostname": str(row_dict.get("hostname", "") or "").strip(),
+                    "vendor": str(row_dict.get("vendor", "unknown") or "unknown").strip(),
+                    "location": str(row_dict.get("location", "") or "").strip(),
+                })
+
+            if not parsed_rows:
+                return jsonify({"error": "no valid rows found"}), 400
+
+            ids = db.import_switches_bulk(db_path, parsed_rows)
+            return jsonify({"ok": True, "imported": len(ids), "switch_ids": ids}), 201
+        except Exception as e:
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "import_excel_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/search", methods=["GET"])
+    def search_ip():
+        """IP로 호스트 위치(스위치+포트) 검색."""
+        ip = request.args.get("ip", "").strip()
+        if not ip:
+            return jsonify({"error": "ip parameter required"}), 400
+        try:
+            result = db.search_host_by_ip(db_path, ip)
+            if result:
+                return jsonify({"found": True, "result": result})
+            return jsonify({"found": False, "result": None})
+        except Exception as e:
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "search_ip_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/vlans", methods=["GET"])
+    def get_vlans():
+        """전체 VLAN 현황 조회."""
+        try:
+            vlans = db.get_vlan_summary(db_path)
+            return jsonify({"vlans": vlans})
+        except Exception as e:
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "get_vlans_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/<int:switch_id>/events", methods=["GET"])
+    def get_switch_events(switch_id):
+        """스위치의 포트 이벤트(flapping/looping) 조회."""
+        try:
+            events = db.get_port_events(db_path, switch_id)
+            return jsonify({"switch_id": switch_id, "events": events})
+        except Exception as e:
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "get_events_error", switch_id=switch_id, error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/switches/<int:switch_id>/collect", methods=["POST"])
     def collect_switch_endpoint(switch_id):
         log_event("info", "collect_requested", switch_id=switch_id)
@@ -164,8 +259,29 @@ def create_app(demo_mode=None):
             if not config.app.get("demo_mode") and (not username or not password):
                 return jsonify({"error": "username and password required"}), 400
 
+            # M3: Handle credential persistence (optional DPAPI encryption)
+            persist = data.get("persist", False)
+            cred_result = credentials.save_credential(switch_id, username, password, persist=persist)
+            if persist and cred_result.get("encrypted"):
+                # Store encrypted credential blob in DB for this switch
+                cred_blob = cred_result.get("cred_blob")
+                try:
+                    db.update_cred_blob(db_path, switch_id, cred_blob)
+                    log_event("info", "credential_persisted", switch_id=switch_id)
+                except Exception as e:
+                    sanitized = _sanitize_error_msg(str(e))
+                    log_event("warning", "credential_persist_failed", switch_id=switch_id, error=sanitized)
+
             # Note: Credentials passed to collector are handled in-memory and logged with sanitization
             result = collector.collect_switch(db_path, switch_id, username, password)
+
+            # M3: 수집 완료 후 flapping/looping 분석 (비동기 결과가 있는 경우에만)
+            if result.get("status") == "done" and result.get("parsed"):
+                try:
+                    flapping_mod.run_analysis(db_path, switch_id, result["parsed"])
+                except Exception:
+                    pass
+
             # Return 202 Accepted with queue information
             return jsonify(result), 202
         except Exception as e:
@@ -216,9 +332,16 @@ def create_app(demo_mode=None):
 
 
 if __name__ == "__main__":
-    # Read config which already handles DEMO_MODE environment variable (no duplicate checking)
-    config = get_config()
-    demo_mode = config.app.get("demo_mode", False)
+    parser = argparse.ArgumentParser(description="NetDash - Network switch current status dashboard")
+    parser.add_argument("--demo", action="store_true", help="Run in demo mode with sample data")
+    args = parser.parse_args()
+
+    # CLI --demo flag takes precedence over DEMO_MODE environment variable
+    demo_mode = args.demo if args.demo else (os.getenv("DEMO_MODE", "").lower() == "true")
+
+    # Create config with determined demo_mode
+    reset_config()
+    config = get_config(demo_mode=demo_mode)
 
     app = create_app(demo_mode=demo_mode)
 
@@ -238,6 +361,6 @@ if __name__ == "__main__":
     # Do NOT allow debug override via environment variables in production (app.run() receives final value here).
     debug = config.app.get("debug", False) and demo_mode
 
-    log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=config.app.get("demo_mode", False))
+    log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=demo_mode)
 
     app.run(host=host, port=port, debug=debug)

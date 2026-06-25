@@ -131,7 +131,7 @@ def test_demo_mode_has_three_switches(demo_client):
 def test_demo_mode_index_contains_demo_badge(demo_client):
     r = demo_client.get("/")
     assert r.status_code == 200
-    assert b"DEMO MODE" in r.data
+    assert b'badge badge--demo">DEMO' in r.data
 
 
 # Fix for WARNING: Missing Test Coverage for API Security Headers
