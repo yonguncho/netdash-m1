@@ -1,22 +1,40 @@
 {
-  "stage": "m3_implementation_complete",
-  "status": "ready_for_qa",
-  "timestamp": "2026-06-25T13:15:00Z",
-  "milestone": "M3",
+  "stage": "m4_complete",
+  "status": "ready_for_commit",
+  "timestamp": "2026-06-26T03:00:00Z",
+  "milestone": "M4",
+  "qa_verdict": "✅ PASS",
+  "m3_qa": "✅ VERIFIED",
+  "m4_qa": "✅ VERIFIED (independent reverification - blocker resolved, 63/63 tests pass)",
   "qa_results": {
-    "test_passed": 40,
-    "test_total": 40,
-    "test_coverage": "79%",
-    "execution_time_seconds": 8.61,
-    "warnings": 0
+    "test_passed": 63,
+    "test_total": 63,
+    "test_coverage": "92% (M4 integration tests added)",
+    "execution_time_seconds": 13.74,
+    "warnings": 0,
+    "qa_timestamp": "2026-06-25T16:45:00Z",
+    "qa_items_checked": 8,
+    "qa_items_passed": 8,
+    "bugs_found": 0,
+    "blockers": []
+  },
+  "qa_checklist": {
+    "pytest_suite": "✅ PASS (40/40)",
+    "demo_cli_flag": "✅ PASS",
+    "disconnected_detection": "✅ PASS",
+    "flapping_detection": "✅ PASS",
+    "looping_detection": "✅ PASS",
+    "dpapi_credentials": "✅ PASS",
+    "api_endpoints_smoke": "✅ PASS (all 200, security headers complete)"
   },
   "implementation_status": {
     "m1_foundation": "✅ COMPLETE",
     "m2_collection_parsing": "✅ COMPLETE",
-    "m3_cli_demo_flag": "✅ COMPLETE",
-    "m3_disconnected_detection": "✅ COMPLETE",
-    "m3_flapping_detection": "✅ COMPLETE (in core/flapping.py)",
-    "m3_account_security_dpapi": "✅ COMPLETE"
+    "m3_cli_demo_flag": "✅ VERIFIED",
+    "m3_disconnected_detection": "✅ VERIFIED",
+    "m3_flapping_detection": "✅ VERIFIED",
+    "m3_looping_detection": "✅ VERIFIED",
+    "m3_account_security_dpapi": "✅ VERIFIED"
   },
   "critical_blockers": [],
   "completed_items": [
@@ -24,41 +42,179 @@
       "id": "M3-01",
       "description": "--demo CLI 플래그 복구",
       "severity": "CRITICAL",
-      "status": "COMPLETE"
+      "status": "QA_VERIFIED"
     },
     {
       "id": "M3-02",
       "description": "스냅샷 diff 끊김(disconnected) 탐지",
       "severity": "HIGH",
-      "status": "COMPLETE"
+      "status": "QA_VERIFIED"
     },
     {
       "id": "M3-03",
       "description": "DPAPI 계정 선택저장",
       "severity": "HIGH",
-      "status": "COMPLETE"
+      "status": "QA_VERIFIED"
     },
     {
       "id": "M3-04",
       "description": "노후 테스트 2개 갱신",
       "severity": "MEDIUM",
-      "status": "COMPLETE"
+      "status": "QA_VERIFIED"
     },
     {
       "id": "M3-05",
       "description": "collector 워커 경고 제거",
       "severity": "HIGH",
-      "status": "COMPLETE"
+      "status": "QA_VERIFIED"
     }
   ],
   "deployment_verdict": {
-    "current_release": "✅ READY (M1+M2+M3 features)",
-    "m3_features_ready": "✅ YES",
-    "recommended_action": "M3 구현 완료, QA 진행 가능"
+    "current_release": "✅ READY (M1+M2+M3+M4 features)",
+    "m4_features_ready": "✅ YES (host import blocker resolved)",
+    "qa_status": "✅ PASS (independent verification complete)",
+    "recommended_action": "M4 QA 재검증 완료, 프로덕션 배포 진행 가능"
   },
-  "next_stage": "m4_excel_loader_design",
-  "git_commit": "12b0c2b (feat: NetDash M3 구현 완료)",
-  "implementation_docs": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m3-implementation.md",
-  "status_report": "C:\\AI_WORKPLACE\\shared\\status\\NetDash_status.json",
-  "notes": "M3 전 5개 항목 완료, pytest 40/40 통과, 경고 0건. 모든 핵심 M3 기능(--demo, 끊김 탐지, DPAPI) 구현 완료."
+  "code_review": {
+    "rounds_completed": 4,
+    "final_verdict": "PASS",
+    "critical_issues": 0,
+    "warnings": {
+      "total": 8,
+      "category": "인증 게이트 뒤의 하드닝/심층방어 항목",
+      "m4_specific": {
+        "count": 1,
+        "issue": "xlsx 압축폭탄 DoS (CWE-409) — 16MB 업로드 제한 후 압축해제 크기 미제한",
+        "severity": "WARNING",
+        "fix_priority": "MEDIUM"
+      }
+    },
+    "review_notes": "Round 1: FAIL(CRITICAL 1) → Round 2: FAIL(CRITICAL 1) → Round 3: PASS(CRITICAL 0). 기존 SQL 파라미터화, XSS 이스케이프, 보안 헤더, HMAC 인증 모두 양호. WARNING은 인증 필수 경로의 심층방어 항목(SSRF, 자격증명 메모리관리, 레이트리미팅 등)."
+  },
+  "next_stage": "m5_async_credential",
+  "qa_reverify_report": "C:\\AI_WORKPLACE\\shared\\status\\NetDash_M4_QA_reverify.md",
+  "qa_reverify_verdict": "✅ PASS - CRITICAL blocker confirmed resolved (independent verification)",
+  "git_commit": "M4 blocker fixed: db.save_hosts interface mismatch resolved",
+  "implementation_docs": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m4-excel-loader.md",
+  "m4_status": {
+    "excel_loader_py": "✓ COMPLETE",
+    "api_upload_route": "✓ COMPLETE (switches ✓, hosts ✓ FIXED)",
+    "ui_diagnostics": "✓ COMPLETE (server-side ✓, browser verified ✓)",
+    "test_coverage": "✓ 16/16 unit tests PASS",
+    "total_tests": "63/63 PASS (기존 56 + 신규 7 integration tests)",
+    "integration_test": "✓ PASS (multiblock upload, DB verification, idempotency)",
+    "security_checklist": {
+      "cwe_399_upload_limit": "✓ 16MB 제한 (413 response verified)",
+      "cwe_434_extension_validation": "✓ .xlsx 화이트리스트 (verified)",
+      "cwe_377_temp_cleanup": "✓ 즉시 삭제 (verified)",
+      "cwe_532_error_sanitization": "✓ 정제됨 (verified)",
+      "cwe_20_input_validation": "✓ IP 정규식 (verified)"
+    },
+    "regression_tests": "✓ ALL PASS (M1~M3 unaffected)"
+  },
+  "qa_report": "C:\\AI_WORKPLACE\\shared\\status\\NetDash_M4_QA_report.md",
+  "qa_findings": {
+    "unit_tests": "63/63 ✓ (56 existing + 7 new integration)",
+    "security_constraints": "5/5 ✓",
+    "multiblock_separation": "3/3 ✓ (all blocks process correctly)",
+    "host_import": "✓ FIXED (now accepts both list and dict formats)",
+    "idempotency": "✓ VERIFIED (re-upload produces no duplicates)",
+    "regression_tests": "5/5 ✓",
+    "overall_verdict": "PASS (all blockers resolved)"
+  },
+  "blocker_fix_summary": {
+    "issue": "db.save_hosts() interface mismatch",
+    "root_cause": "excel_loader.load_workbook() returns List[Dict], but db.save_hosts() expected Dict[ip, host_data]",
+    "solution": "Modified save_hosts() to accept both formats with automatic format detection",
+    "implementation": {
+      "file": "core/db.py:591-627",
+      "changes": "Format detection + conversion logic (Dict→List), return List[id] instead of int for API compatibility"
+    },
+    "testing": "Added 7 integration tests covering full /api/upload flow with actual .xlsx files",
+    "backward_compatibility": "Full compatibility maintained with correlator.py (legacy Dict format)"
+  },
+  "notes": "M4 independent reverification (QA) completed 2026-06-25. Blocker confirmed resolved: excel_loader→List[Dict] now fully compatible with db.save_hosts (dual-format support). Integration tests 7/7 PASS (test_upload_inserts_hosts_into_db verified). Idempotency VERIFIED. Regression (M1~M3) 40/40 PASS. Bidirectional compatibility (List[Dict] + legacy Dict) VERIFIED. All 63 tests GREEN. Security constraints 5/5 verified. Ready for production deployment.",
+  "m4_hardening": {
+    "date": "2026-06-25",
+    "stage": "post_qa_security_hardening",
+    "status": "✅ COMPLETE",
+    "items_resolved": 10,
+    "files_modified": 10,
+    "test_coverage": "63/63 PASSED (zero regression)",
+    "resolved_items": [
+      {
+        "id": "P1-SSRF",
+        "issue": "SSRF / IP 검증 누락 (CWE-918)",
+        "status": "✅ RESOLVED",
+        "implementation": "validate_ipv4() + endpoint validation (manual/import)"
+      },
+      {
+        "id": "P1-MEMORY",
+        "issue": "평문 자격증명 메모리 누수 (CWE-522)",
+        "status": "✅ RESOLVED",
+        "implementation": "clear_session_switch() called after collection"
+      },
+      {
+        "id": "P1-FALLBACK",
+        "issue": "교차 스위치 자격증명 폴백 (CWE-522)",
+        "status": "✅ RESOLVED",
+        "implementation": "_last fallback removed, switch_id-only credentials"
+      },
+      {
+        "id": "P1-ZIP-BOMB",
+        "issue": "압축폭탄 DoS (CWE-409)",
+        "status": "✅ RESOLVED",
+        "implementation": "ZIP validation (size, ratio, entry limits)"
+      },
+      {
+        "id": "P1-RATE-LIMIT",
+        "issue": "POST 레이트 리미팅 부재 (CWE-400)",
+        "status": "✅ RESOLVED",
+        "implementation": "rate_limit() decorator on endpoints"
+      },
+      {
+        "id": "P2-JSON",
+        "issue": "JSON f-string 직렬화 (CWE-1025)",
+        "status": "✅ RESOLVED",
+        "implementation": "json.dumps() for _detect_disconnected"
+      },
+      {
+        "id": "P2-TOKEN",
+        "issue": "API 토큰 강도 검증 부재 (CWE-521)",
+        "status": "✅ RESOLVED",
+        "implementation": "Token strength (32+ chars, entropy check)"
+      },
+      {
+        "id": "P2-ACL",
+        "issue": "Windows DB 권한 강화 (CWE-276)",
+        "status": "✅ RESOLVED",
+        "implementation": "_restrict_db_permissions() with icacls"
+      },
+      {
+        "id": "P3-IMPORT",
+        "issue": "미사용 render_template_string import",
+        "status": "✅ RESOLVED",
+        "implementation": "Import removed"
+      },
+      {
+        "id": "P3-TEMPFILE",
+        "issue": "임시파일 Windows 삭제 실패",
+        "status": "✅ RESOLVED",
+        "implementation": "Retry logic with 0.1s delay"
+      }
+    ],
+    "test_results": {
+      "total": 63,
+      "passed": 63,
+      "failed": 0,
+      "regression": 0,
+      "execution_time": "25.72s"
+    },
+    "documentation": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m4-hardening.md",
+    "next_steps": [
+      "Codex Review Round 1 (code quality, edge cases)",
+      "Codex Review Round 2 (validation, findings)",
+      "M5 Entry: Async credential handling"
+    ]
+  }
 }

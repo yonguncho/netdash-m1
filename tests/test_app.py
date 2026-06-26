@@ -24,11 +24,12 @@ def client_with_token(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     # Create config.yaml with api_token (required in production mode)
+    # HARDENING: Use strong token (32+ chars with mixed case, digits, special chars)
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""flap_threshold: 3
 upload_max_mb: 16
 db_path: netdash.db
-api_token: test-secret-token-xyz
+api_token: test_secret_token_xyz_32_chars_long_ABCD123
 """)
 
     # Override NETDASH_CONFIG to ensure our config.yaml is used (not project root's)
@@ -69,7 +70,8 @@ def test_api_rejects_missing_token_in_production(client_with_token):
 
 def test_api_accepts_valid_token_in_production(client_with_token):
     """Production mode API should accept requests with valid X-API-Token header"""
-    r = client_with_token.get("/api/switches", headers={"X-API-Token": "test-secret-token-xyz"})
+    # Use the token from conftest.py API_TOKEN environment variable (takes precedence over config file)
+    r = client_with_token.get("/api/switches", headers={"X-API-Token": "test_token_32_chars_long_secure_value_12345"})
     assert r.status_code == 200
     data = r.get_json()
     assert "switches" in data
@@ -157,7 +159,7 @@ def test_security_headers_present(client):
 
 
 # Fix for WARNING: Missing Test for Production Mode Config Validation
-def test_production_mode_requires_api_token(tmp_path, monkeypatch):
+def test_production_mode_requires_api_token(tmp_path, monkeypatch, no_api_token_env):
     """Production mode should raise ValueError during create_app if api_token is missing"""
     monkeypatch.chdir(tmp_path)
 
@@ -171,6 +173,7 @@ db_path: netdash.db
     monkeypatch.setenv("NETDASH_CONFIG", str(config_file))
 
     # create_app in production mode should raise ValueError because api_token is missing
+    # (and no_api_token_env fixture removes the API_TOKEN environment variable)
     with pytest.raises(ValueError, match="api_token is required in production mode"):
         create_app(demo_mode=False)
 

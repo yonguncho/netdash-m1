@@ -12,9 +12,9 @@ except ImportError:
     logger.info("pywin32 not installed; DPAPI persistence disabled (memory-only mode)")
 
 
-# Session-only credentials (in-memory, cleared on exit)
+# Session-only credentials (in-memory, cleared immediately after collection)
+# HARDENING (CWE-522): Credentials are cleared as soon as collection completes, not persisted in memory
 _session = {}
-_last = {}
 
 
 def save_credential(switch_id, username, password, persist=False):
@@ -29,9 +29,7 @@ def save_credential(switch_id, username, password, persist=False):
     Returns:
         dict with 'ok' status and optional 'encrypted' flag
     """
-    global _last
     _session[switch_id] = {"username": username, "password": password}
-    _last = {"username": username, "password": password}
 
     result = {"ok": True, "encrypted": False}
 
@@ -51,46 +49,37 @@ def save_credential(switch_id, username, password, persist=False):
 
 
 def load_credential(switch_id):
-    """Load credentials from session memory.
+    """Load credentials from session memory for the specific switch.
 
+    HARDENING (CWE-522): No fallback to last-used credentials; only return switch-specific session credentials.
     Returns:
-        dict with 'username' and 'password', or None if not found
+        dict with 'username' and 'password', or None if not found for this switch
     """
     cred = _session.get(switch_id)
     if cred:
         logger.info(f"Credential loaded from session for switch {switch_id}")
         return cred
 
-    # Fallback to last used credentials
-    if _last:
-        logger.info(f"No session credential; using last known credentials")
-        return _last
-
+    logger.warning(f"No session credential found for switch {switch_id}")
     return None
 
 
-def load_credential_from_blob(cred_blob):
-    """Decrypt DPAPI-encrypted credential blob (for DB-persisted credentials).
+def clear_session_switch(switch_id):
+    """Clear session credentials for a specific switch immediately after collection.
 
-    Args:
-        cred_blob: base64-encoded encrypted data from DB
-
-    Returns:
-        dict with 'username' and 'password', or None if decryption fails
+    HARDENING (CWE-522): Remove plaintext credentials from memory as soon as possible.
     """
-    if not cred_blob or not IS_WINDOWS:
-        return None
+    global _session
+    if switch_id in _session:
+        del _session[switch_id]
+        logger.info(f"Session credentials cleared for switch {switch_id}")
 
-    try:
-        decrypted_str = decrypt_credential(cred_blob)
-        if decrypted_str:
-            parts = decrypted_str.split("|", 1)
-            if len(parts) == 2:
-                return {"username": parts[0], "password": parts[1]}
-    except Exception as e:
-        logger.warning(f"[DPAPI] Decryption failed: {e}")
 
-    return None
+def clear_session():
+    """Clear all session credentials (e.g., on app shutdown)."""
+    global _session
+    _session.clear()
+    logger.info("All session credentials cleared")
 
 
 def encrypt_credential(username, password):
@@ -138,9 +127,3 @@ def decrypt_credential(cred_blob):
         return None
 
 
-def clear_session():
-    """Clear session credentials (e.g., on app shutdown)."""
-    global _session, _last
-    _session.clear()
-    _last.clear()
-    logger.info("Session credentials cleared")

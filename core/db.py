@@ -2,6 +2,7 @@ import sqlite3
 import logging
 import threading
 import os
+import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -129,18 +130,43 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 
+def _restrict_db_permissions(db_path):
+    """HARDENING (CWE-276): Restrict database file permissions to owner-only.
+
+    Supports both Unix (chmod 0o600) and Windows (NTFS ACL via icacls).
+    """
+    import platform
+    db_path_str = str(db_path)
+
+    if platform.system() == "Windows":
+        # Windows: Use icacls to set owner-only ACL
+        try:
+            import subprocess
+            # Remove inheritance and set explicit owner-only permissions
+            subprocess.run(
+                ["icacls", db_path_str, "/inheritance:r", "/grant:r", f"{os.getenv('USERNAME', 'SYSTEM')}:F"],
+                check=True, capture_output=True
+            )
+            utils.log_event("info", "db_windows_acl_set", path=db_path_str)
+        except Exception as e:
+            utils.log_event("warning", "db_windows_acl_failed", path=db_path_str, error=str(e))
+    else:
+        # Unix-like systems: Use chmod
+        try:
+            os.chmod(db_path_str, 0o600)
+            utils.log_event("info", "db_unix_chmod_set", path=db_path_str, mode="0o600")
+        except (OSError, NotImplementedError) as e:
+            utils.log_event("warning", "db_chmod_failed", path=db_path_str, error=str(e))
+
+
 @contextmanager
 def get_db(db_path):
     conn = None
     try:
         conn = sqlite3.connect(str(db_path))
-        # CRITICAL FIX (CWE-276): Restrict database file permissions to owner-only
+        # HARDENING (CWE-276): Restrict database file permissions to owner-only
         # Prevents unauthorized access to sensitive network topology data
-        try:
-            os.chmod(str(db_path), 0o600)
-        except (OSError, NotImplementedError):
-            # Windows or systems without chmod support; skip gracefully
-            pass
+        _restrict_db_permissions(db_path)
         conn.row_factory = sqlite3.Row
         # Enable FOREIGN KEY constraints: SQLite defaults to OFF, explicit ON required (data integrity fix)
         conn.execute("PRAGMA foreign_keys = ON")
@@ -449,11 +475,12 @@ def _detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs):
             with get_db(db_path) as conn:
                 cursor = conn.cursor()
                 for vlan, mac, port in disconnected_macs:
+                    # HARDENING (CWE-1025 JSON Injection): Use json.dumps for safe serialization
+                    event_data = json.dumps({"vlan": vlan, "mac": mac, "port": port})
                     cursor.execute(
                         """INSERT INTO events (event_type, event_name, switch_id, data, created_at)
                            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-                        ("disconnected", f"disconnected:{mac}:{port}", switch_id,
-                         f'{{"vlan":{vlan},"mac":"{mac}","port":"{port}"}}')
+                        ("disconnected", f"disconnected:{mac}:{port}", switch_id, event_data)
                     )
 
 
@@ -589,13 +616,43 @@ def save_arp_entries(db_path, snapshot_id, switch_id, arps):
 
 
 def save_hosts(db_path, hosts):
+    """호스트 목록을 DB에 일괄 등록 (upsert by IP).
+
+    입력:
+      hosts: Union[List[Dict], Dict[ip, host_data]]
+        - List[Dict]: 각 호스트 레코드 [{ip, mac, switch_id, port, ...}, ...]
+        - Dict[ip, host_data]: {ip: {mac, switch_id, port, ...}, ...}
+
+    반환:
+      저장된 호스트 ID 리스트 (import_switches_bulk과 호환성 유지)
+
+    호환성:
+      - excel_loader (M4): List[Dict] 형식
+      - correlator: Dict[ip, host_data] 형식 (legacy)
+    """
     if not hosts:
-        return 0
+        return []
+
+    # Dict 형식 감지: dict.items()가 있으면 Dict[ip, host_data] 형식
+    if isinstance(hosts, dict) and hasattr(hosts, "items"):
+        # Legacy format: Dict[ip, host_data] → List[Dict]로 변환
+        hosts_list = []
+        for ip, host_data in hosts.items():
+            record = {"ip": ip}
+            if isinstance(host_data, dict):
+                record.update(host_data)
+            hosts_list.append(record)
+        hosts = hosts_list
+
     utils.log_event("info", "save_hosts", count=len(hosts))
+    results = []
     with _db_lock:
         with get_db(db_path) as conn:
             cursor = conn.cursor()
-            for ip, host_data in hosts.items():
+            for host_data in hosts:
+                ip = host_data.get("ip")
+                if not ip:
+                    continue
                 cursor.execute(
                     """INSERT OR REPLACE INTO hosts
                        (ip, mac, switch_id, port, located, confidence, reason)
@@ -604,7 +661,13 @@ def save_hosts(db_path, hosts):
                      host_data.get("port"), host_data.get("located", False),
                      host_data.get("confidence", 0.0), host_data.get("reason"))
                 )
-            return len(hosts)
+                # INSERT OR REPLACE는 rowcount가 1 또는 2 (replace의 경우)
+                # 저장된 호스트의 ID를 조회
+                cursor.execute("SELECT id FROM hosts WHERE ip = ?", (ip,))
+                row = cursor.fetchone()
+                if row:
+                    results.append(row[0])
+            return results
 
 
 def get_ports(db_path, snapshot_id):

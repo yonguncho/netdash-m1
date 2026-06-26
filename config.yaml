@@ -16,6 +16,12 @@ collector:
   max_concurrent: 3
   ssh_timeout: 30
   read_timeout: 60
+  # HARDENING (CWE-918 SSRF): RFC1918 기본 허용 범위 (폐쇄망 전용).
+  # 공인 IP를 허용해야 할 경우 이 목록에 추가.
+  allowed_ip_ranges:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
 
   commands:
     cisco_ios:

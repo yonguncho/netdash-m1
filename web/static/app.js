@@ -302,10 +302,22 @@ document.getElementById("excel-file-input").addEventListener("change", function(
   if (!file) return;
   var fd = new FormData();
   fd.append("file", file);
-  fetch("/api/switches/import", {method: "POST", body: fd})
+  // M4: Use new /api/upload endpoint for multiblock excel loader
+  fetch("/api/upload", {method: "POST", body: fd})
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (data.ok) { alert(data.imported + "개 스위치 등록 완료"); pollState(); }
+      if (data.ok) {
+        // M4: Show diagnostics and import summary
+        if (data.diagnostics) {
+          showDiagnostics(data.diagnostics);
+        }
+        var totalImported = (data.imported_switch_ids ? data.imported_switch_ids.length : 0) +
+                           (data.imported_host_ids ? data.imported_host_ids.length : 0);
+        alert(totalImported + "개 항목 임포트 완료 (스위치: " +
+              (data.imported_switch_ids ? data.imported_switch_ids.length : 0) + ", " +
+              "호스트: " + (data.imported_host_ids ? data.imported_host_ids.length : 0) + ")");
+        pollState();
+      }
       else alert(data.error || "가져오기 실패");
     })
     .catch(function(e) { console.error(e); alert("서버 오류"); });
@@ -362,6 +374,51 @@ function pollState() {
       document.getElementById("last-updated").textContent = "갱신: " + new Date().toLocaleTimeString("ko-KR");
     })
     .catch(function(e) { console.error("poll error:", e); });
+}
+
+// ─── M4: 진단 화면 표시 ──────────────────────────────────────────
+function showDiagnostics(diagnostics) {
+  /**
+   * M4: 업로드 응답의 diagnostics 객체를 화면에 표시.
+   * diagnostics = {
+   *   total_blocks: int,
+   *   discarded_blocks: int,
+   *   switch_blocks: int,
+   *   host_blocks: int,
+   *   imported_switches: int,
+   *   imported_hosts: int,
+   *   warnings: [str]
+   * }
+   */
+  if (!diagnostics) return;
+
+  var warningsHtml = "";
+  if (diagnostics.warnings && diagnostics.warnings.length > 0) {
+    warningsHtml = "<div style='margin-top: 10px; padding: 8px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 2px;'>" +
+      "<h4 style='margin: 0 0 5px 0; color: #856404; font-size: 13px;'>경고</h4>" +
+      "<ul style='margin: 0; padding-left: 20px; color: #856404; font-size: 12px;'>" +
+      diagnostics.warnings.map(function(w) { return "<li>" + escHtml(w) + "</li>"; }).join("") +
+      "</ul>" +
+      "</div>";
+  }
+
+  var statsHtml = "<div id='upload-diagnostics' style='border: 1px solid #d0d5dd; padding: 12px; margin: 10px 0; background: #f6f8fb; border-radius: 4px;'>" +
+    "<h3 style='margin: 0 0 10px 0; font-size: 14px; color: #1f2937;'>업로드 진단</h3>" +
+    "<ul style='margin: 0; padding-left: 20px; font-size: 12px; line-height: 1.6; color: #374151;'>" +
+    "<li><strong>총 블록:</strong> " + (diagnostics.total_blocks || 0) + "</li>" +
+    "<li><strong>폐기된 블록:</strong> " + (diagnostics.discarded_blocks || 0) + "</li>" +
+    "<li><strong>스위치 블록:</strong> " + (diagnostics.switch_blocks || 0) + "</li>" +
+    "<li><strong>호스트 블록:</strong> " + (diagnostics.host_blocks || 0) + "</li>" +
+    "<li><strong>임포트된 스위치:</strong> " + (diagnostics.imported_switches || 0) + "</li>" +
+    "<li><strong>임포트된 호스트:</strong> " + (diagnostics.imported_hosts || 0) + "</li>" +
+    "</ul>" +
+    warningsHtml +
+    "</div>";
+
+  var container = document.getElementById("diagnostics-container");
+  if (container) {
+    container.innerHTML = statsHtml;
+  }
 }
 
 // ─── 유틸 ────────────────────────────────────────────────────────

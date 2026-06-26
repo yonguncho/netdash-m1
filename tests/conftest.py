@@ -1,12 +1,36 @@
 import pytest
 import tempfile
 import sys
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core import db
 from config import Config, reset_config
+
+# HARDENING: Set a strong test API token for production mode tests
+# Use autouse to ensure it's set before any test runs
+os.environ["API_TOKEN"] = "test_token_32_chars_long_secure_value_12345"
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    """Reset rate limiter state between tests to prevent test interference."""
+    # Import app here to avoid circular imports
+    import app
+    app._rate_limit_tracker.clear()
+    yield
+    app._rate_limit_tracker.clear()
+
+
+@pytest.fixture
+def no_api_token_env():
+    """Temporarily remove API_TOKEN environment variable for testing config validation."""
+    old_token = os.environ.pop("API_TOKEN", None)
+    yield
+    if old_token:
+        os.environ["API_TOKEN"] = old_token
 
 
 @pytest.fixture

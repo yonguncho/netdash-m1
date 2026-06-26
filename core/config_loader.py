@@ -164,9 +164,21 @@ def load_config(path: str = "config.yaml", demo_mode: bool = False) -> Config:
     api_token = os.getenv("API_TOKEN", data.get("api_token"))
     utils.log_event("info", "api_token_loaded", source=api_token_source)
 
-    # Production mode: api_token is required (CWE-306: enforce authentication)
-    if not demo_mode and not api_token:
-        raise ValueError("api_token is required in production mode (set API_TOKEN environment variable or api_token in config)")
+    # Production mode: api_token is required and must be strong (CWE-306: enforce authentication + CWE-521: weak credentials)
+    if not demo_mode:
+        if not api_token:
+            raise ValueError("api_token is required in production mode (set API_TOKEN environment variable or api_token in config)")
+        # HARDENING (CWE-521 Weak Password): Validate token strength
+        if len(api_token) < 32:
+            raise ValueError(f"api_token must be at least 32 characters long (current: {len(api_token)}); use secrets.token_urlsafe(32) or similar")
+        # Basic check: token should contain mix of character types (not just alphanumeric)
+        has_uppercase = any(c.isupper() for c in api_token)
+        has_lowercase = any(c.islower() for c in api_token)
+        has_digit = any(c.isdigit() for c in api_token)
+        has_special = any(c in "-_" for c in api_token) or any(33 <= ord(c) <= 126 and not c.isalnum() for c in api_token)
+        entropy_checks = sum([has_uppercase, has_lowercase, has_digit, has_special])
+        if entropy_checks < 3:
+            raise ValueError("api_token must have sufficient entropy (mix of uppercase, lowercase, digits, and special characters)")
 
     utils.log_event("info", "config_loaded", path=resolved_path, mode="demo" if demo_mode else "production")
     # Ensure app config has correct demo_mode (override from file if needed)
@@ -183,7 +195,7 @@ def load_config(path: str = "config.yaml", demo_mode: bool = False) -> Config:
         db_path=data.get("db_path", "netdash.db"),
         api_token=api_token,
         app=app_config,
-        collector=data.get("collector", _get_default_collector_config()),
+        collector=_merge_collector_config(data.get("collector", {})),
         correlator=data.get("correlator", {"uplink_mac_threshold": 4}),
         database=data.get("database", {"path": "netdash.db"}),
         raw_outputs=data.get("raw_outputs", {"path": "raw_outputs"}),
@@ -214,6 +226,8 @@ def _get_default_collector_config() -> dict:
         "max_concurrent": 3,
         "ssh_timeout": 30,
         "read_timeout": 60,
+        # HARDENING (CWE-918 SSRF): RFC1918 기본 허용 범위. 공인 IP 접근 차단.
+        "allowed_ip_ranges": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
         "commands": {
             "cisco_ios": {"status": "show interfaces", "description": "show interfaces description",
                          "mac": "show mac address-table dynamic", "arp": "show arp"},
@@ -223,3 +237,17 @@ def _get_default_collector_config() -> dict:
                             "mac": "show mac-address", "arp": "show arp"}
         }
     }
+
+
+def _merge_collector_config(from_yaml: dict) -> dict:
+    """YAML collector 섹션과 기본값을 딥 병합.
+
+    YAML에 collector 섹션이 있어도 누락된 키는 기본값으로 채워짐.
+    이를 통해 allowed_ip_ranges 등 보안 기본값이 항상 보장됨.
+    """
+    default = _get_default_collector_config()
+    merged = {**default, **from_yaml}
+    # commands는 벤더별로 병합 (YAML에 일부 벤더만 있어도 나머지 유지)
+    if "commands" in from_yaml and isinstance(from_yaml["commands"], dict):
+        merged["commands"] = {**default["commands"], **from_yaml["commands"]}
+    return merged
