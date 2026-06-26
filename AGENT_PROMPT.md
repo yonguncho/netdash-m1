@@ -41,26 +41,26 @@ NetDash는 **2개 트랙**으로 운영된다. 둘을 혼동하지 마라.
 
 ---
 
-## 3. 현재 상태 (2026-06-25 기준 — 시작 시 반드시 재확인)
+## 3. 현재 상태 (2026-06-26 기준 — 시작 시 반드시 재확인)
 
 마일스톤 진척:
 ```
-M1 기반 프레임워크      ✅ 완료 (커밋됨)
+M1 기반 프레임워크      ✅ 완료 (커밋됨, 푸시됨)
 M2 수집·파싱           ✅ 완료 (커밋됨, GitHub 릴리스 v1.0.0)
-M3 CLI/끊김탐지/DPAPI   ✅ 완료 (커밋됨)
-M4 Excel 멀티블록 로더  🔶 구현완료·테스트통과·미커밋  ← 지금 여기
-M5 비동기 자격증명 처리  ⬜ 예정
+M3 CLI/끊김탐지/DPAPI   ✅ 완료 (커밋됨, 푸시됨)
+M4 Excel 멀티블록 로더  ✅ 완료 (커밋 38ddfbb, 푸시됨, GitHub 릴리스 v2.0.0)
+M5 비동기 자격증명 처리  ⬜ 예정  ← 다음 여기
 ```
 
-M4 상태:
-- 구현 완료: `core/excel_loader.py`, `/api/upload` 라우터, UI 진단 패널
-- 테스트 63/63 PASS, 커버리지 92%, 경고 0
-- 보안 하드닝 10개 항목 완료, 코드리뷰 3라운드 PASS(CRITICAL 0), QA 독립재검증 PASS
+GitHub 동기화 상태 (2026-06-26):
+- `netdash-m1` master: 로컬 = origin (완전 동기화)
+- `netdash-m1` 릴리스: v2.0.0 (M3+M4 통합)
+- `netdash` 공개 릴리스: v3.0.0 (exe 배포, 2026-06-26)
 
-**미반영(네가 처리할 것):**
-1. M4 작업물 전체가 워킹트리에 **미커밋** (신규 4파일 + 수정 10파일)
-2. `master`가 `origin/master`보다 **2 커밋 앞섬** (M3) → push 안 됨
-3. netdash-m1 GitHub 릴리스가 v1.0.0(M2)에 멈춤 → M3·M4 미반영
+**다음 작업 (M5):**
+1. 비동기 자격증명 처리 설계 → 구현
+2. Codex 리뷰 최소 2라운드
+3. 커밋 → push → 릴리스
 
 ---
 
@@ -119,15 +119,15 @@ blocker 발견 시: 다음 단계로 진행하지 말고 원인 진단 → statu
 
 ---
 
-## 7. 지금 당장 할 일 (시작 작업)
+## 7. 지금 당장 할 일 (재시작 시 시작 작업)
 
-1. `state/pipeline_status.json` + `git status` 읽고 M4 상태 재확인.
-2. `pytest` 전체 재실행 → 63/63 GREEN 재확인.
-3. **Codex 리뷰 R1** 요청 (`core/excel_loader.py`, `/api/upload`, db.py 변경분 대상) → 지적 반영.
-4. **Codex 리뷰 R2** → 잔여 이슈 반영, "LGTM" 받을 때까지.
-5. M4 단위 커밋 (status.json 갱신 포함). 한국어 커밋 메시지.
-6. **[STOP]** origin push + M3·M4 GitHub 릴리스 → 사람 확인 요청.
-7. 승인되면 M5(비동기 자격증명 처리) 진입 — 1단계부터 반복.
+1. `state/pipeline_status.json` + `git status` + `git log --oneline -5` 읽고 현재 단계 확정.
+2. `pytest` 전체 재실행 → GREEN 확인.
+3. **M5 진입**: 비동기 자격증명 처리 구현 시작.
+   - 설계 문서: `C:\AI_WORKPLACE\docs\design\netdash-credentials-spec.md` 참조
+   - 구현 대상: `core/credentials.py` 비동기 처리 + `/api/switches/<id>/collect` 비동기화
+4. Codex 리뷰 최소 2라운드 → PASS 후 커밋.
+5. **[STOP]** origin push + GitHub 릴리스 → 사람 확인 요청.
 
 ---
 
