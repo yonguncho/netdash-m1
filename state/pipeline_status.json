@@ -1,8 +1,44 @@
 {
-  "stage": "m4_complete",
+  "stage": "m5_complete",
   "status": "ready_for_commit",
-  "timestamp": "2026-06-26T03:00:00Z",
-  "milestone": "M4",
+  "timestamp": "2026-06-27T00:00:00Z",
+  "milestone": "M5",
+  "m5_async_credential": {
+    "date": "2026-06-27",
+    "status": "✅ COMPLETE (Codex review PASS, 3 rounds)",
+    "design_doc": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m5-async-credential.md",
+    "goal": "비동기 수집 시 SSH 자격증명을 큐 페이로드에서 제거하고 세션 저장소 경유로 전환 (CWE-522)",
+    "changes": {
+      "core/collector.py": "collect_switch 큐 페이로드를 (db_path, switch_id) 2-튜플로 축소. save_credential은 in-progress 체크 통과 후 try 블록 내에서 호출(누수 방지). 큐잉 실패 전반 _abort_enqueue로 정리. _worker_loop는 session에서 load_credential, finally에서 cred dict clear + clear_session_switch",
+      "core/credentials.py": "_session에 _session_lock 추가(CWE-362). load_credential 방어적 복사본 반환(CWE-522)",
+      "app.py": "collect_switch_endpoint: session 저장을 collect_switch에 위임(사전저장 레이스 제거), DPAPI persist는 큐잉 성공 후로 이동, 상태코드 정합화(queued=202/in-progress=409/실패=503)",
+      "tests/test_m5_async_credential.py": "신규 테스트 9개 (Codex 지적 회귀 2개 포함)"
+    },
+    "tests": {
+      "new": 9,
+      "total": 72,
+      "passed": 72,
+      "regression": 0,
+      "execution_time": "30.37s"
+    },
+    "code_review": {
+      "reviewer": "Codex (codex exec v0.133.0)",
+      "rounds": 3,
+      "round1": "FAIL — Critical 2(사전저장 레이스, _session 무보호), Warning 3",
+      "round2": "critical 0 — C1/C2/W1/W3 RESOLVED, 새 Warning 2(persist 레이스, 누수)",
+      "round3": "✅ PASS — critical 0, warning 0, N1/N2 RESOLVED, N3(불변문자열) 수용",
+      "review_files": [
+        "C:\\AI_WORKPLACE\\.codex\\m5_review_r1.txt",
+        "C:\\AI_WORKPLACE\\.codex\\m5_review_r2.txt",
+        "C:\\AI_WORKPLACE\\.codex\\m5_review_r3.txt"
+      ]
+    },
+    "invariant": "수집 종료(성공/실패/예외 무관) 후 session에 해당 switch_id 자격증명이 남지 않음",
+    "next_steps": [
+      "사용자 승인 후 commit (CLAUDE.md: 커밋은 명시 승인 필요)"
+    ]
+  },
+  "m4_milestone": "M4",
   "qa_verdict": "✅ PASS",
   "m3_qa": "✅ VERIFIED",
   "m4_qa": "✅ VERIFIED (independent reverification - blocker resolved, 63/63 tests pass)",

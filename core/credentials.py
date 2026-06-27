@@ -1,5 +1,6 @@
 import base64
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,10 @@ except ImportError:
 
 # Session-only credentials (in-memory, cleared immediately after collection)
 # HARDENING (CWE-522): Credentials are cleared as soon as collection completes, not persisted in memory
+# M5 (CWE-362): A lock guards _session so request and worker threads cannot race
+# on the same switch_id during the async credential lifecycle.
 _session = {}
+_session_lock = threading.Lock()
 
 
 def save_credential(switch_id, username, password, persist=False):
@@ -29,7 +33,8 @@ def save_credential(switch_id, username, password, persist=False):
     Returns:
         dict with 'ok' status and optional 'encrypted' flag
     """
-    _session[switch_id] = {"username": username, "password": password}
+    with _session_lock:
+        _session[switch_id] = {"username": username, "password": password}
 
     result = {"ok": True, "encrypted": False}
 
@@ -52,13 +57,17 @@ def load_credential(switch_id):
     """Load credentials from session memory for the specific switch.
 
     HARDENING (CWE-522): No fallback to last-used credentials; only return switch-specific session credentials.
+    M5 (CWE-522): Returns a defensive COPY so callers can zeroize their copy
+    without mutating the session store.
     Returns:
         dict with 'username' and 'password', or None if not found for this switch
     """
-    cred = _session.get(switch_id)
-    if cred:
+    with _session_lock:
+        cred = _session.get(switch_id)
+        cred_copy = dict(cred) if cred else None
+    if cred_copy:
         logger.info(f"Credential loaded from session for switch {switch_id}")
-        return cred
+        return cred_copy
 
     logger.warning(f"No session credential found for switch {switch_id}")
     return None
@@ -69,16 +78,16 @@ def clear_session_switch(switch_id):
 
     HARDENING (CWE-522): Remove plaintext credentials from memory as soon as possible.
     """
-    global _session
-    if switch_id in _session:
-        del _session[switch_id]
-        logger.info(f"Session credentials cleared for switch {switch_id}")
+    with _session_lock:
+        if switch_id in _session:
+            del _session[switch_id]
+            logger.info(f"Session credentials cleared for switch {switch_id}")
 
 
 def clear_session():
     """Clear all session credentials (e.g., on app shutdown)."""
-    global _session
-    _session.clear()
+    with _session_lock:
+        _session.clear()
     logger.info("All session credentials cleared")
 
 

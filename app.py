@@ -574,38 +574,34 @@ def create_app(demo_mode=None):
                         log_event("warning", "collect_blocked_invalid_ip", switch_id=switch_id, ip=switch_ip, reason=str(e))
                         return jsonify({"error": f"Switch IP rejected: {e}"}), 400
 
-            # M3: Handle credential persistence (optional DPAPI encryption)
             persist = data.get("persist", False)
-            cred_result = credentials.save_credential(switch_id, username, password, persist=persist)
-            if persist and cred_result.get("encrypted"):
-                # Store encrypted credential blob in DB for this switch
-                cred_blob = cred_result.get("cred_blob")
-                try:
-                    db.update_cred_blob(db_path, switch_id, cred_blob)
-                    log_event("info", "credential_persisted", switch_id=switch_id)
-                except Exception as e:
-                    sanitized = _sanitize_error_msg(str(e))
-                    log_event("warning", "credential_persist_failed", switch_id=switch_id, error=sanitized)
 
-            # Note: Credentials passed to collector are handled in-memory and logged with sanitization
-            # HARDENING (CWE-522): Use try/finally to guarantee credential clear even if collect_switch raises
-            try:
-                result = collector.collect_switch(db_path, switch_id, username, password)
-            finally:
-                try:
-                    credentials.clear_session_switch(switch_id)
-                except Exception as e:
-                    log_event("warning", "credential_clear_failed", switch_id=switch_id, error=str(e))
+            # M5 (CWE-362 race fix): collect_switch owns session storage. It stores
+            # the credential ONLY after passing the in-progress check, so a duplicate
+            # request can never overwrite or clear an active job's credential. It
+            # also disposes the credential itself on any enqueue failure. The async
+            # worker loads it at moment-of-use and clears it when collection finishes.
+            result = collector.collect_switch(db_path, switch_id, username, password)
 
-            # M3: 수집 완료 후 flapping/looping 분석 (비동기 결과가 있는 경우에만)
-            if result.get("status") == "done" and result.get("parsed"):
-                try:
-                    flapping_mod.run_analysis(db_path, switch_id, result["parsed"])
-                except Exception:
-                    pass
-
-            # Return 202 Accepted with queue information
-            return jsonify(result), 202
+            # M5 (W3): Map the async submission outcome to an accurate HTTP status.
+            status = result.get("status")
+            if status == "queued":
+                # M5 R2: Persist the DPAPI blob ONLY after a successful enqueue, so a
+                # duplicate request (rejected as in-progress below) can never overwrite
+                # an active switch's persisted credential blob.
+                if persist:
+                    cred_blob = credentials.encrypt_credential(username, password)
+                    if cred_blob:
+                        try:
+                            db.update_cred_blob(db_path, switch_id, cred_blob)
+                            log_event("info", "credential_persisted", switch_id=switch_id)
+                        except Exception as e:
+                            sanitized = _sanitize_error_msg(str(e))
+                            log_event("warning", "credential_persist_failed", switch_id=switch_id, error=sanitized)
+                return jsonify(result), 202
+            if "already being collected" in result.get("message", ""):
+                return jsonify(result), 409  # Conflict: collection in progress
+            return jsonify(result), 503  # Service Unavailable: queue full / enqueue failed
         except Exception as e:
             # CWE-532 fix: Sanitize error messages to prevent credential/path exposure in logs
             sanitized_error = _sanitize_error_msg(str(e))

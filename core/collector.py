@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from . import db
 from . import fixtures
 from . import utils
+from . import credentials
 from config import get_config
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,17 @@ def init_collector():
 
 
 def collect_switch(db_path, switch_id, username=None, password=None):
+    """Enqueue an async collection for a switch.
+
+    M5 (async_credential): Credentials are NEVER placed in the queue payload.
+    If username/password are passed directly (backward-compat), they are moved
+    into the in-memory session store and the local references are dropped
+    immediately. The worker loads them from the session store and clears them
+    after collection completes (success or failure).
+
+    Returns:
+        dict with status 'queued' or 'error'
+    """
     global _worker_queue, _collecting_switches
 
     utils.log_event("info", "collect_switch_requested", switch_id=switch_id)
@@ -68,7 +80,15 @@ def collect_switch(db_path, switch_id, username=None, password=None):
         _collecting_switches.add(switch_id)
 
     try:
-        _worker_queue.put((db_path, switch_id, username, password), block=False)
+        # M5 (CWE-522): Move directly-passed credentials into the session store so
+        # the queue payload stays free of plaintext. Kept INSIDE the try so any
+        # failure here also releases the in-progress mark via _abort_enqueue.
+        if username is not None or password is not None:
+            credentials.save_credential(switch_id, username, password)
+            username = None
+            password = None
+        # M5: payload carries no credentials, only the work identifiers.
+        _worker_queue.put((db_path, switch_id), block=False)
         position = _worker_queue.qsize()
         utils.log_event("info", "collect_queued", switch_id=switch_id, position=position)
         return {
@@ -77,13 +97,30 @@ def collect_switch(db_path, switch_id, username=None, password=None):
             "queue_position": position
         }
     except queue.Full:
-        with _collector_lock:
-            _collecting_switches.discard(switch_id)
+        # M5: queue failed before the worker can run; clear session creds now.
+        _abort_enqueue(switch_id)
         utils.log_event("error", "collect_queue_full", switch_id=switch_id)
         return {
             "status": "error",
             "message": "Queue is full"
         }
+    except Exception as e:
+        # M5 (W1): Any other enqueue-time failure must also release the
+        # in-progress mark and dispose the session credential to avoid leaks.
+        _abort_enqueue(switch_id)
+        sanitized = _sanitize_error_msg(str(e))
+        utils.log_event("error", "collect_enqueue_error", switch_id=switch_id, error=sanitized)
+        return {
+            "status": "error",
+            "message": "Failed to enqueue collection"
+        }
+
+
+def _abort_enqueue(switch_id):
+    """Release in-progress mark and dispose session credential after a failed enqueue."""
+    with _collector_lock:
+        _collecting_switches.discard(switch_id)
+    credentials.clear_session_switch(switch_id)
 
 
 def _worker_loop():
@@ -93,8 +130,12 @@ def _worker_loop():
         # MEDIUM FIX (CPU optimization): Remove timeout to prevent unnecessary wakeups (busy-wait)
         # Worker will block indefinitely until task arrives, reducing CPU usage
         # Note: No timeout means queue.Empty will never be raised (unreachable code removed)
-        db_path, switch_id, username, password = _worker_queue.get()
+        # M5 (async_credential): payload carries no credentials, only identifiers.
+        db_path, switch_id = _worker_queue.get()
 
+        username = None
+        password = None
+        cred = None
         try:
             utils.log_event("info", "collect_start", switch_id=switch_id)
             db.set_switch_status(db_path, switch_id, "collecting")
@@ -110,6 +151,13 @@ def _worker_loop():
                 outputs = fixtures.get_demo_outputs_for_vendor(vendor)
                 utils.log_event("info", "demo_mode_outputs", switch_id=switch_id, vendor=vendor)
             else:
+                # M5 (CWE-522): Load credentials from the session store at the
+                # moment of use; fail explicitly if none were supplied.
+                cred = credentials.load_credential(switch_id)
+                if not cred:
+                    raise ValueError(f"No credentials available for switch {switch_id}")
+                username = cred.get("username")
+                password = cred.get("password")
                 outputs = _ssh_collect(switch, username, password, vendor)
 
             raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
@@ -140,8 +188,16 @@ def _worker_loop():
             db.set_switch_status(db_path, switch_id, "failed", error=sanitized_error)
         finally:
             # CWE-522 fix: Explicitly clear credentials from memory to prevent plaintext exposure
+            # M5 (W2): cred is a defensive copy from load_credential; emptying the
+            # dict drops the plaintext references it holds.
+            if isinstance(cred, dict):
+                cred.clear()
+            cred = None
             username = None
             password = None
+            # M5 (async_credential): Worker owns credential disposal. Clear the
+            # session store entry regardless of success/failure/exception.
+            credentials.clear_session_switch(switch_id)
             with _collector_lock:
                 _collecting_switches.discard(switch_id)
             # CRITICAL: Safely call task_done() even if queue was replaced during test teardown
