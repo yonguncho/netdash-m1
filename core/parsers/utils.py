@@ -32,11 +32,18 @@ def normalize_port(port_str, vendor=None):
 
     port_str = port_str.strip()
 
-    # Clarify operator precedence: check vendor OR colon syntax (both indicate port range format)
-    if vendor == "extreme_exos" or (":" in port_str):
-        match = re.match(r"(\d+):(\d+)", port_str)
-        if match:
-            return f"Gi{match.group(1)}:{match.group(2)}"
+    # M6: ExtremeXOS uses its own port notation (slot:port or a bare standalone
+    # port number) and does NOT use Cisco interface-type prefixes like "Gi".
+    # Preserve the native notation; only normalize internal whitespace.
+    if vendor == "extreme_exos":
+        # slot:port (whitespace tolerant) -> "slot:port"
+        m = re.match(r"^(\d+)\s*:\s*(\d+)$", port_str)
+        if m:
+            return f"{m.group(1)}:{m.group(2)}"
+        # standalone port number -> keep as-is
+        if re.match(r"^\d+$", port_str):
+            return port_str
+        return port_str
 
     if re.match(r"[A-Za-z]+\d+/\d+/\d+", port_str):
         return port_str

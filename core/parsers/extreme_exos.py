@@ -51,23 +51,36 @@ def _parse_ports(status_output, desc_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # Match Extreme ExOS port format: number:number (ignore Speed/Duplex columns)
-        match = re.match(r"^(\d+:\d+)\s+\S+\s+\S+\s+(Up|Down).*$", line, re.IGNORECASE)
-        if match:
-            port_name, line_status = match.groups()
+        # M6: Token-based parse — robust to a variable-width Type column, leading
+        # whitespace, and "Up"/"Down" substrings (e.g. "Up-Link") in other columns.
+        tokens = line.split()
+        if not tokens:
+            continue
+        port_tok = tokens[0]
+        # First token must be a port: slot:port ("1:1") or standalone ("5").
+        if not re.match(r"^(?:\d+:)?\d+$", port_tok):
+            continue
+        # Status is the EXACT "Up"/"Down" token, never a substring of another column.
+        line_status = None
+        for tok in tokens[1:]:
+            if tok.lower() in ("up", "down"):
+                line_status = tok
+                break
+        if line_status is None:
+            continue
 
-            status = utils.parse_interface_status(line_status)
-            port_name = utils.normalize_port(port_name, vendor="extreme_exos")
+        status = utils.parse_interface_status(line_status)
+        port_name = utils.normalize_port(port_tok, vendor="extreme_exos")
 
-            if port_name:
-                ports.append({
-                    "switch_id": switch_id,
-                    "name": port_name,
-                    "status": status,
-                    "vlan": 1,
-                    "speed": "unknown",
-                    "description": descriptions.get(port_name, "")
-                })
+        if port_name:
+            ports.append({
+                "switch_id": switch_id,
+                "name": port_name,
+                "status": status,
+                "vlan": 1,
+                "speed": "unknown",
+                "description": descriptions.get(port_name, "")
+            })
 
     return utils.deduplicate_list(ports, lambda p: p["name"])
 
@@ -86,7 +99,8 @@ def _parse_macs(mac_output, switch_id):
         if len(line) > 500:  # Reject oversized lines
             continue
         # Regex supports both colon-separated (xx:xx:xx:xx:xx:xx) and no-colon (xxxxxxxxxxxx) MAC formats
-        match = re.match(r"^\s*(\d+)\s+([\da-f:]{12,17})\s+(\w+)\s+(\d+:\d+)$", line, re.IGNORECASE)
+        # M6: port column matches slot:port ("1:1") or standalone ("5")
+        match = re.match(r"^\s*(\d+)\s+([\da-f:]{12,17})\s+(\w+)\s+((?:\d+:)?\d+)$", line, re.IGNORECASE)
         if match:
             vlan_str, mac_addr, mac_type, port_name = match.groups()
 
@@ -120,7 +134,8 @@ def _parse_arps(arp_output, switch_id):
         if len(line) > 500:  # Reject oversized lines
             continue
         # Simplified regex with explicit IP/MAC format
-        match = re.match(r"^\s*([\d.]+)\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+(\d+)\s+(\d+:\d+)$", line, re.IGNORECASE)
+        # M6: interface column matches slot:port ("1:1") or standalone ("5")
+        match = re.match(r"^\s*([\d.]+)\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+(\d+)\s+((?:\d+:)?\d+)$", line, re.IGNORECASE)
         if match:
             ip, mac_addr, vlan_str, interface = match.groups()
 

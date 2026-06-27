@@ -49,8 +49,12 @@ M1 기반 프레임워크      ✅ 완료 (커밋됨, 푸시됨)
 M2 수집·파싱           ✅ 완료 (커밋됨, GitHub 릴리스 v1.0.0)
 M3 CLI/끊김탐지/DPAPI   ✅ 완료 (커밋됨, 푸시됨)
 M4 Excel 멀티블록 로더  ✅ 완료 (커밋 38ddfbb, 푸시됨, GitHub 릴리스 v2.0.0)
-M5 비동기 자격증명 처리  ⬜ 예정  ← 다음 여기
+M5 비동기 자격증명 처리  ✅ 완료 (커밋 801176c, Codex 리뷰 3R PASS)
+M6 ExtremeXOS 포트정규화 ✅ 완료 (Codex 리뷰 2R PASS, 커밋 대기)  ← 다음 여기
 ```
+
+참고: M6는 PRD deferred_features의 "Extreme EXOS 고급 지원(포트 표기 정규화)"로 정의됨.
+PRD의 다른 M6 항목(DPAPI, PyInstaller)은 M3~M5에서 이미 앞당겨 완료됨.
 
 GitHub 동기화 상태 (2026-06-26):
 - `netdash-m1` master: 로컬 = origin (완전 동기화)

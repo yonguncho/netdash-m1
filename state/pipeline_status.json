@@ -1,8 +1,40 @@
 {
-  "stage": "m5_complete",
+  "stage": "m6_complete",
   "status": "ready_for_commit",
   "timestamp": "2026-06-27T00:00:00Z",
-  "milestone": "M5",
+  "milestone": "M6",
+  "m6_extreme_exos": {
+    "date": "2026-06-27",
+    "status": "✅ COMPLETE (Codex review PASS, 2 rounds)",
+    "design_doc": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m6-extreme-exos.md",
+    "goal": "ExtremeXOS 포트 표기 정규화 고도화 — 잘못된 Cisco 'Gi' 접두사 제거, standalone+slot:port 지원, 가변폭 Type 컬럼 견고 파싱",
+    "changes": {
+      "core/parsers/utils.py": "normalize_port: extreme_exos는 native 표기 보존(Gi 제거), 공백 정규화. 크로스벤더 ':' 자동분기 제거(오염 차단)",
+      "core/parsers/extreme_exos.py": "_parse_ports 토큰 기반 재작성(부분문자열 status 오매칭 방지, leading whitespace 허용). _parse_macs/_parse_arps 포트 컬럼 standalone+slot:port 지원",
+      "tests/test_m6_extreme_exos.py": "신규 10개",
+      "tests/test_parsers.py": "test_extreme_port_normalization 단언을 'Gi 없음' 기준으로 갱신"
+    },
+    "tests": {
+      "new": 10,
+      "total": 82,
+      "passed": 82,
+      "regression": 0,
+      "execution_time": "26.17s"
+    },
+    "code_review": {
+      "reviewer": "Codex (codex exec v0.133.0)",
+      "rounds": 2,
+      "round1": "PASS critical 0 — Warning 2(status 부분문자열 오매칭, leading whitespace 미허용)",
+      "round2": "✅ PASS — critical 0, warning 0, W1/W2 RESOLVED",
+      "review_files": [
+        "C:\\AI_WORKPLACE\\.codex\\m6_review_r1.txt",
+        "C:\\AI_WORKPLACE\\.codex\\m6_review_r2.txt"
+      ]
+    },
+    "next_steps": [
+      "사용자 승인 후 commit (워크스페이스 규칙: 커밋은 명시 승인 필요)"
+    ]
+  },
   "m5_async_credential": {
     "date": "2026-06-27",
     "status": "✅ COMPLETE (Codex review PASS, 3 rounds)",

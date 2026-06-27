@@ -63,5 +63,11 @@ class TestExtremeEXOSParser:
         outputs = fixtures.get_extreme_exos_outputs()
         result = extreme_exos.parse(outputs, 3)
 
+        assert len(result["ports"]) > 0
         for port in result["ports"]:
-            assert ":" in port["name"] or "/" in port["name"], f"Port {port['name']} not normalized"
+            name = port["name"]
+            # M6: ExtremeXOS keeps native notation; no Cisco "Gi" prefix.
+            assert name, "Empty port name"
+            assert not name.startswith("Gi"), f"Port {name} has wrong Cisco 'Gi' prefix"
+            # demo fixture uses slot:port notation
+            assert ":" in name, f"Port {name} lost slot:port notation"
