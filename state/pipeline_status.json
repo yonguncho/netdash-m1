@@ -1,8 +1,39 @@
 {
-  "stage": "m7_complete",
+  "stage": "m8_complete",
   "status": "ready_for_commit",
-  "timestamp": "2026-06-27T00:00:00Z",
-  "milestone": "M7",
+  "timestamp": "2026-06-28T00:00:00Z",
+  "milestone": "M8",
+  "m8_reconcile_ui": {
+    "date": "2026-06-28",
+    "status": "✅ COMPLETE (Opus 4.8 review PASS)",
+    "design_doc": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m8-reconcile-ui.md",
+    "goal": "M7 reconcile 엔진/API(GET /api/reconcile)를 화면에 연결 — 장부 대조 탭(요약 카드 + 호스트 판정 테이블)",
+    "changes": {
+      "web/templates/index.html": "장부 대조 탭 버튼 + #tab-reconcile pane(#reconcile-summary, #reconcile-table-body)",
+      "web/static/app.js": "탭 전환 reconcile 분기 + loadReconcile/renderReconcile + verdictBadgeClass/verdictLabel/_reconcileVerdictMeta + 새로고침 버튼. 모든 동적 필드 escHtml",
+      "web/static/style.css": "status-badge--info + reconcile 요약 카드 스타일",
+      "tests/conftest.py": "client fixture 공용 승격",
+      "tests/test_app.py": "중복 client fixture 제거(conftest 사용)",
+      "tests/test_m8_reconcile_ui.py": "신규 8개"
+    },
+    "tests": {
+      "new": 8,
+      "total": 106,
+      "passed": 106,
+      "regression": 0,
+      "execution_time": "32.55s"
+    },
+    "code_review": {
+      "reviewer": "Claude Opus 4.8 (Codex 타임아웃 대체)",
+      "rounds": 1,
+      "round1": "✅ PASS critical 0 — XSS 방지(escHtml 전수)·배지 화이트리스트·6판정 매핑·회귀 없음 확인. Warning 3 중 1 반영(중복 fixture 제거), 2 수용",
+      "note": "R1 PASS이고 반영분은 리뷰어 권고(fixture 중복 제거)뿐이라 전체 테스트 GREEN으로 검증 완료"
+    },
+    "next_steps": [
+      "사용자 승인 후 commit",
+      "M9 후보: 프로덕션본(v2.9.5) 알림/리포트/추가 벤더 파서 이식, 또는 reconcile Excel 장부 컬럼 UI 안내"
+    ]
+  },
   "m7_reconcile": {
     "date": "2026-06-27",
     "status": "✅ COMPLETE (Opus 4.8 review PASS, 2 rounds)",

@@ -16,6 +16,7 @@ document.querySelectorAll(".tab-nav__btn").forEach(btn => {
     document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
     if (btn.dataset.tab === "vlan") loadVlans();
     if (btn.dataset.tab === "switch") renderSwitchTable(_switches);
+    if (btn.dataset.tab === "reconcile") loadReconcile();
   });
 });
 
@@ -229,6 +230,73 @@ function loadVlans() {
         "</td><td><code>" + escHtml(v.switch_ip) + "</code></td><td>" + v.mac_count + "</td></tr>";
     }).join("");
   }).catch(function(e) { console.error("vlan load:", e); });
+}
+
+// ─── M8: 장부 대조(Reconcile) ────────────────────────────────────
+var _reconcileVerdictMeta = {
+  match:           { label: "일치",        badge: "ok" },
+  port_mismatch:   { label: "포트 불일치",  badge: "warning" },
+  switch_mismatch: { label: "스위치 불일치", badge: "critical" },
+  ledger_only:     { label: "장부에만",     badge: "info" },
+  measured_only:   { label: "실측에만",     badge: "info" },
+  no_data:         { label: "정보 없음",     badge: "new" },
+};
+
+function verdictBadgeClass(verdict) {
+  var meta = _reconcileVerdictMeta[verdict];
+  return meta ? meta.badge : "new";
+}
+
+function verdictLabel(verdict) {
+  var meta = _reconcileVerdictMeta[verdict];
+  return meta ? meta.label : verdict;
+}
+
+function loadReconcile() {
+  fetch("/api/reconcile")
+    .then(function(r) { return r.json(); })
+    .then(function(data) { renderReconcile(data); })
+    .catch(function(e) { console.error("reconcile load:", e); });
+}
+
+(function () {
+  var btn = document.getElementById("btn-reconcile-refresh");
+  if (btn) btn.addEventListener("click", loadReconcile);
+})();
+
+function renderReconcile(data) {
+  var summary = (data && data.summary) || {};
+  var hosts = (data && data.hosts) || [];
+
+  // 요약 카드: 판정 6종 카운트
+  var order = ["match", "port_mismatch", "switch_mismatch", "ledger_only", "measured_only", "no_data"];
+  var summaryHtml = order.map(function(v) {
+    var count = summary[v] || 0;
+    return "<div class='reconcile-stat'>" +
+      "<span class='status-badge status-badge--" + verdictBadgeClass(v) + "'>" + escHtml(verdictLabel(v)) + "</span>" +
+      "<span class='reconcile-stat__count'>" + count + "</span>" +
+      "</div>";
+  }).join("");
+  var summaryEl = document.getElementById("reconcile-summary");
+  if (summaryEl) summaryEl.innerHTML = summaryHtml;
+
+  // 호스트 판정 테이블
+  var tbody = document.getElementById("reconcile-table-body");
+  if (!tbody) return;
+  if (!hosts.length) {
+    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>대조할 호스트가 없습니다. 엑셀 장부를 가져오고 스위치 정보를 수집하세요.</td></tr>";
+    return;
+  }
+  tbody.innerHTML = hosts.map(function(h) {
+    return "<tr><td><code>" + escHtml(h.ip) + "</code></td>" +
+      "<td>" + escHtml(h.hostname || "-") + "</td>" +
+      "<td><span class='status-badge status-badge--" + verdictBadgeClass(h.verdict) + "'>" +
+        escHtml(verdictLabel(h.verdict)) + "</span></td>" +
+      "<td>" + escHtml(h.ledger_switch || "-") + "</td>" +
+      "<td>" + escHtml(h.ledger_port || "-") + "</td>" +
+      "<td>" + escHtml(h.actual_switch || "-") + "</td>" +
+      "<td>" + escHtml(h.actual_port || "-") + "</td></tr>";
+  }).join("");
 }
 
 // ─── 계정 입력 모달 ──────────────────────────────────────────────

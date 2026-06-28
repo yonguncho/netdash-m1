@@ -208,6 +208,16 @@ body {
 .status-badge--critical { background: #fee2e2; color: #991b1b; }
 .status-badge--new      { background: #f1f5f9; color: #64748b; }
 .status-badge--collecting { background: #dbeafe; color: #1d4ed8; }
+.status-badge--info     { background: #dbeafe; color: #1e40af; }
+
+/* ─── M8: 장부 대조 요약 카드 ───────────────────── */
+.reconcile-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 16px; }
+.reconcile-stat {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; background: #f6f8fb;
+  border: 1px solid #d0d5dd; border-radius: 6px;
+}
+.reconcile-stat__count { font-size: 18px; font-weight: 700; color: #1f2937; }
 
 /* ─── 모달 ───────────────────────────────────── */
 .modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; }

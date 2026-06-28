@@ -42,6 +42,17 @@ def temp_db():
 
 
 @pytest.fixture
+def client(tmp_path, monkeypatch):
+    """Demo mode Flask test client (shared across test modules)."""
+    monkeypatch.chdir(tmp_path)
+    from app import create_app
+    app = create_app(demo_mode=True)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c
+
+
+@pytest.fixture
 def demo_config(temp_db):
     reset_config()
     config = Config(demo_mode=True)

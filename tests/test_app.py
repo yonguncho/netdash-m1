@@ -8,14 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import create_app
 
 
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
-    """Demo mode client for basic functionality tests"""
-    monkeypatch.chdir(tmp_path)
-    app = create_app(demo_mode=True)
-    app.config["TESTING"] = True
-    with app.test_client() as c:
-        yield c
+# NOTE: `client` fixture is now provided by conftest.py (shared across modules).
 
 
 @pytest.fixture()

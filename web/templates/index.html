@@ -28,6 +28,7 @@
     <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
     <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
     <button class="tab-nav__btn" data-tab="vlan">VLAN</button>
+    <button class="tab-nav__btn" data-tab="reconcile">장부 대조</button>
   </nav>
 
   <!-- 탭 컨텐츠 -->
@@ -88,6 +89,29 @@
             <tr><th>VLAN</th><th>스위치</th><th>스위치 IP</th><th>MAC 수</th></tr>
           </thead>
           <tbody id="vlan-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 장부 대조 탭 (M8) -->
+    <div id="tab-reconcile" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">장부 대조 (Reconcile)</span>
+        <div class="pane-toolbar__actions">
+          <button id="btn-reconcile-refresh" class="btn btn--secondary">새로고침</button>
+        </div>
+      </div>
+      <div id="reconcile-summary" class="reconcile-summary"></div>
+      <div id="reconcile-table-wrap" class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>IP</th><th>호스트명</th><th>판정</th>
+              <th>장부 스위치</th><th>장부 포트</th>
+              <th>실측 스위치</th><th>실측 포트</th>
+            </tr>
+          </thead>
+          <tbody id="reconcile-table-body"></tbody>
         </table>
       </div>
     </div>
