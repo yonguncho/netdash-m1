@@ -459,9 +459,13 @@ def create_app(demo_mode=None):
                 log_event("info", "upload_switches_imported", count=len(imported_switch_ids))
 
             # Import hosts (upsert by IP)
+            # M7: Excel hosts are the operator's LEDGER (expected inventory), not
+            # measured data. Route them through save_ledger_hosts so they populate
+            # ledger/mac columns WITHOUT clobbering measured location columns
+            # (switch_id/port/located) that a prior collection may have set.
             imported_host_ids = []
             if valid_hosts:
-                imported_host_ids = db.save_hosts(db_path, valid_hosts)
+                imported_host_ids = db.save_ledger_hosts(db_path, valid_hosts)
                 log_event("info", "upload_hosts_imported", count=len(imported_host_ids))
 
             # WARNING 2 fix: 유효 row 0건인 경우 400 반환
@@ -530,6 +534,17 @@ def create_app(demo_mode=None):
         except Exception as e:
             sanitized = collector._sanitize_error_msg(str(e))
             log_event("error", "get_vlans_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/reconcile", methods=["GET"])
+    def get_reconcile():
+        """M7: 장부(엑셀) vs 실측(수집) 대조 결과 조회 (6판정 + summary)."""
+        try:
+            result = correlator.reconcile(db_path)
+            return jsonify(result)
+        except Exception as e:
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "reconcile_error", error=sanitized)
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/<int:switch_id>/events", methods=["GET"])

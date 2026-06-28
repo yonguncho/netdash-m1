@@ -1,8 +1,39 @@
 {
-  "stage": "m6_complete",
+  "stage": "m7_complete",
   "status": "ready_for_commit",
   "timestamp": "2026-06-27T00:00:00Z",
-  "milestone": "M6",
+  "milestone": "M7",
+  "m7_reconcile": {
+    "date": "2026-06-27",
+    "status": "✅ COMPLETE (Opus 4.8 review PASS, 2 rounds)",
+    "design_doc": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m7-reconcile.md",
+    "goal": "장부(엑셀 기대 인벤토리) vs 실측(수집) 대조 — 6판정(match/port_mismatch/switch_mismatch/ledger_only/measured_only/no_data). PRD M4~M5 미완 항목 완성",
+    "changes": {
+      "core/correlator.py": "normalize_port(비교용, 물리/논리 타입 구분·서브인터페이스 보존·Juniper 커버) + reconcile(6판정) + _switch_key(FQDN 정규화)",
+      "core/db.py": "hosts 테이블 ledger 컬럼(hostname/ledger_switch/ledger_port) + 마이그레이션. save_hosts INSERT OR REPLACE→UPSERT(측정 컬럼만). save_ledger_hosts/list_hosts/get_switches 신규",
+      "core/excel_loader.py": "ALIASES에 ledger_switch(연결스위치)/ledger_port(연결포트)/hostname(사용서버명) 추가",
+      "app.py": "GET /api/reconcile. 업로드 host를 save_ledger_hosts로 라우팅(측정 위치 불침범)",
+      "tests/test_m7_reconcile.py": "신규 16개"
+    },
+    "tests": {
+      "new": 16,
+      "total": 98,
+      "passed": 98,
+      "regression": 0,
+      "execution_time": "28.27s"
+    },
+    "code_review": {
+      "reviewer": "Claude Opus 4.8 (Codex 타임아웃으로 대체)",
+      "rounds": 2,
+      "round1": "FAIL critical 4 — save_ledger_hosts 미호출(ledger 미적재), excel이 측정 NULL 덮어씀, normalize_port 서브인터페이스/논리포트 오정규화",
+      "round2": "✅ PASS — C1~C4 RESOLVED, critical 0. Warning 3 중 2 반영(hostname 보존, Juniper), 1 수용(크로스도메인)",
+      "codex_status": "긴 리뷰 프롬프트에서 300·540초 반복 타임아웃 → Opus 대체"
+    },
+    "next_steps": [
+      "사용자 승인 후 commit",
+      "M8 후보: reconcile UI 패널, 추가 벤더 파서 이식"
+    ]
+  },
   "m6_extreme_exos": {
     "date": "2026-06-27",
     "status": "✅ COMPLETE (Codex review PASS, 2 rounds)",

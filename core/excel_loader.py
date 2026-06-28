@@ -30,10 +30,13 @@ MIN_MATCHED_COLS = 2
 ALIASES = {
     'name': {'name', 'switchname', 'devicename'},
     'ip': {'ip', 'ipv4', 'ipaddress', 'address'},
-    'hostname': {'hostname', 'dnsname', 'fqdn'},
+    'hostname': {'hostname', 'dnsname', 'fqdn', '사용서버명', '서버명'},
     'vendor': {'vendor', 'manufacturer', 'os', 'platform'},
-    'location': {'location', 'site', 'datacenter', 'dc'},
+    'location': {'location', 'site', 'datacenter', 'dc', '랙위치'},
     'mac': {'mac', 'macaddress', 'hwaddr'},
+    # M7: 장부(ledger) 위치 — 호스트 블록에서 기대 연결 위치를 적재
+    'ledger_switch': {'연결스위치', 'connectedswitch', 'ledgerswitch', 'uplinkswitch'},
+    'ledger_port': {'연결포트', 'connectedport', 'ledgerport', 'uplinkport'},
 }
 
 IP_REGEX = re.compile(

@@ -110,6 +110,9 @@ CREATE TABLE IF NOT EXISTS hosts (
     located BOOLEAN DEFAULT 0,
     confidence REAL DEFAULT 0.0,
     reason TEXT,
+    hostname TEXT,
+    ledger_switch TEXT,
+    ledger_port TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (switch_id) REFERENCES switches(id)
 )
@@ -206,6 +209,16 @@ def init_schema(db_path):
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
+            # M7: hosts 테이블 장부(ledger) 컬럼 마이그레이션
+            for col, definition in [
+                ("hostname", "TEXT"),
+                ("ledger_switch", "TEXT"),
+                ("ledger_port", "TEXT"),
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE hosts ADD COLUMN {col} {definition}")
                 except Exception:
                     pass
             conn.commit()
@@ -653,21 +666,93 @@ def save_hosts(db_path, hosts):
                 ip = host_data.get("ip")
                 if not ip:
                     continue
+                # M7: UPSERT on measured columns only. Ledger columns
+                # (hostname, ledger_switch, ledger_port) are preserved so a
+                # measurement does not wipe out previously loaded ledger data.
                 cursor.execute(
-                    """INSERT OR REPLACE INTO hosts
+                    """INSERT INTO hosts
                        (ip, mac, switch_id, port, located, confidence, reason)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(ip) DO UPDATE SET
+                           mac=excluded.mac,
+                           switch_id=excluded.switch_id,
+                           port=excluded.port,
+                           located=excluded.located,
+                           confidence=excluded.confidence,
+                           reason=excluded.reason,
+                           updated_at=CURRENT_TIMESTAMP""",
                     (ip, host_data.get("mac"), host_data.get("switch_id"),
                      host_data.get("port"), host_data.get("located", False),
                      host_data.get("confidence", 0.0), host_data.get("reason"))
                 )
-                # INSERT OR REPLACE는 rowcount가 1 또는 2 (replace의 경우)
-                # 저장된 호스트의 ID를 조회
                 cursor.execute("SELECT id FROM hosts WHERE ip = ?", (ip,))
                 row = cursor.fetchone()
                 if row:
                     results.append(row[0])
             return results
+
+
+def save_ledger_hosts(db_path, rows):
+    """M7: 장부(엑셀) 호스트를 hosts 테이블에 UPSERT (장부 + mac 갱신).
+
+    입력:
+      rows: [{ip, mac?, hostname?, ledger_switch?, ledger_port?}, ...]
+
+    - 장부 컬럼(hostname, ledger_switch, ledger_port)을 갱신한다.
+    - mac은 IP의 위치-무관 속성이므로 COALESCE로 갱신(값이 있을 때만, 기존값 보존).
+    - 측정 위치 컬럼(switch_id, port, located, confidence, reason)은 절대 건드리지
+      않는다 → 수집(save_hosts)과 적재 순서 무관하게 측정 데이터 보존(멱등).
+
+    반환:
+      저장된 호스트 ID 리스트
+    """
+    if not rows:
+        return []
+
+    utils.log_event("info", "save_ledger_hosts", count=len(rows))
+    results = []
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            for row in rows:
+                ip = row.get("ip")
+                if not ip:
+                    continue
+                # M7: 빈값/NULL은 기존값을 보존(COALESCE+NULLIF)한다. 장부 시트에
+                # 특정 컬럼이 없을 때(재업로드 등) 기존에 저장된 값을 지우지 않도록.
+                cursor.execute(
+                    """INSERT INTO hosts (ip, mac, hostname, ledger_switch, ledger_port)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(ip) DO UPDATE SET
+                           mac=COALESCE(NULLIF(excluded.mac, ''), hosts.mac),
+                           hostname=COALESCE(NULLIF(excluded.hostname, ''), hosts.hostname),
+                           ledger_switch=COALESCE(NULLIF(excluded.ledger_switch, ''), hosts.ledger_switch),
+                           ledger_port=COALESCE(NULLIF(excluded.ledger_port, ''), hosts.ledger_port),
+                           updated_at=CURRENT_TIMESTAMP""",
+                    (ip, row.get("mac"), row.get("hostname", ""),
+                     row.get("ledger_switch"), row.get("ledger_port"))
+                )
+                cursor.execute("SELECT id FROM hosts WHERE ip = ?", (ip,))
+                r = cursor.fetchone()
+                if r:
+                    results.append(r[0])
+            return results
+
+
+def list_hosts(db_path):
+    """M7: 전체 호스트(측정 + 장부 컬럼) 조회."""
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM hosts ORDER BY ip LIMIT 100000")
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_switches(db_path):
+    """M7: 전체 스위치 조회 (reconcile의 switch_id→name 매핑용)."""
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM switches ORDER BY id LIMIT 100000")
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def get_ports(db_path, snapshot_id):

@@ -50,11 +50,16 @@ M2 수집·파싱           ✅ 완료 (커밋됨, GitHub 릴리스 v1.0.0)
 M3 CLI/끊김탐지/DPAPI   ✅ 완료 (커밋됨, 푸시됨)
 M4 Excel 멀티블록 로더  ✅ 완료 (커밋 38ddfbb, 푸시됨, GitHub 릴리스 v2.0.0)
 M5 비동기 자격증명 처리  ✅ 완료 (커밋 801176c, Codex 리뷰 3R PASS)
-M6 ExtremeXOS 포트정규화 ✅ 완료 (Codex 리뷰 2R PASS, 커밋 대기)  ← 다음 여기
+M6 ExtremeXOS 포트정규화 ✅ 완료 (Codex 리뷰 2R PASS, 커밋 703e63d)
+M7 장부 대조(Reconcile)  ✅ 완료 (Opus 리뷰 2R PASS, 커밋 대기)  ← 다음 여기
 ```
 
-참고: M6는 PRD deferred_features의 "Extreme EXOS 고급 지원(포트 표기 정규화)"로 정의됨.
-PRD의 다른 M6 항목(DPAPI, PyInstaller)은 M3~M5에서 이미 앞당겨 완료됨.
+참고:
+- M6는 PRD deferred_features의 "Extreme EXOS 고급 지원(포트 표기 정규화)"로 정의됨.
+  PRD의 다른 M6 항목(DPAPI, PyInstaller)은 M3~M5에서 이미 앞당겨 완료됨.
+- M7은 PRD의 "고급 상관 (Excel, Reconcile)"(phase M4~M5) 중 미완이던 Reconcile 완성.
+- M7 리뷰는 Codex가 긴 프롬프트에서 반복 타임아웃하여 Claude Opus 4.8로 대체함.
+- M8 후보: reconcile UI 패널 / 프로덕션본(C:\AI_WORKPLACE\NetDash) 추가 벤더 파서 이식.
 
 GitHub 동기화 상태 (2026-06-26):
 - `netdash-m1` master: 로컬 = origin (완전 동기화)
