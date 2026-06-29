@@ -280,10 +280,12 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 utils.log_event("error", "ssh_error", switch=switch["name"], error_type=type(e).__name__, error=sanitized_error)
                 raise
         finally:
-            # CWE-522: Clear all credentials from memory after connection closes (success or failure)
-            # ConnectHandler closes connection but credentials remain in device dict memory
-            if 'device' in locals():
-                device.clear()
+            # FIX: 매 시도마다 복사본(conn_device)만 정리한다. 이전엔 원본 device를
+            # clear()해서 retry 2회차에 device/conn_device가 빈 dict가 되고 source
+            # 바인딩 소켓도 사라져 재시도가 깨졌다. 원본 device는 retry 위해 유지하고,
+            # 함수 종료(return/raise) 시 GC로 정리된다.
+            if 'conn_device' in locals():
+                conn_device.clear()
             username = None
             password = None
 
