@@ -1,5 +1,14 @@
 # NetDash 릴리스 노트
 
+## v3.5.1 (2026-06-29) — 수집 read_timeout 오류 + 수정/삭제 버튼 무반응 수정
+
+- **수집 `read_timeout` 오류 수정**: `read_timeout`은 netmiko `send_command()`의 인자인데
+  `ConnectHandler` 생성자에 잘못 전달해 `unexpected keyword argument 'read_timeout'`
+  오류가 났습니다. send_command로 옮겼습니다.
+- **수정/삭제 버튼 무반응 수정**: 보안 정책(CSP)이 inline onclick을 차단해 동적 버튼
+  (수정·삭제·상세·수집)이 동작하지 않았습니다. 이벤트 위임 방식으로 전환해 CSP를
+  유지하면서 정상 동작합니다.
+
 ## v3.5.0 (2026-06-29) — 수집 벤더 오류 수정 + 수정 기능
 
 **스위치 수집 'unsupported device_type' 오류 수정**

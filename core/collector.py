@@ -254,14 +254,16 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
     config = get_config()
     commands = config.get_commands(vendor)
     ssh_timeout = config.collector.get("ssh_timeout", 30)
+    read_timeout = config.collector.get("read_timeout", 60)
 
+    # FIX: read_timeout은 netmiko send_command()의 인자이지 ConnectHandler 생성자 인자가
+    # 아니다. 생성자에 넣으면 "unexpected keyword argument 'read_timeout'" 오류.
     device = {
         "device_type": vendor,
         "ip": switch["ip"],
         "username": username,
         "password": password,
         "conn_timeout": ssh_timeout,
-        "read_timeout": config.collector.get("read_timeout", 60),
         "fast_cli": False
     }
 
@@ -278,9 +280,9 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 from . import netbind
                 conn_device["sock"] = netbind.bind_socket(switch["ip"], 22, source_ip, ssh_timeout)
             with ConnectHandler(**conn_device) as conn:
-                conn.send_command("terminal length 0")
+                conn.send_command("terminal length 0", read_timeout=read_timeout)
                 for key, command in commands.items():
-                    output = conn.send_command(command)
+                    output = conn.send_command(command, read_timeout=read_timeout)
                     outputs[key] = output
                     utils.log_event("debug", "command_executed", command=command)
             return outputs

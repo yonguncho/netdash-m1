@@ -79,3 +79,21 @@ def test_appjs_edit_functions():
     assert "function editFirewall" in src
     assert "_editSwitchId" in src
     assert "_editFirewallId" in src
+
+
+def test_appjs_no_inline_onclick():
+    """CSP default-src 'self'는 inline onclick을 차단 → 이벤트 위임 사용 확인."""
+    src = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "onclick=" not in src, "inline onclick은 CSP에 차단됨 — data-action 위임 사용"
+    assert "data-action=" in src
+    assert 'closest("[data-action]")' in src
+
+
+def test_collector_read_timeout_moved_to_send_command():
+    """read_timeout은 ConnectHandler 생성자가 아닌 send_command 인자여야 함."""
+    src = (Path(__file__).parent.parent / "core" / "collector.py").read_text(encoding="utf-8")
+    assert "send_command(command, read_timeout=read_timeout)" in src
+    # device dict 정의에 read_timeout 키가 없어야(생성자 인자 금지)
+    import re
+    device_block = re.search(r'device = \{.*?\}', src, re.DOTALL)
+    assert device_block and '"read_timeout"' not in device_block.group(0)

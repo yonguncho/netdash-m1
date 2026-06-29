@@ -7,6 +7,27 @@ let _switches = [];
 let _currentSwitchId = null;
 let _pollTimer = null;
 
+// ─── 이벤트 위임 (CSP 'self' 호환: inline onclick 금지) ──────────────
+// 동적 생성 버튼은 data-action/data-payload/data-id로 위임 처리한다.
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  var action = btn.getAttribute("data-action");
+  var payload = btn.getAttribute("data-payload");
+  var obj = payload ? JSON.parse(decodeURIComponent(payload)) : null;
+  var id = btn.getAttribute("data-id");
+  var nid = id != null ? parseInt(id, 10) : null;
+  switch (action) {
+    case "detail-switch": e.stopPropagation(); openDetailPanel(obj); break;
+    case "edit-switch": editSwitch(obj); break;
+    case "delete-switch": deleteSwitch(nid); break;
+    case "collect-fw": openFwCollect(obj); break;
+    case "detail-fw": showFirewallDetail(nid); break;
+    case "edit-fw": editFirewall(obj); break;
+    case "delete-fw": deleteFirewall(nid); break;
+  }
+});
+
 // ─── 탭 전환 ─────────────────────────────────────────────────────
 document.querySelectorAll(".tab-nav__btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -180,7 +201,7 @@ function swCardHTML(sw) {
     "</div>" +
     "<div class='sw-card__actions'>" +
     "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
-    "onclick=\"event.stopPropagation();openDetailPanel(JSON.parse(decodeURIComponent('" + swJson + "')))\">상세보기</button>" +
+    "data-action='detail-switch' data-payload='" + swJson + "'>상세보기</button>" +
     "</div>" +
     "</div>";
 }
@@ -208,9 +229,9 @@ function renderSwitchTable(switches) {
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
-      "onclick=\"editSwitch(JSON.parse(decodeURIComponent('" + encodeURIComponent(JSON.stringify(sw)) + "')))\">수정</button> " +
+      "data-action='edit-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>수정</button> " +
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
-      "onclick=\"deleteSwitch(" + sw.id + ")\">삭제</button></td></tr>";
+      "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button></td></tr>";
   }).join("");
 }
 
@@ -355,13 +376,13 @@ function renderFirewalls(firewalls) {
       "<td>" + (f.arp_count != null ? f.arp_count : "-") + "</td>" +
       "<td>" +
         "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
-        "onclick=\"openFwCollect(JSON.parse(decodeURIComponent('" + fjson + "')))\">수집</button> " +
+        "data-action='collect-fw' data-payload='" + fjson + "'>수집</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
-        "onclick=\"showFirewallDetail(" + f.id + ")\">상세</button> " +
+        "data-action='detail-fw' data-id='" + f.id + "'>상세</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
-        "onclick=\"editFirewall(JSON.parse(decodeURIComponent('" + encodeURIComponent(JSON.stringify(f)) + "')))\">수정</button> " +
+        "data-action='edit-fw' data-payload='" + encodeURIComponent(JSON.stringify(f)) + "'>수정</button> " +
         "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
-        "onclick=\"deleteFirewall(" + f.id + ")\">삭제</button>" +
+        "data-action='delete-fw' data-id='" + f.id + "'>삭제</button>" +
       "</td></tr>";
   }).join("");
 }
