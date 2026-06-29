@@ -143,7 +143,8 @@ CREATE TABLE IF NOT EXISTS firewalls (
     auth_type TEXT DEFAULT 'token',
     status TEXT DEFAULT 'new',
     last_collected TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    cred_blob TEXT
 )
 """
 
@@ -274,6 +275,11 @@ def init_schema(db_path):
                     cursor.execute(f"ALTER TABLE hosts ADD COLUMN {col} {definition}")
                 except Exception:
                     pass
+            # M11: firewalls 테이블 자격증명 blob(DPAPI 암호화) 컬럼 마이그레이션
+            try:
+                cursor.execute("ALTER TABLE firewalls ADD COLUMN cred_blob TEXT")
+            except Exception:
+                pass
             conn.commit()
             utils.log_event("info", "schema_created", tables=8)
 
@@ -848,11 +854,18 @@ def save_firewall(db_path, name, vendor, host, port=None, auth_type="token"):
             return cur.lastrowid
 
 
+def _strip_cred(d):
+    """SECURITY: 자격증명 blob은 API/UI로 절대 노출하지 않는다(get_firewall_credential 전용)."""
+    if d is not None:
+        d.pop("cred_blob", None)
+    return d
+
+
 def list_firewalls(db_path):
     with get_db(db_path) as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM firewalls ORDER BY id LIMIT 10000")
-        return [dict(r) for r in cur.fetchall()]
+        return [_strip_cred(dict(r)) for r in cur.fetchall()]
 
 
 def get_firewall(db_path, firewall_id):
@@ -860,7 +873,7 @@ def get_firewall(db_path, firewall_id):
         cur = conn.cursor()
         cur.execute("SELECT * FROM firewalls WHERE id=?", (firewall_id,))
         row = cur.fetchone()
-        return dict(row) if row else None
+        return _strip_cred(dict(row)) if row else None
 
 
 def set_firewall_status(db_path, firewall_id, status):
@@ -909,6 +922,22 @@ def get_firewall_arp(db_path, firewall_id):
         cur = conn.cursor()
         cur.execute("SELECT * FROM firewall_arp WHERE firewall_id=? ORDER BY id LIMIT 100000", (firewall_id,))
         return [dict(r) for r in cur.fetchall()]
+
+
+def save_firewall_credential(db_path, firewall_id, cred_blob):
+    """M11: 방화벽 자격증명(DPAPI 암호화 blob) 저장."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("UPDATE firewalls SET cred_blob=? WHERE id=?", (cred_blob, firewall_id))
+
+
+def get_firewall_credential(db_path, firewall_id):
+    """M11: 저장된 방화벽 자격증명 blob 반환(없으면 None)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT cred_blob FROM firewalls WHERE id=?", (firewall_id,))
+        row = cur.fetchone()
+        return row["cred_blob"] if row and row["cred_blob"] else None
 
 
 def get_ports(db_path, snapshot_id):

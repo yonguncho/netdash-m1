@@ -384,9 +384,9 @@ function openFwCollect(fw) {
 }
 
 document.getElementById("btn-add-firewall").addEventListener("click", function() {
-  document.getElementById("fw-name").value = "";
-  document.getElementById("fw-host").value = "";
-  document.getElementById("fw-port").value = "";
+  ["fw-name", "fw-host", "fw-port", "fw-add-token", "fw-add-username", "fw-add-password"].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.value = "";
+  });
   document.getElementById("fw-vendor").value = "fortigate";
   openModal("modal-add-firewall");
 });
@@ -403,12 +403,32 @@ document.getElementById("btn-fw-add-confirm").addEventListener("click", function
       vendor: document.getElementById("fw-vendor").value,
       host: host,
       port: portVal ? parseInt(portVal, 10) : null,
+      token: document.getElementById("fw-add-token").value,
+      username: document.getElementById("fw-add-username").value.trim(),
+      password: document.getElementById("fw-add-password").value,
     }),
   }).then(function(r) { return r.json().then(function(d) { return {status: r.status, d: d}; }); })
     .then(function(res) {
       if (res.status === 201) { closeModal("modal-add-firewall"); loadFirewalls(); }
       else alert(res.d.error || "추가 실패");
     }).catch(function(e) { console.error(e); alert("서버 오류"); });
+});
+
+document.getElementById("btn-fw-test").addEventListener("click", function() {
+  if (!_selectedFirewall) return;
+  document.getElementById("fw-test-result").textContent = "테스트 중...";
+  fetch("/api/firewalls/test", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      vendor: _selectedFirewall.vendor, host: _selectedFirewall.host, port: _selectedFirewall.port,
+      token: document.getElementById("fw-token").value,
+      username: document.getElementById("fw-username").value.trim(),
+      password: document.getElementById("fw-password").value,
+      verify_ssl: document.getElementById("fw-verify-ssl").checked,
+    }),
+  }).then(function(r) { return r.json(); })
+    .then(function(res) { _renderTestResult("fw-test-result", res); })
+    .catch(function(e) { console.error(e); document.getElementById("fw-test-result").textContent = "테스트 오류"; });
 });
 
 document.getElementById("btn-fw-collect").addEventListener("click", function() {
@@ -460,6 +480,30 @@ document.getElementById("btn-collect").addEventListener("click", function() {
   if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
   closeModal("modal-credential");
   collectSwitch(_selectedSwitch.id, username, password);
+});
+
+// ─── M11: 연결 테스트 (수집 전 선검증) ───────────────────────────
+function _renderTestResult(elId, res) {
+  var el = document.getElementById(elId);
+  if (!el) return;
+  el.style.color = res.ok ? "#15803d" : "#991b1b";
+  var label = res.ok ? "✓ 연결 가능" : "✗ 연결 실패";
+  // textContent 사용 → XSS 안전 (서버 detail은 sanitize되지만 이중 안전)
+  el.textContent = label + " [" + (res.stage || "") + "] " + (res.detail || "");
+}
+
+document.getElementById("btn-test-switch").addEventListener("click", function() {
+  if (!_selectedSwitch) return;
+  var username = document.getElementById("cred-username").value.trim();
+  var password = document.getElementById("cred-password").value;
+  document.getElementById("cred-test-result").textContent = "테스트 중...";
+  fetch("/api/switches/test", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ip: _selectedSwitch.ip, vendor: _selectedSwitch.vendor,
+                          username: username, password: password}),
+  }).then(function(r) { return r.json(); })
+    .then(function(res) { _renderTestResult("cred-test-result", res); })
+    .catch(function(e) { console.error(e); document.getElementById("cred-test-result").textContent = "테스트 오류"; });
 });
 
 function collectSwitch(switchId, username, password) {
@@ -644,6 +688,23 @@ function fmtTime(ts) {
   try { return new Date(ts).toLocaleString("ko-KR"); } catch(e) { return String(ts); }
 }
 
+// ─── M11: PC 이더넷 IP 표시 ──────────────────────────────────────
+function loadNetInfo() {
+  fetch("/api/netinfo")
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var el = document.getElementById("pc-ip");
+      if (!el) return;
+      var ips = d.local_ips || [];
+      var primary = d.primary_ip || (ips.length ? ips[0] : null);
+      el.textContent = primary ? ("PC IP: " + primary) : "PC IP: 확인 불가";
+      el.title = "장비 접근 PC 이더넷 IP: " + (ips.length ? ips.join(", ") : "없음") +
+        "\n(127.0.0.1 루프백으로는 장비에 접근할 수 없습니다)";
+    })
+    .catch(function(e) { console.error("netinfo:", e); });
+}
+
 // ─── 초기화 ──────────────────────────────────────────────────────
+loadNetInfo();
 pollState();
 _pollTimer = setInterval(pollState, 5000);

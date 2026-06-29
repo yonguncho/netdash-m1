@@ -13,7 +13,7 @@ from flask import Flask, jsonify, request, render_template, Response
 from pathlib import Path
 
 from config import get_config, reset_config
-from core import db, collector, correlator, credentials, report_builder
+from core import db, collector, correlator, credentials, report_builder, netinfo, connectivity
 from core import firewall as firewall_mod
 from core.demo import run_demo
 from core import flapping as flapping_mod
@@ -571,6 +571,64 @@ def create_app(demo_mode=None):
             log_event("error", "report_error", error=sanitized)
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/switches/test", methods=["POST"])
+    @rate_limit("test_switch", max_requests=20, window_seconds=60)
+    def test_switch_connection():
+        """M11: 스위치 연결 테스트 (IP+계정 입력값 기반, 저장 전 선검증)."""
+        try:
+            data = request.get_json() or {}
+            ip = (data.get("ip") or "").strip()
+            if not ip:
+                return jsonify({"error": "ip required"}), 400
+            try:
+                ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                return jsonify({"ok": False, "stage": "reachable", "detail": f"IP rejected: {e}"}), 400
+            result = connectivity.test_switch(
+                ip, data.get("vendor", ""), data.get("username", ""),
+                data.get("password", ""), int(data.get("port", 22)))
+            return jsonify(result)
+        except Exception as e:
+            log_event("error", "test_switch_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls/test", methods=["POST"])
+    @rate_limit("test_firewall", max_requests=20, window_seconds=60)
+    def test_firewall_connection():
+        """M11: 방화벽 연결 테스트 (입력값 기반, 저장 전 선검증)."""
+        try:
+            data = request.get_json() or {}
+            host = (data.get("host") or "").strip()
+            vendor = (data.get("vendor") or "").lower()
+            if not host:
+                return jsonify({"error": "host required"}), 400
+            if vendor not in firewall_mod.SUPPORTED_VENDORS:
+                return jsonify({"error": "vendor must be fortigate or paloalto"}), 400
+            try:
+                host = validate_ipv4(host, config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                return jsonify({"ok": False, "stage": "reachable", "detail": f"host rejected: {e}"}), 400
+            port = data.get("port")
+            if port not in (None, "") and not (str(port).isdigit() and 1 <= int(port) <= 65535):
+                return jsonify({"error": "port must be 1-65535"}), 400
+            result = connectivity.test_firewall(
+                vendor, host, int(port) if port else None,
+                token=data.get("token", ""), username=data.get("username", ""),
+                password=data.get("password", ""), verify_ssl=bool(data.get("verify_ssl", False)))
+            return jsonify(result)
+        except Exception as e:
+            log_event("error", "test_firewall_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/netinfo", methods=["GET"])
+    def get_netinfo():
+        """M11: PC 로컬 네트워크 정보(이더넷 IP) 조회. 장비 접근에 쓰는 IP 안내용."""
+        try:
+            return jsonify(netinfo.get_network_info())
+        except Exception as e:
+            log_event("error", "netinfo_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     # ── M10: 방화벽 (Palo Alto / Fortinet) ─────────────────────────
     @app.route("/api/firewalls", methods=["GET"])
     def list_firewalls_endpoint():
@@ -613,8 +671,18 @@ def create_app(demo_mode=None):
                     return jsonify({"error": "port must be an integer 1-65535"}), 400
             fid = db.save_firewall(db_path, name, vendor, host,
                                    port, data.get("auth_type", "token"))
+            # M11: 자격증명(토큰/계정)을 DPAPI 암호화하여 저장(입력된 경우만).
+            # 저장되면 이후 수집 시 재입력 불필요. 암호화 불가(비Windows) 시 저장 생략.
+            cred = {"token": data.get("token", ""), "username": data.get("username", ""),
+                    "password": data.get("password", "")}
+            if any(cred.values()):
+                import json as _json
+                blob = credentials.encrypt_text(_json.dumps(cred))
+                if blob:
+                    db.save_firewall_credential(db_path, fid, blob)
+                    log_event("info", "firewall_cred_saved", firewall_id=fid)
             log_event("info", "firewall_added", firewall_id=fid, vendor=vendor)
-            return jsonify({"ok": True, "firewall_id": fid}), 201
+            return jsonify({"ok": True, "firewall_id": fid, "cred_saved": bool(cred and any(cred.values()))}), 201
         except Exception as e:
             log_event("error", "firewall_add_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
@@ -658,6 +726,20 @@ def create_app(demo_mode=None):
         token = data.get("token", "")
         username = data.get("username", "")
         password = data.get("password", "")
+        # M11: 요청에 자격증명이 없으면 저장된(암호화) 자격증명을 복호화해 사용.
+        if not (token or username or password):
+            blob = db.get_firewall_credential(db_path, fid)
+            if blob:
+                dec = credentials.decrypt_text(blob)
+                if dec:
+                    import json as _json
+                    try:
+                        saved = _json.loads(dec)
+                        token = saved.get("token", "")
+                        username = saved.get("username", "")
+                        password = saved.get("password", "")
+                    except (ValueError, TypeError):
+                        pass
         db.set_firewall_status(db_path, fid, "collecting")
         try:
             result = firewall_mod.collect_firewall(

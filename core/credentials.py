@@ -136,3 +136,32 @@ def decrypt_credential(cred_blob):
         return None
 
 
+def encrypt_text(text):
+    """M11: 임의 문자열을 Windows DPAPI로 암호화 → base64 blob.
+
+    방화벽 자격증명(토큰/계정 JSON)을 DB에 평문 없이 저장하기 위한 범용 함수.
+    비Windows 또는 실패 시 None(호출부는 저장 생략 + 수집 시 입력 요구로 graceful).
+    """
+    if not IS_WINDOWS or text is None:
+        return None
+    try:
+        enc = win32crypt.CryptProtectData(text.encode("utf-8"), None, None, None, None, 0x01)
+        return base64.b64encode(enc).decode("ascii")
+    except Exception as e:
+        logger.error(f"[DPAPI] encrypt_text error: {e}")
+        return None
+
+
+def decrypt_text(blob):
+    """M11: encrypt_text로 암호화된 blob을 평문으로 복호화. 실패 시 None."""
+    if not IS_WINDOWS or not blob:
+        return None
+    try:
+        enc = base64.b64decode(blob)
+        dec = win32crypt.CryptUnprotectData(enc, None, None, None, 0)
+        return dec[0].decode("utf-8")
+    except Exception as e:
+        logger.error(f"[DPAPI] decrypt_text error: {e}")
+        return None
+
+
