@@ -26,11 +26,12 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.4.0",
+    "latest": "v3.4.1",
     "date": "2026-06-29",
-    "scope": "M12 출발지 IP 바인딩(장비 ACL 통과) — 접근 IP 선택",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.4.0",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.4.0/netdash.exe",
+    "scope": "핫픽스: netmiko 번들 누락 수정(빌드환경 미설치 → collect_all 빈결과)",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.4.1",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.4.1/netdash.exe",
+    "build_env_rule": "빌드 PC에 netmiko 실설치 필수! pytest는 netmiko를 monkeypatch해 미설치여도 통과하지만, PyInstaller collect_all('netmiko')은 미설치 시 빈 결과→exe에 netmiko 누락→런타임 'No module named netmiko'. 빌드 전 `python -c \"import netmiko\"` 확인. requirements.txt에 있어도 실제 pip install 됐는지 별개.",
     "recent": [
       "v3.3.1 스위치 등록 DB오류+삭제기능", "v3.3.2 방화벽 삭제 수정",
       "v3.4.0 M12 출발지 IP 바인딩"
