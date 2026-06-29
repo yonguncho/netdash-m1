@@ -18,7 +18,9 @@
       <button id="ip-search-btn">검색</button>
     </div>
     <div class="header__right">
-      <span id="pc-ip" class="header__ts" title="장비 접근에 사용하는 PC 이더넷 IP"></span>
+      <label class="header__ts" title="장비 접근(SSH/REST)의 출발지로 사용할 PC 이더넷 IP. 장비 ACL에 맞춰 선택하세요.">접근 IP:
+        <select id="source-ip-select" style="font-size:11px"></select>
+      </label>
       <span id="last-updated" class="header__ts"></span>
     </div>
   </header>

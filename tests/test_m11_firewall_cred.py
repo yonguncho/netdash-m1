@@ -43,7 +43,7 @@ def test_collect_uses_saved_cred(client, monkeypatch):
     monkeypatch.setattr(credentials, "decrypt_text",
                         lambda blob: blob[4:] if blob and blob.startswith("ENC:") else None)
     captured = {}
-    def fake_collect(vendor, host, port=None, token="", username="", password="", verify_ssl=False):
+    def fake_collect(vendor, host, port=None, token="", username="", password="", verify_ssl=False, source_ip=None):
         captured.update({"token": token, "username": username, "password": password})
         return {"interfaces": [], "arp": []}
     monkeypatch.setattr(fw_mod, "collect_firewall", fake_collect)

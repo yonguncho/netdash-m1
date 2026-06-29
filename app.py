@@ -586,7 +586,8 @@ def create_app(demo_mode=None):
                 return jsonify({"ok": False, "stage": "reachable", "detail": f"IP rejected: {e}"}), 400
             result = connectivity.test_switch(
                 ip, data.get("vendor", ""), data.get("username", ""),
-                data.get("password", ""), int(data.get("port", 22)))
+                data.get("password", ""), int(data.get("port", 22)),
+                source_ip=db.get_setting(db_path, "source_ip") or None)
             return jsonify(result)
         except Exception as e:
             log_event("error", "test_switch_error", error=collector._sanitize_error_msg(str(e)))
@@ -614,7 +615,8 @@ def create_app(demo_mode=None):
             result = connectivity.test_firewall(
                 vendor, host, int(port) if port else None,
                 token=data.get("token", ""), username=data.get("username", ""),
-                password=data.get("password", ""), verify_ssl=bool(data.get("verify_ssl", False)))
+                password=data.get("password", ""), verify_ssl=bool(data.get("verify_ssl", False)),
+                source_ip=db.get_setting(db_path, "source_ip") or None)
             return jsonify(result)
         except Exception as e:
             log_event("error", "test_firewall_error", error=collector._sanitize_error_msg(str(e)))
@@ -652,9 +654,27 @@ def create_app(demo_mode=None):
     def get_netinfo():
         """M11: PC 로컬 네트워크 정보(이더넷 IP) 조회. 장비 접근에 쓰는 IP 안내용."""
         try:
-            return jsonify(netinfo.get_network_info())
+            info = netinfo.get_network_info()
+            info["source_ip"] = db.get_setting(db_path, "source_ip", "") or ""
+            return jsonify(info)
         except Exception as e:
             log_event("error", "netinfo_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/settings/source_ip", methods=["POST"])
+    @rate_limit("set_source_ip", max_requests=20, window_seconds=60)
+    def set_source_ip():
+        """M12: 장비 접근에 사용할 출발지 IP 설정(빈값=자동/OS 기본). PC 이더넷 IP만 허용."""
+        try:
+            data = request.get_json() or {}
+            ip = (data.get("ip") or "").strip()
+            if ip and ip not in netinfo.get_local_ipv4_addresses():
+                return jsonify({"error": "선택한 IP가 이 PC의 이더넷 IP 목록에 없습니다"}), 400
+            db.set_setting(db_path, "source_ip", ip)
+            log_event("info", "source_ip_set", source_ip=ip or "(auto)")
+            return jsonify({"ok": True, "source_ip": ip})
+        except Exception as e:
+            log_event("error", "set_source_ip_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     # ── M10: 방화벽 (Palo Alto / Fortinet) ─────────────────────────
@@ -774,6 +794,7 @@ def create_app(demo_mode=None):
                 fw["vendor"], fw["host"], fw.get("port"),
                 token=token, username=username, password=password,
                 verify_ssl=bool(data.get("verify_ssl", False)),
+                source_ip=db.get_setting(db_path, "source_ip") or None,
             )
             db.save_firewall_interfaces(db_path, fid, result["interfaces"])
             db.save_firewall_arp(db_path, fid, result["arp"])

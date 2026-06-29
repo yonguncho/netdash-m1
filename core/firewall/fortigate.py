@@ -14,12 +14,11 @@ import re
 logger = logging.getLogger(__name__)
 
 
-def _make_session(host, port, token, username, password, verify_ssl):
-    """인증 완료된 requests.Session 반환. (session, base_url)"""
-    import requests
+def _make_session(host, port, token, username, password, verify_ssl, source_ip=None):
+    """인증 완료된 requests.Session 반환. (session, base_url). source_ip로 출발지 바인딩."""
+    from .. import netbind
     base = f"https://{host}:{port}"
-    s = requests.Session()
-    s.verify = verify_ssl
+    s = netbind.requests_session(source_ip, verify=verify_ssl)
 
     if not verify_ssl:
         # 자체서명 인증서 환경 허용. 단 무검증 수집은 audit를 위해 경고로 남긴다.
@@ -44,12 +43,12 @@ def _make_session(host, port, token, username, password, verify_ssl):
     return s, base
 
 
-def get_arp_table(host, port=443, token="", username="", password="", verify_ssl=False):
+def get_arp_table(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
     """FortiGate 전체 ARP 테이블 수집.
 
     Returns: [{"ip", "mac", "interface"}, ...]
     """
-    s, base = _make_session(host, port, token, username, password, verify_ssl)
+    s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
     r = s.get(f"{base}/api/v2/monitor/router/arp", timeout=15)
     r.raise_for_status()
 
@@ -64,12 +63,12 @@ def get_arp_table(host, port=443, token="", username="", password="", verify_ssl
     return entries
 
 
-def get_interfaces(host, port=443, token="", username="", password="", verify_ssl=False):
+def get_interfaces(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
     """FortiGate 인터페이스 목록 및 IP 대역 수집.
 
     Returns: [{"name", "ip", "mask", "vdom_zone", "type"}, ...]
     """
-    s, base = _make_session(host, port, token, username, password, verify_ssl)
+    s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
     r = s.get(f"{base}/api/v2/cmdb/system/interface", timeout=15)
     r.raise_for_status()
 

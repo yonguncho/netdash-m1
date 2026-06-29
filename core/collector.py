@@ -158,7 +158,9 @@ def _worker_loop():
                     raise ValueError(f"No credentials available for switch {switch_id}")
                 username = cred.get("username")
                 password = cred.get("password")
-                outputs = _ssh_collect(switch, username, password, vendor)
+                # M12: 설정된 출발지 IP로 바인딩(장비 ACL 통과). 미설정이면 OS 기본 라우팅.
+                source_ip = db.get_setting(db_path, "source_ip") or None
+                outputs = _ssh_collect(switch, username, password, vendor, source_ip=source_ip)
 
             raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
             utils.log_event("info", "raw_outputs_saved", path=str(raw_outputs_path))
@@ -208,7 +210,7 @@ def _worker_loop():
                 pass
 
 
-def _ssh_collect(switch, username, password, vendor, max_retries=3):
+def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=None):
     """Collect outputs from network device via SSH with exponential backoff retry logic.
 
     Args:
@@ -217,6 +219,7 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3):
         password: SSH password
         vendor: Device vendor/type
         max_retries: Max retry attempts (default: 3) - handles transient network failures
+        source_ip: M12 — bind outbound SSH to this local IP (pass device ACL). None = OS default.
 
     Returns:
         dict: Command outputs keyed by command name
@@ -232,13 +235,14 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3):
 
     config = get_config()
     commands = config.get_commands(vendor)
+    ssh_timeout = config.collector.get("ssh_timeout", 30)
 
     device = {
         "device_type": vendor,
         "ip": switch["ip"],
         "username": username,
         "password": password,
-        "conn_timeout": config.collector.get("ssh_timeout", 30),
+        "conn_timeout": ssh_timeout,
         "read_timeout": config.collector.get("read_timeout", 60),
         "fast_cli": False
     }
@@ -250,7 +254,12 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3):
 
         try:
             outputs = {}
-            with ConnectHandler(**device) as conn:
+            conn_device = dict(device)
+            if source_ip:
+                # M12: 출발지 IP 바인딩한 소켓을 netmiko에 전달(재연결마다 새 소켓)
+                from . import netbind
+                conn_device["sock"] = netbind.bind_socket(switch["ip"], 22, source_ip, ssh_timeout)
+            with ConnectHandler(**conn_device) as conn:
                 conn.send_command("terminal length 0")
                 for key, command in commands.items():
                     output = conn.send_command(command)

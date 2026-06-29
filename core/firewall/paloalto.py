@@ -66,8 +66,8 @@ def parse_interfaces(output):
     return ifaces
 
 
-def collect(host, username, password, port=22, timeout=30):
-    """netmiko SSH로 PAN-OS 방화벽 인터페이스/ARP 수집.
+def collect(host, username, password, port=22, timeout=30, source_ip=None):
+    """netmiko SSH로 PAN-OS 방화벽 인터페이스/ARP 수집 (source_ip로 출발지 바인딩).
 
     Returns: {"interfaces": [...], "arp": [...]}
     """
@@ -77,6 +77,9 @@ def collect(host, username, password, port=22, timeout=30):
         "ip": host, "username": username, "password": password,
         "port": port, "conn_timeout": timeout, "fast_cli": False,
     }
+    if source_ip:
+        from .. import netbind
+        device["sock"] = netbind.bind_socket(host, port, source_ip, timeout)
     with ConnectHandler(**device) as conn:
         arp_out = conn.send_command("show arp all")
         if_out = conn.send_command("show interface all")

@@ -171,6 +171,14 @@ CREATE TABLE IF NOT EXISTS firewall_arp (
 )
 """
 
+# M12: 앱 전역 설정(key-value) — source_ip 등
+CREATE_APP_SETTINGS_TABLE = """
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+"""
+
 
 # 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
 _acl_applied = set()
@@ -253,6 +261,7 @@ def init_schema(db_path):
                 CREATE_FIREWALLS_TABLE,
                 CREATE_FIREWALL_INTERFACES_TABLE,
                 CREATE_FIREWALL_ARP_TABLE,
+                CREATE_APP_SETTINGS_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -994,6 +1003,31 @@ def get_firewall_credential(db_path, firewall_id):
         cur.execute("SELECT cred_blob FROM firewalls WHERE id=?", (firewall_id,))
         row = cur.fetchone()
         return row["cred_blob"] if row and row["cred_blob"] else None
+
+
+# ── M12: 앱 전역 설정 (key-value) ──────────────────────────────────
+def set_setting(db_path, key, value):
+    """앱 설정 저장(upsert). value=None/''이면 빈 문자열 저장."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            # ON CONFLICT 비의존 수동 upsert (구버전 DB 호환 정책)
+            cur.execute("SELECT key FROM app_settings WHERE key=?", (key,))
+            if cur.fetchone():
+                cur.execute("UPDATE app_settings SET value=? WHERE key=?", (value or "", key))
+            else:
+                cur.execute("INSERT INTO app_settings (key, value) VALUES (?, ?)", (key, value or ""))
+
+
+def get_setting(db_path, key, default=None):
+    """앱 설정 조회(없으면 default)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM app_settings WHERE key=?", (key,))
+        row = cur.fetchone()
+        if row is None:
+            return default
+        return row["value"]
 
 
 def get_ports(db_path, snapshot_id):

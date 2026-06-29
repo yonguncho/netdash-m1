@@ -22,21 +22,22 @@ _NETMIKO_TYPE = {
 }
 
 
-def test_tcp(host, port, timeout=3):
-    """TCP 포트 reachability."""
+def test_tcp(host, port, timeout=3, source_ip=None):
+    """TCP 포트 reachability (source_ip 지정 시 그 출발지로 바인딩)."""
     try:
-        with socket.create_connection((host, int(port)), timeout=timeout):
+        src = (source_ip, 0) if source_ip else None
+        with socket.create_connection((host, int(port)), timeout=timeout, source_address=src):
             return True
     except (OSError, ValueError):
         return False
 
 
-def test_switch(ip, vendor, username, password, port=22, timeout=8):
-    """스위치 연결 테스트: TCP(22) → netmiko 인증.
+def test_switch(ip, vendor, username, password, port=22, timeout=8, source_ip=None):
+    """스위치 연결 테스트: TCP(22) → netmiko 인증. source_ip로 출발지 바인딩.
 
     Returns: {"ok": bool, "stage": "reachable"|"auth", "detail": str}
     """
-    if not test_tcp(ip, port, 3):
+    if not test_tcp(ip, port, 3, source_ip):
         return {"ok": False, "stage": "reachable", "detail": f"TCP {port} 포트에 연결할 수 없습니다"}
     if not (username and password):
         # 포트는 열렸으나 인증 정보 없음 → reachable까지만 확인
@@ -44,8 +45,11 @@ def test_switch(ip, vendor, username, password, port=22, timeout=8):
     device_type = _NETMIKO_TYPE.get((vendor or "").lower(), vendor or "cisco_ios")
     try:
         from netmiko import ConnectHandler
+        from . import netbind
         device = {"device_type": device_type, "ip": ip, "username": username,
                   "password": password, "port": port, "conn_timeout": timeout, "fast_cli": False}
+        if source_ip:
+            device["sock"] = netbind.bind_socket(ip, port, source_ip, timeout)
         with ConnectHandler(**device):
             pass
         return {"ok": True, "stage": "auth", "detail": "연결 및 인증 성공"}
@@ -53,8 +57,9 @@ def test_switch(ip, vendor, username, password, port=22, timeout=8):
         return {"ok": False, "stage": "auth", "detail": collector._sanitize_error_msg(str(e))}
 
 
-def test_firewall(vendor, host, port=None, token="", username="", password="", verify_ssl=False):
-    """방화벽 연결 테스트.
+def test_firewall(vendor, host, port=None, token="", username="", password="",
+                  verify_ssl=False, source_ip=None):
+    """방화벽 연결 테스트 (source_ip로 출발지 바인딩).
 
     FortiGate: TCP(port/443) → REST 인증 호출. Palo Alto: TCP(port/22) → netmiko 인증.
     Returns: {"ok": bool, "stage": "reachable"|"auth", "detail": str}
@@ -62,27 +67,29 @@ def test_firewall(vendor, host, port=None, token="", username="", password="", v
     vendor = (vendor or "").lower()
     if vendor == "fortigate":
         p = int(port) if port else 443
-        if not test_tcp(host, p, 3):
+        if not test_tcp(host, p, 3, source_ip):
             return {"ok": False, "stage": "reachable", "detail": f"TCP {p} 포트에 연결할 수 없습니다"}
         if not (token or (username and password)):
             return {"ok": True, "stage": "reachable", "detail": f"TCP {p} 연결 가능 (인증 미검증)"}
         try:
             from .firewall import fortigate
-            # 가벼운 인증 호출(인터페이스 조회)로 자격증명 검증
-            fortigate.get_interfaces(host, p, token, username, password, verify_ssl)
+            fortigate.get_interfaces(host, p, token, username, password, verify_ssl, source_ip=source_ip)
             return {"ok": True, "stage": "auth", "detail": "연결 및 인증 성공"}
         except Exception as e:
             return {"ok": False, "stage": "auth", "detail": collector._sanitize_error_msg(str(e))}
     if vendor == "paloalto":
         p = int(port) if port else 22
-        if not test_tcp(host, p, 3):
+        if not test_tcp(host, p, 3, source_ip):
             return {"ok": False, "stage": "reachable", "detail": f"TCP {p} 포트에 연결할 수 없습니다"}
         if not (username and password):
             return {"ok": True, "stage": "reachable", "detail": f"TCP {p} 연결 가능 (인증 미검증)"}
         try:
             from netmiko import ConnectHandler
+            from . import netbind
             device = {"device_type": "paloalto_panos", "ip": host, "username": username,
                       "password": password, "port": p, "conn_timeout": 8, "fast_cli": False}
+            if source_ip:
+                device["sock"] = netbind.bind_socket(host, p, source_ip, 8)
             with ConnectHandler(**device):
                 pass
             return {"ok": True, "stage": "auth", "detail": "연결 및 인증 성공"}

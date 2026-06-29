@@ -43,9 +43,10 @@ def test_api_netinfo_endpoint(client):
     assert "primary_ip" in data
 
 
-def test_index_has_pc_ip_element(client):
+def test_index_has_source_ip_select(client):
+    # M12: PC IP 표시가 출발지 선택 드롭다운으로 대체됨
     body = client.get("/").data.decode("utf-8")
-    assert 'id="pc-ip"' in body
+    assert 'id="source-ip-select"' in body
 
 
 def test_appjs_loadnetinfo():

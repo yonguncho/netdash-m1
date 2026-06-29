@@ -26,6 +26,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "hosts", "events", "port_events",
         # M10: 방화벽
         "firewalls", "firewall_interfaces", "firewall_arp",
+        # M12: 앱 설정
+        "app_settings",
     }
     assert expected == tables
 

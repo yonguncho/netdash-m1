@@ -716,16 +716,32 @@ function loadNetInfo() {
   fetch("/api/netinfo")
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      var el = document.getElementById("pc-ip");
-      if (!el) return;
       var ips = d.local_ips || [];
-      var primary = d.primary_ip || (ips.length ? ips[0] : null);
-      el.textContent = primary ? ("PC IP: " + primary) : "PC IP: 확인 불가";
-      el.title = "장비 접근 PC 이더넷 IP: " + (ips.length ? ips.join(", ") : "없음") +
-        "\n(127.0.0.1 루프백으로는 장비에 접근할 수 없습니다)";
+      var cur = d.source_ip || "";
+      var sel = document.getElementById("source-ip-select");
+      if (sel) {
+        sel.innerHTML = "<option value=''>자동(기본 라우팅)</option>" +
+          ips.map(function(ip) {
+            return "<option value='" + escHtml(ip) + "'" + (ip === cur ? " selected" : "") + ">" + escHtml(ip) + "</option>";
+          }).join("");
+        sel.title = "장비 접근 출발지 IP. 127.0.0.1(루프백)로는 장비에 접근할 수 없습니다.";
+      }
     })
     .catch(function(e) { console.error("netinfo:", e); });
 }
+
+(function () {
+  var sel = document.getElementById("source-ip-select");
+  if (!sel) return;
+  sel.addEventListener("change", function () {
+    fetch("/api/settings/source_ip", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ip: this.value}),
+    }).then(function(r) { return r.json(); })
+      .then(function(res) { if (res.error) alert(res.error); })
+      .catch(function(e) { console.error(e); });
+  });
+})();
 
 // ─── 초기화 ──────────────────────────────────────────────────────
 loadNetInfo();
