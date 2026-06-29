@@ -132,6 +132,44 @@ CREATE TABLE IF NOT EXISTS events (
 )
 """
 
+# M10: 방화벽 (Palo Alto / Fortinet)
+CREATE_FIREWALLS_TABLE = """
+CREATE TABLE IF NOT EXISTS firewalls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    vendor TEXT NOT NULL,
+    host TEXT NOT NULL UNIQUE,
+    port INTEGER,
+    auth_type TEXT DEFAULT 'token',
+    status TEXT DEFAULT 'new',
+    last_collected TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_FIREWALL_INTERFACES_TABLE = """
+CREATE TABLE IF NOT EXISTS firewall_interfaces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    firewall_id INTEGER NOT NULL,
+    name TEXT,
+    ip TEXT,
+    mask TEXT,
+    vdom_zone TEXT,
+    FOREIGN KEY (firewall_id) REFERENCES firewalls(id)
+)
+"""
+
+CREATE_FIREWALL_ARP_TABLE = """
+CREATE TABLE IF NOT EXISTS firewall_arp (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    firewall_id INTEGER NOT NULL,
+    ip TEXT,
+    mac TEXT,
+    interface TEXT,
+    FOREIGN KEY (firewall_id) REFERENCES firewalls(id)
+)
+"""
+
 
 # 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
 _acl_applied = set()
@@ -211,6 +249,9 @@ def init_schema(db_path):
                 CREATE_HOSTS_TABLE,
                 CREATE_EVENTS_TABLE,
                 CREATE_PORT_EVENTS_TABLE,
+                CREATE_FIREWALLS_TABLE,
+                CREATE_FIREWALL_INTERFACES_TABLE,
+                CREATE_FIREWALL_ARP_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -765,6 +806,87 @@ def get_switches(db_path):
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM switches ORDER BY id LIMIT 100000")
         return [dict(row) for row in cursor.fetchall()]
+
+
+# ── M10: 방화벽 (Palo Alto / Fortinet) ────────────────────────────
+def save_firewall(db_path, name, vendor, host, port=None, auth_type="token"):
+    """방화벽 장비 등록 (host 기준 upsert). 반환: firewall id."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO firewalls (name, vendor, host, port, auth_type)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(host) DO UPDATE SET
+                     name=excluded.name, vendor=excluded.vendor,
+                     port=excluded.port, auth_type=excluded.auth_type""",
+                (name, vendor, host, port, auth_type),
+            )
+            cur.execute("SELECT id FROM firewalls WHERE host=?", (host,))
+            return cur.fetchone()[0]
+
+
+def list_firewalls(db_path):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM firewalls ORDER BY id LIMIT 10000")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_firewall(db_path, firewall_id):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM firewalls WHERE id=?", (firewall_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def set_firewall_status(db_path, firewall_id, status):
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute(
+                "UPDATE firewalls SET status=?, last_collected=datetime('now') WHERE id=?",
+                (status, firewall_id),
+            )
+
+
+def save_firewall_interfaces(db_path, firewall_id, interfaces):
+    """방화벽 인터페이스 교체 저장 (firewall_id 기준 전체 갱신)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("DELETE FROM firewall_interfaces WHERE firewall_id=?", (firewall_id,))
+            for it in interfaces:
+                conn.execute(
+                    "INSERT INTO firewall_interfaces (firewall_id, name, ip, mask, vdom_zone) VALUES (?,?,?,?,?)",
+                    (firewall_id, it.get("name"), it.get("ip"), it.get("mask"),
+                     it.get("vdom_zone") or it.get("vdom") or it.get("zone")),
+                )
+
+
+def save_firewall_arp(db_path, firewall_id, arp_entries):
+    """방화벽 ARP 교체 저장 (firewall_id 기준 전체 갱신)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("DELETE FROM firewall_arp WHERE firewall_id=?", (firewall_id,))
+            for a in arp_entries:
+                conn.execute(
+                    "INSERT INTO firewall_arp (firewall_id, ip, mac, interface) VALUES (?,?,?,?)",
+                    (firewall_id, a.get("ip"), a.get("mac"), a.get("interface")),
+                )
+
+
+def get_firewall_interfaces(db_path, firewall_id):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM firewall_interfaces WHERE firewall_id=? ORDER BY id", (firewall_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_firewall_arp(db_path, firewall_id):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM firewall_arp WHERE firewall_id=? ORDER BY id LIMIT 100000", (firewall_id,))
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_ports(db_path, snapshot_id):
