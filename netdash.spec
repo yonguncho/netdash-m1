@@ -1,19 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_all
 
 hiddenimports = []
 hiddenimports += collect_submodules('flask')
 hiddenimports += collect_submodules('werkzeug')
-# M10: 방화벽 클라이언트가 함수 내부에서 lazy import하므로 명시 (FortiGate REST/SSH).
-hiddenimports += ['requests', 'paramiko']
-hiddenimports += collect_submodules('netmiko')
+hiddenimports += ['requests']
+
+datas = [('web', 'web'), ('config.yaml', '.'), ('fixtures', 'fixtures')]
+binaries = []
+
+# 스위치/방화벽 SSH·REST가 함수 내부에서 lazy import → 전체 수집 필요.
+# netmiko는 서브모듈 + ntc-templates 데이터 파일까지 있어야 동작(collect_all).
+for _pkg in ('netmiko', 'paramiko'):
+    _d, _b, _h = collect_all(_pkg)
+    datas += _d
+    binaries += _b
+    hiddenimports += _h
 
 
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
-    datas=[('web', 'web'), ('config.yaml', '.'), ('fixtures', 'fixtures')],
+    binaries=binaries,
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

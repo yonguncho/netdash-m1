@@ -1,5 +1,13 @@
 # NetDash 릴리스 노트
 
+## v3.4.1 (2026-06-29) — 핫픽스 (netmiko 번들 누락)
+
+- 증상: 스위치 연결 테스트/수집 시 `No module named 'netmiko'`.
+- 원인: SSH 라이브러리(netmiko)가 함수 내부 lazy import라 PyInstaller가 일부만 번들,
+  데이터 파일(ntc-templates)·동적 모듈이 누락됨.
+- 수정: 빌드 설정에서 `collect_all`로 netmiko/paramiko **전체(모듈+데이터+바이너리)**를
+  번들 → 스위치/Palo Alto SSH 및 연결 테스트가 정상 동작.
+
 ## v3.4.0 (2026-06-29) — M12 출발지 IP 바인딩 (장비 ACL 통과)
 
 **장비 접근 출발지(source) IP 선택**
