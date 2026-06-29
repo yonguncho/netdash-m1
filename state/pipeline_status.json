@@ -1,14 +1,36 @@
 {
-  "stage": "m9_complete",
-  "status": "ready_for_commit",
-  "timestamp": "2026-06-28T00:00:00Z",
-  "milestone": "M9",
-  "release": {
-    "latest": "v3.1.4",
+  "stage": "m10_complete",
+  "status": "released",
+  "timestamp": "2026-06-29T00:00:00Z",
+  "milestone": "M10",
+  "m10_firewall": {
     "date": "2026-06-29",
-    "scope": "console=True 투명 실행 + 로컬 인증 면제(unauthorized 수정) + Juniper 제거",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.1.4",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.1.4/netdash.exe",
+    "status": "✅ COMPLETE + RELEASED (v3.2.0)",
+    "design_doc": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m10-firewall.md",
+    "scope": "방화벽 현황 — Palo Alto(PAN-OS SSH) + Fortinet(FortiGate REST/SSH). 인터페이스+ARP 수집·표시",
+    "changes": {
+      "core/firewall/": "fortigate.py(REST/SSH), paloalto.py(netmiko CLI), __init__.py(디스패치)",
+      "core/db.py": "firewalls/firewall_interfaces/firewall_arp 테이블 + CRUD",
+      "app.py": "방화벽 API 4종 + SSRF 하드닝(host 등록·수집 재검증, port 정수 강제)",
+      "web": "방화벽 탭 + 추가/수집 모달 + 인터페이스/ARP 상세",
+      "netdash.spec": "requests/paramiko/netmiko hiddenimports",
+      "tests": "test_m10_firewall(13)+api(11)+ui(6) = 30개"
+    },
+    "tests": {"total": 146, "passed": 146, "regression": 0},
+    "code_review": {
+      "reviewer": "Claude Opus 4.8",
+      "rounds": 2,
+      "round1": "FAIL critical 2 (SSRF: port 미검증, collect host 미재검증)",
+      "round2": "✅ PASS — C1/C2 resolved, 잔여 0"
+    }
+  },
+  "m9_milestone": "M9",
+  "release": {
+    "latest": "v3.2.0",
+    "date": "2026-06-29",
+    "scope": "M10 방화벽 현황(Palo Alto / Fortinet) 추가",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.2.0",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.2.0/netdash.exe",
     "asset": "netdash.exe (29MB)",
     "repo_visibility": "PUBLIC (외부 다운로드 가능, 익명 200 검증)",
     "history": [
@@ -17,9 +39,9 @@
       "v3.1.1 — 핫픽스: 토큰 미설정 production 크래시 수정(loopback 자동 토큰)",
       "v3.1.2 — 핫픽스: 브라우저 자동오픈 + icacls 콘솔 깜빡 제거",
       "v3.1.3 — console=True 전환(백도어 패턴 회피, 미릴리스/v3.1.4에 통합)",
-      "v3.1.4 — console=True + 로컬 인증 면제(unauthorized 수정) + Juniper 제거"
+      "v3.1.4 — console=True + 로컬 인증 면제(unauthorized 수정) + Juniper 제거",
+      "v3.2.0 — M10 방화벽 현황(Palo Alto / Fortinet)"
     ],
-    "next": "M10 방화벽 현황 기능 구현 (프로덕션 v2.9.9 방화벽 인터페이스 뷰 이식) — 사용자 요청",
     "known_issue": "onefile exe 첫 /api/report 요청은 openpyxl 초기 로드로 ~15s 지연(이후 빠름, 기능 정상). 성능 개선은 추후."
   },
   "m9_report_builder": {
