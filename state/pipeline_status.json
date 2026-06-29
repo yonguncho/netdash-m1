@@ -26,11 +26,13 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.5.0",
+    "latest": "v3.5.1",
     "date": "2026-06-29",
-    "scope": "수집 벤더 정규화(unsupported device_type 수정) + 스위치/방화벽 수정 기능",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.5.0",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.5.0/netdash.exe",
+    "scope": "수집 read_timeout 오류(send_command 이동) + CSP inline onclick→이벤트 위임(버튼 무반응)",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.5.1",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.5.1/netdash.exe",
+    "csp_rule": "CSP default-src 'self'는 inline onclick 차단. 동적 버튼은 data-action/data-payload + document 이벤트 위임 필수. test_appjs_no_inline_onclick로 가드.",
+    "netmiko_rule": "read_timeout은 send_command() 인자. ConnectHandler 생성자엔 conn_timeout만(read_timeout 넣으면 unexpected keyword argument 오류).",
     "build_env_rule": "빌드 PC에 netmiko 실설치 필수! pytest는 netmiko를 monkeypatch해 미설치여도 통과하지만, PyInstaller collect_all('netmiko')은 미설치 시 빈 결과→exe에 netmiko 누락→런타임 'No module named netmiko'. 빌드 전 `python -c \"import netmiko\"` 확인. requirements.txt에 있어도 실제 pip install 됐는지 별개.",
     "recent": [
       "v3.3.1 스위치 등록 DB오류+삭제기능", "v3.3.2 방화벽 삭제 수정",
