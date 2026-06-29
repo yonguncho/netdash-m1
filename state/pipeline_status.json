@@ -26,12 +26,13 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.5.1",
+    "latest": "v3.5.2",
     "date": "2026-06-29",
-    "scope": "수집 read_timeout 오류(send_command 이동) + CSP inline onclick→이벤트 위임(버튼 무반응)",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.5.1",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.5.1/netdash.exe",
-    "csp_rule": "CSP default-src 'self'는 inline onclick 차단. 동적 버튼은 data-action/data-payload + document 이벤트 위임 필수. test_appjs_no_inline_onclick로 가드.",
+    "scope": "버그검증(Opus 2종 critical 0) 후속: CSP inline style 허용 + 수정 중복 409 + EXOS 페이징",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.5.2",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.5.2/netdash.exe",
+    "remaining_cosmetic": "renderFirewalls interface_count/arp_count는 list_firewalls SELECT *에 없어 항상 '-'(수집 개수 미표시). cosmetic, 추후 서브쿼리 조인.",
+    "csp_rule": "CSP: script-src 'self'(inline onclick 차단→이벤트위임 필수, test_appjs_no_inline_onclick 가드) + style-src 'self' 'unsafe-inline'(inline style 허용, v3.5.2). 동적 버튼은 data-action/data-payload.",
     "netmiko_rule": "read_timeout은 send_command() 인자. ConnectHandler 생성자엔 conn_timeout만(read_timeout 넣으면 unexpected keyword argument 오류).",
     "build_env_rule": "빌드 PC에 netmiko 실설치 필수! pytest는 netmiko를 monkeypatch해 미설치여도 통과하지만, PyInstaller collect_all('netmiko')은 미설치 시 빈 결과→exe에 netmiko 누락→런타임 'No module named netmiko'. 빌드 전 `python -c \"import netmiko\"` 확인. requirements.txt에 있어도 실제 pip install 됐는지 별개.",
     "recent": [
