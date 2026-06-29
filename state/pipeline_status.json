@@ -26,11 +26,11 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.2.1",
+    "latest": "v3.2.2",
     "date": "2026-06-29",
-    "scope": "핫픽스: 스위치 수동 추가 ON CONFLICT 오류(구버전 DB) 수정",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.2.1",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.2.1/netdash.exe",
+    "scope": "핫픽스: ON CONFLICT 전면 제거(switches/hosts/ledger/firewall 수동 UPSERT)",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.2.2",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.2.2/netdash.exe",
     "asset": "netdash.exe (29MB)",
     "repo_visibility": "PUBLIC (외부 다운로드 가능, 익명 200 검증)",
     "history": [
@@ -41,9 +41,16 @@
       "v3.1.3 — console=True 전환(백도어 패턴 회피, 미릴리스/v3.1.4에 통합)",
       "v3.1.4 — console=True + 로컬 인증 면제(unauthorized 수정) + Juniper 제거",
       "v3.2.0 — M10 방화벽 현황(Palo Alto / Fortinet)",
-      "v3.2.1 — 핫픽스: 수동 추가 ON CONFLICT 오류(구버전 DB) 수정"
+      "v3.2.1 — 핫픽스: 수동 추가 ON CONFLICT 오류(구버전 DB) 수정",
+      "v3.2.2 — 핫픽스: ON CONFLICT 전면 제거(hosts/ledger/firewall 포함)"
     ],
-    "known_pattern_risk": "ON CONFLICT(col)은 구버전 DB에 해당 UNIQUE 제약이 없으면 깨짐. switches.name은 수동 UPSERT로 수정. save_hosts/save_ledger_hosts의 ON CONFLICT(ip), save_firewall의 ON CONFLICT(host)도 동일 패턴 — 엑셀 업로드 등에서 동일 증상 시 같은 방식으로 수정 필요.",
+    "on_conflict_resolved": "db.py의 모든 ON CONFLICT를 수동 UPSERT로 전환 완료. 신규 INSERT 시 ON CONFLICT 사용 금지(구버전 DB 호환).",
+    "next_milestone": "M11 — 장비 연결성/등록 개선 (사용자 요청)",
+    "m11_plan": {
+      "f1_연결테스트": "스위치(netmiko)+방화벽(REST/SSH) IP+계정 입력 시 접근 가능 여부 선검증 엔드포인트",
+      "f2_방화벽_API_Key저장": "firewalls에 cred_blob(DPAPI 암호화) + 추가 모달 API Key 필드 + collect 시 저장 키 사용 + 연동상태 표시",
+      "f3_PC이더넷IP": "PC NIC IP 목록 조회·UI 표시/선택 (#3 = 정보 표시/선택으로 확정). 127.0.0.1이 아닌 실제 이더넷 IP 안내"
+    },
     "known_issue": "onefile exe 첫 /api/report 요청은 openpyxl 초기 로드로 ~15s 지연(이후 빠름, 기능 정상). 성능 개선은 추후."
   },
   "m9_report_builder": {
