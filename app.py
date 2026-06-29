@@ -8,11 +8,11 @@ import tempfile
 import ipaddress
 import time
 from functools import wraps
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response
 from pathlib import Path
 
 from config import get_config, reset_config
-from core import db, collector, correlator, credentials
+from core import db, collector, correlator, credentials, report_builder
 from core.demo import run_demo
 from core import flapping as flapping_mod
 from core.utils import log_event
@@ -545,6 +545,21 @@ def create_app(demo_mode=None):
         except Exception as e:
             sanitized = collector._sanitize_error_msg(str(e))
             log_event("error", "reconcile_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/report", methods=["GET"])
+    def get_report():
+        """M9: 현재 DB 상태를 4시트 엑셀 보고서로 내려받기."""
+        try:
+            data = report_builder.build_report(db_path)
+            return Response(
+                data,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": "attachment; filename=netdash_report.xlsx"},
+            )
+        except Exception as e:
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "report_error", error=sanitized)
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/<int:switch_id>/events", methods=["GET"])

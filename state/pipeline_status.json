@@ -1,8 +1,45 @@
 {
-  "stage": "m8_complete",
+  "stage": "m9_complete",
   "status": "ready_for_commit",
   "timestamp": "2026-06-28T00:00:00Z",
-  "milestone": "M8",
+  "milestone": "M9",
+  "release": {
+    "latest": "v3.0.0",
+    "date": "2026-06-28",
+    "scope": "M5~M8",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.0.0",
+    "asset": "netdash.exe (29MB)",
+    "note": "v2.0.0은 M4가 점유하여 다음 메이저 v3.0.0으로 발행. master push + 태그 push + Release 완료"
+  },
+  "m9_report_builder": {
+    "date": "2026-06-28",
+    "status": "✅ COMPLETE (Opus 4.8 review PASS)",
+    "design_doc": "C:\\AI_WORKPLACE\\docs\\design\\netdash-m9-report-builder.md",
+    "goal": "프로덕션본 report_builder를 개발본 스키마에 적응 이식 — 4시트 엑셀 보고서(스위치/포트/이벤트/호스트+대조판정)",
+    "changes": {
+      "core/report_builder.py": "신규. build_report(db_path)->bytes 4시트. 호스트 시트에 M7 reconcile verdict 통합",
+      "app.py": "GET /api/report (xlsx 다운로드, Response + Content-Disposition)",
+      "web/templates/index.html": "보고서 내보내기 버튼",
+      "web/static/app.js": "다운로드 트리거",
+      "tests/test_m9_report_builder.py": "신규 8개"
+    },
+    "tests": {
+      "new": 8,
+      "total": 114,
+      "passed": 114,
+      "regression": 0,
+      "execution_time": "38.25s"
+    },
+    "code_review": {
+      "reviewer": "Claude Opus 4.8 (Codex 타임아웃 대체)",
+      "rounds": 1,
+      "round1": "✅ PASS critical 0 — 정확성/유출/회귀 없음. Warning 3(성능·인증UX, 현규모/기존패턴 수용)"
+    },
+    "next_steps": [
+      "사용자 승인 후 commit",
+      "M10 후보: 알림 엔진(alert_engine), 추가 벤더 파서"
+    ]
+  },
   "m8_reconcile_ui": {
     "date": "2026-06-28",
     "status": "✅ COMPLETE (Opus 4.8 review PASS)",

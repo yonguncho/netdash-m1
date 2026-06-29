@@ -361,6 +361,12 @@ document.getElementById("btn-add-confirm").addEventListener("click", function() 
   }).catch(function(e) { console.error(e); alert("서버 오류"); });
 });
 
+// ─── M9: 보고서 내보내기 ─────────────────────────────────────────
+(function () {
+  var btn = document.getElementById("btn-export-report");
+  if (btn) btn.addEventListener("click", function() { window.location = "/api/report"; });
+})();
+
 // ─── 엑셀 가져오기 ───────────────────────────────────────────────
 document.getElementById("btn-import-excel").addEventListener("click", function() {
   document.getElementById("excel-file-input").click();
