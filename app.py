@@ -160,6 +160,13 @@ def create_app(demo_mode=None):
         # In demo mode, skip validation only if explicitly enabled in config
         if config.app.get("demo_mode"):
             return
+        # Loopback-only bind + request originating from localhost is exempt:
+        # a closed-network single-host tool is reachable only by the same machine's
+        # user, so the local UI works without a token. The token defends remote
+        # access only when bound to an externally reachable address (0.0.0.0 등).
+        bind_host = config.app.get("host", "127.0.0.1")
+        if bind_host in ("127.0.0.1", "localhost", "::1") and request.remote_addr in ("127.0.0.1", "::1"):
+            return
         # Enforce API authentication in production mode (all /api/* routes)
         if request.path.startswith("/api/"):
             token = request.headers.get("X-API-Token")

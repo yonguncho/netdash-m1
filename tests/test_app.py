@@ -13,7 +13,11 @@ from app import create_app
 
 @pytest.fixture()
 def client_with_token(tmp_path, monkeypatch):
-    """Production mode client with valid API token for security tests"""
+    """Production mode client with valid API token for security tests.
+
+    Binds to 0.0.0.0 (externally reachable) so token auth is enforced — loopback
+    binds are intentionally exempt for local requests (see validate_api_token).
+    """
     monkeypatch.chdir(tmp_path)
 
     # Create config.yaml with api_token (required in production mode)
@@ -23,6 +27,8 @@ def client_with_token(tmp_path, monkeypatch):
 upload_max_mb: 16
 db_path: netdash.db
 api_token: test_secret_token_xyz_32_chars_long_ABCD123
+app:
+  host: 0.0.0.0
 """)
 
     # Override NETDASH_CONFIG to ensure our config.yaml is used (not project root's)
@@ -76,6 +82,29 @@ def test_api_rejects_invalid_token_in_production(client_with_token):
     assert r.status_code == 401
     data = r.get_json()
     assert data["error"] == "unauthorized"
+
+
+def test_api_loopback_bind_exempt_from_token(tmp_path, monkeypatch, no_api_token_env):
+    """Production + loopback bind: local requests are exempt from token (UI works without token)."""
+    monkeypatch.chdir(tmp_path)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""flap_threshold: 3
+upload_max_mb: 16
+db_path: netdash.db
+api_token: test_secret_token_xyz_32_chars_long_ABCD123
+app:
+  host: 127.0.0.1
+""")
+    monkeypatch.setenv("NETDASH_CONFIG", str(config_file))
+    app = create_app(demo_mode=False)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        # test_client의 remote_addr는 127.0.0.1 → 토큰 없이도 통과
+        r = c.get("/api/switches")
+        assert r.status_code == 200
+        # 수동 추가(POST)도 토큰 없이 통과 (사용자가 겪은 unauthorized 회귀 방지)
+        r2 = c.post("/api/switches/manual", json={"ip": "10.0.0.5", "vendor": "cisco"})
+        assert r2.status_code in (200, 201)
 
 
 def test_api_state_returns_200_with_switches_key(client):
