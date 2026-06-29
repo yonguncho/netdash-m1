@@ -727,29 +727,30 @@ def save_hosts(db_path, hosts):
                 ip = host_data.get("ip")
                 if not ip:
                     continue
-                # M7: UPSERT on measured columns only. Ledger columns
-                # (hostname, ledger_switch, ledger_port) are preserved so a
-                # measurement does not wipe out previously loaded ledger data.
-                cursor.execute(
-                    """INSERT INTO hosts
-                       (ip, mac, switch_id, port, located, confidence, reason)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)
-                       ON CONFLICT(ip) DO UPDATE SET
-                           mac=excluded.mac,
-                           switch_id=excluded.switch_id,
-                           port=excluded.port,
-                           located=excluded.located,
-                           confidence=excluded.confidence,
-                           reason=excluded.reason,
-                           updated_at=CURRENT_TIMESTAMP""",
-                    (ip, host_data.get("mac"), host_data.get("switch_id"),
-                     host_data.get("port"), host_data.get("located", False),
-                     host_data.get("confidence", 0.0), host_data.get("reason"))
-                )
+                # FIX: ON CONFLICT(ip) 의존 제거(구버전 DB에 ip UNIQUE 없을 수 있음).
+                # 측정 컬럼만 갱신, ledger 컬럼(hostname/ledger_*)은 보존하는 수동 UPSERT.
                 cursor.execute("SELECT id FROM hosts WHERE ip = ?", (ip,))
-                row = cursor.fetchone()
-                if row:
-                    results.append(row[0])
+                existing = cursor.fetchone()
+                if existing:
+                    cursor.execute(
+                        """UPDATE hosts SET mac=?, switch_id=?, port=?, located=?,
+                               confidence=?, reason=?, updated_at=CURRENT_TIMESTAMP
+                           WHERE ip=?""",
+                        (host_data.get("mac"), host_data.get("switch_id"),
+                         host_data.get("port"), host_data.get("located", False),
+                         host_data.get("confidence", 0.0), host_data.get("reason"), ip),
+                    )
+                    results.append(existing[0])
+                else:
+                    cursor.execute(
+                        """INSERT INTO hosts
+                           (ip, mac, switch_id, port, located, confidence, reason)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (ip, host_data.get("mac"), host_data.get("switch_id"),
+                         host_data.get("port"), host_data.get("located", False),
+                         host_data.get("confidence", 0.0), host_data.get("reason")),
+                    )
+                    results.append(cursor.lastrowid)
             return results
 
 
@@ -779,24 +780,32 @@ def save_ledger_hosts(db_path, rows):
                 ip = row.get("ip")
                 if not ip:
                     continue
-                # M7: 빈값/NULL은 기존값을 보존(COALESCE+NULLIF)한다. 장부 시트에
-                # 특정 컬럼이 없을 때(재업로드 등) 기존에 저장된 값을 지우지 않도록.
+                # FIX: ON CONFLICT(ip) 의존 제거(구버전 DB에 ip UNIQUE 없을 수 있음).
+                # 빈값/None이면 기존값 보존(COALESCE+NULLIF와 동등: `new or old`). 측정
+                # 위치 컬럼(switch_id/port/located 등)은 건드리지 않는 수동 UPSERT.
+                new_mac = row.get("mac")
+                new_hostname = row.get("hostname", "")
+                new_lsw = row.get("ledger_switch")
+                new_lport = row.get("ledger_port")
                 cursor.execute(
-                    """INSERT INTO hosts (ip, mac, hostname, ledger_switch, ledger_port)
-                       VALUES (?, ?, ?, ?, ?)
-                       ON CONFLICT(ip) DO UPDATE SET
-                           mac=COALESCE(NULLIF(excluded.mac, ''), hosts.mac),
-                           hostname=COALESCE(NULLIF(excluded.hostname, ''), hosts.hostname),
-                           ledger_switch=COALESCE(NULLIF(excluded.ledger_switch, ''), hosts.ledger_switch),
-                           ledger_port=COALESCE(NULLIF(excluded.ledger_port, ''), hosts.ledger_port),
-                           updated_at=CURRENT_TIMESTAMP""",
-                    (ip, row.get("mac"), row.get("hostname", ""),
-                     row.get("ledger_switch"), row.get("ledger_port"))
-                )
-                cursor.execute("SELECT id FROM hosts WHERE ip = ?", (ip,))
-                r = cursor.fetchone()
-                if r:
-                    results.append(r[0])
+                    "SELECT id, mac, hostname, ledger_switch, ledger_port FROM hosts WHERE ip = ?",
+                    (ip,))
+                ex = cursor.fetchone()
+                if ex:
+                    cursor.execute(
+                        """UPDATE hosts SET mac=?, hostname=?, ledger_switch=?, ledger_port=?,
+                               updated_at=CURRENT_TIMESTAMP WHERE ip=?""",
+                        (new_mac or ex[1], new_hostname or ex[2],
+                         new_lsw or ex[3], new_lport or ex[4], ip),
+                    )
+                    results.append(ex[0])
+                else:
+                    cursor.execute(
+                        """INSERT INTO hosts (ip, mac, hostname, ledger_switch, ledger_port)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (ip, new_mac, new_hostname, new_lsw, new_lport),
+                    )
+                    results.append(cursor.lastrowid)
             return results
 
 
@@ -822,16 +831,21 @@ def save_firewall(db_path, name, vendor, host, port=None, auth_type="token"):
     with _db_lock:
         with get_db(db_path) as conn:
             cur = conn.cursor()
+            # FIX: ON CONFLICT(host) 의존 제거. host 기준 수동 UPSERT.
+            cur.execute("SELECT id FROM firewalls WHERE host=?", (host,))
+            existing = cur.fetchone()
+            if existing:
+                cur.execute(
+                    "UPDATE firewalls SET name=?, vendor=?, port=?, auth_type=? WHERE host=?",
+                    (name, vendor, port, auth_type, host),
+                )
+                return existing[0]
             cur.execute(
                 """INSERT INTO firewalls (name, vendor, host, port, auth_type)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(host) DO UPDATE SET
-                     name=excluded.name, vendor=excluded.vendor,
-                     port=excluded.port, auth_type=excluded.auth_type""",
+                   VALUES (?, ?, ?, ?, ?)""",
                 (name, vendor, host, port, auth_type),
             )
-            cur.execute("SELECT id FROM firewalls WHERE host=?", (host,))
-            return cur.fetchone()[0]
+            return cur.lastrowid
 
 
 def list_firewalls(db_path):

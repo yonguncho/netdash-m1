@@ -1,5 +1,15 @@
 # NetDash 릴리스 노트
 
+## v3.2.2 (2026-06-29) — 핫픽스 (ON CONFLICT 전면 제거)
+
+v3.2.1은 스위치 수동 추가만 고쳤으나, 동일 원인이 **엑셀 업로드(호스트/장부 적재)와
+방화벽 등록**에도 있었습니다. 구버전 스키마 DB에서 해당 UNIQUE 제약이 없으면 같은
+`ON CONFLICT` 오류가 났습니다.
+
+- 수정: `save_hosts`, `save_ledger_hosts`, `save_firewall`의 `ON CONFLICT`를 모두
+  제거하고 수동 UPSERT(SELECT→UPDATE/INSERT)로 전환 — 어떤 스키마의 DB에서도 안전.
+- 기존 보존 로직(측정/장부 컬럼 분리, 빈값 시 기존값 유지)은 그대로 유지.
+
 ## v3.2.1 (2026-06-29) — 핫픽스 (수동 추가 Internal server error)
 
 **구버전 DB에서 스위치 수동 추가 실패 수정**
