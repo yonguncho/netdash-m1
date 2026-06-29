@@ -26,11 +26,11 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.2.2",
+    "latest": "v3.3.0",
     "date": "2026-06-29",
-    "scope": "핫픽스: ON CONFLICT 전면 제거(switches/hosts/ledger/firewall 수동 UPSERT)",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.2.2",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.2.2/netdash.exe",
+    "scope": "M11 장비 연결성/등록 개선 (연결테스트 + 방화벽 자격증명 저장 + PC 이더넷 IP)",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.3.0",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.3.0/netdash.exe",
     "asset": "netdash.exe (29MB)",
     "repo_visibility": "PUBLIC (외부 다운로드 가능, 익명 200 검증)",
     "history": [
@@ -42,7 +42,8 @@
       "v3.1.4 — console=True + 로컬 인증 면제(unauthorized 수정) + Juniper 제거",
       "v3.2.0 — M10 방화벽 현황(Palo Alto / Fortinet)",
       "v3.2.1 — 핫픽스: 수동 추가 ON CONFLICT 오류(구버전 DB) 수정",
-      "v3.2.2 — 핫픽스: ON CONFLICT 전면 제거(hosts/ledger/firewall 포함)"
+      "v3.2.2 — 핫픽스: ON CONFLICT 전면 제거(hosts/ledger/firewall 포함)",
+      "v3.3.0 — M11: 연결테스트 + 방화벽 자격증명 저장(DPAPI) + PC 이더넷 IP"
     ],
     "on_conflict_resolved": "db.py의 모든 ON CONFLICT를 수동 UPSERT로 전환 완료. 신규 INSERT 시 ON CONFLICT 사용 금지(구버전 DB 호환).",
     "next_milestone": "M11 — 장비 연결성/등록 개선 (사용자 요청)",
