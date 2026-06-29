@@ -1,5 +1,15 @@
 # NetDash 릴리스 노트
 
+## v3.5.2 (2026-06-29) — 버그 검증 후속 수정
+
+전체 코드 버그 검증(Opus 2종 + 199 테스트) 결과 발견한 항목 수정:
+- **UI 레이아웃/색상 깨짐 수정**: CSP가 inline `style`까지 차단하던 것을 `style-src
+  'unsafe-inline'`로 허용(스크립트는 'self' 유지 → 보안 동일).
+- **수정 시 중복 오류 메시지 개선**: 이름/IP(스위치)·호스트(방화벽)가 이미 존재하면
+  불명확한 500 대신 "이미 사용 중" 안내(409).
+- **Extreme(EXOS) 수집 개선**: 페이징 비활성화에 `terminal length 0`(Cisco용) 대신
+  벤더별 명령(`disable clpaging`)을 사용하고, 실패해도 수집을 계속합니다.
+
 ## v3.5.1 (2026-06-29) — 수집 read_timeout 오류 + 수정/삭제 버튼 무반응 수정
 
 - **수집 `read_timeout` 오류 수정**: `read_timeout`은 netmiko `send_command()`의 인자인데

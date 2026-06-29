@@ -50,6 +50,16 @@ def _norm_vendor(vendor):
     return _NETMIKO_VENDOR.get(v, v)
 
 
+# 벤더별 페이징 비활성화 명령(긴 출력 잘림 방지). EXOS는 'terminal length 0'이 아니라
+# 'disable clpaging'. 미정의 벤더는 페이징 명령을 생략한다.
+_PAGING_CMD = {
+    "cisco_ios": "terminal length 0",
+    "arista_eos": "terminal length 0",
+    "extreme_exos": "disable clpaging",
+    "juniper_junos": "set cli screen-length 0",
+}
+
+
 def init_collector():
     global _worker_queue, _worker_threads
     config = get_config()
@@ -280,7 +290,13 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 from . import netbind
                 conn_device["sock"] = netbind.bind_socket(switch["ip"], 22, source_ip, ssh_timeout)
             with ConnectHandler(**conn_device) as conn:
-                conn.send_command("terminal length 0", read_timeout=read_timeout)
+                # 벤더별 페이징 비활성화(미정의 벤더는 생략). 실패해도 수집은 계속.
+                paging = _PAGING_CMD.get(vendor)
+                if paging:
+                    try:
+                        conn.send_command(paging, read_timeout=read_timeout)
+                    except Exception:
+                        pass
                 for key, command in commands.items():
                     output = conn.send_command(command, read_timeout=read_timeout)
                     outputs[key] = output

@@ -6,6 +6,7 @@ import io
 import argparse
 import tempfile
 import ipaddress
+import sqlite3
 import time
 import threading
 from functools import wraps
@@ -187,7 +188,12 @@ def create_app(demo_mode=None):
     # Security headers for all responses
     @app.after_request
     def set_security_headers(response):
-        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        # script-src는 'self'만(인라인 스크립트/onclick 차단 → 이벤트 위임 사용).
+        # style-src는 인라인 style 속성 허용(레이아웃 정상화). 스타일은 스크립트 실행이
+        # 아니므로 XSS 위험이 낮다.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -634,14 +640,17 @@ def create_app(demo_mode=None):
                     ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
                 except ValueError as e:
                     return jsonify({"error": str(e)}), 400
-            ok = db.update_switch(
-                db_path, switch_id,
-                name=(data.get("name") or "").strip() or None,
-                ip=ip or None,
-                hostname=(data.get("hostname") or "").strip() or None,
-                vendor=(data.get("vendor") or "").strip() or None,
-                location=(data.get("location") or "").strip() or None,
-            )
+            try:
+                ok = db.update_switch(
+                    db_path, switch_id,
+                    name=(data.get("name") or "").strip() or None,
+                    ip=ip or None,
+                    hostname=(data.get("hostname") or "").strip() or None,
+                    vendor=(data.get("vendor") or "").strip() or None,
+                    location=(data.get("location") or "").strip() or None,
+                )
+            except sqlite3.IntegrityError:
+                return jsonify({"error": "이미 사용 중인 이름 또는 IP입니다"}), 409
             if not ok:
                 return jsonify({"error": "not found"}), 404
             log_event("info", "switch_updated", switch_id=switch_id)
@@ -682,13 +691,16 @@ def create_app(demo_mode=None):
             port = data.get("port")
             if port not in (None, "") and not (str(port).isdigit() and 1 <= int(port) <= 65535):
                 return jsonify({"error": "port must be 1-65535"}), 400
-            ok = db.update_firewall(
-                db_path, fid,
-                name=(data.get("name") or "").strip() or None,
-                vendor=vendor or None,
-                host=host or None,
-                port=int(port) if port not in (None, "") else None,
-            )
+            try:
+                ok = db.update_firewall(
+                    db_path, fid,
+                    name=(data.get("name") or "").strip() or None,
+                    vendor=vendor or None,
+                    host=host or None,
+                    port=int(port) if port not in (None, "") else None,
+                )
+            except sqlite3.IntegrityError:
+                return jsonify({"error": "이미 사용 중인 호스트입니다"}), 409
             if not ok:
                 return jsonify({"error": "not found"}), 404
             log_event("info", "firewall_updated", firewall_id=fid)

@@ -97,3 +97,35 @@ def test_collector_read_timeout_moved_to_send_command():
     import re
     device_block = re.search(r'device = \{.*?\}', src, re.DOTALL)
     assert device_block and '"read_timeout"' not in device_block.group(0)
+
+
+# ── v3.5.2 검증 후속 수정 ──────────────────────────────────────────
+def test_paging_cmd_per_vendor():
+    """EXOS는 terminal length 0가 아니라 disable clpaging."""
+    assert collector._PAGING_CMD["extreme_exos"] == "disable clpaging"
+    assert collector._PAGING_CMD["cisco_ios"] == "terminal length 0"
+    # 미정의 벤더는 None(페이징 생략)
+    assert collector._PAGING_CMD.get("paloalto_panos") is None
+
+
+def test_csp_allows_inline_style():
+    """CSP: script는 'self'(인라인 차단) 유지, style은 인라인 허용."""
+    src = (Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
+    assert "style-src 'self' 'unsafe-inline'" in src
+    assert "script-src 'self'" in src
+
+
+def test_update_switch_duplicate_name_conflict(client):
+    """이름 중복 수정 시 500이 아니라 409."""
+    client.post("/api/switches/manual", json={"ip": "10.1.0.1", "name": "DUP-A", "vendor": "cisco"})
+    sid_b = client.post("/api/switches/manual", json={"ip": "10.1.0.2", "name": "DUP-B", "vendor": "cisco"}).get_json()["switch_id"]
+    r = client.put(f"/api/switches/{sid_b}", json={"name": "DUP-A"})
+    assert r.status_code == 409
+
+
+def test_update_firewall_duplicate_host_conflict(client):
+    """host 중복 수정 시 409."""
+    client.post("/api/firewalls", json={"vendor": "fortigate", "host": "10.1.1.1", "name": "FA"})
+    fb = client.post("/api/firewalls", json={"vendor": "fortigate", "host": "10.1.1.2", "name": "FB"}).get_json()["firewall_id"]
+    r = client.put(f"/api/firewalls/{fb}", json={"host": "10.1.1.1"})
+    assert r.status_code == 409
