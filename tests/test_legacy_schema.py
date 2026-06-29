@@ -70,6 +70,27 @@ def test_import_switches_bulk_current_schema(temp_db):
     assert ids2[0] == ids[0]
 
 
+def test_import_switches_bulk_minimal_schema(tmp_path):
+    """컬럼이 최소(name, ip)뿐인 구버전 switches 테이블에서도 동작('no such column' 방지)."""
+    db_path = tmp_path / "minimal.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE switches (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ip TEXT)")
+    conn.commit()
+    conn.close()
+    # hostname/vendor/location/status/alert 컬럼이 없어도 에러 없이 name/ip만 저장
+    ids = db.import_switches_bulk(str(db_path), [
+        {"name": "SW1", "ip": "10.0.0.1", "vendor": "cisco", "hostname": "h", "location": "L"},
+    ])
+    assert ids[0] is not None
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT name, ip FROM switches WHERE name='SW1'").fetchone()
+    conn.close()
+    assert row == ("SW1", "10.0.0.1")
+    # 재등록 멱등
+    ids2 = db.import_switches_bulk(str(db_path), [{"name": "SW1", "ip": "10.0.0.2"}])
+    assert ids2[0] == ids[0]
+
+
 def _make_legacy_hosts_db(db_path):
     """ip에 UNIQUE 제약이 없는 구버전 hosts 테이블 생성."""
     conn = sqlite3.connect(str(db_path))

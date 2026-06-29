@@ -205,8 +205,18 @@ function renderSwitchTable(switches) {
       escHtml(sw.location || "-") + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span></td><td>" +
       (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "-") +
-      "</td><td>" + fmtTime(sw.last_collected) + "</td></tr>";
+      "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
+      "<td><button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
+      "onclick=\"deleteSwitch(" + sw.id + ")\">삭제</button></td></tr>";
   }).join("");
+}
+
+function deleteSwitch(id) {
+  if (!confirm("이 스위치를 삭제하시겠습니까?")) return;
+  fetch("/api/switches/" + id, {method: "DELETE"})
+    .then(function(r) { return r.json(); })
+    .then(function() { pollState(); })
+    .catch(function(e) { console.error(e); alert("삭제 오류"); });
 }
 
 function swStatusClass(sw) {
@@ -332,9 +342,22 @@ function renderFirewalls(firewalls) {
         "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
         "onclick=\"openFwCollect(JSON.parse(decodeURIComponent('" + fjson + "')))\">수집</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
-        "onclick=\"showFirewallDetail(" + f.id + ")\">상세</button>" +
+        "onclick=\"showFirewallDetail(" + f.id + ")\">상세</button> " +
+        "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
+        "onclick=\"deleteFirewall(" + f.id + ")\">삭제</button>" +
       "</td></tr>";
   }).join("");
+}
+
+function deleteFirewall(fid) {
+  if (!confirm("이 방화벽을 삭제하시겠습니까?")) return;
+  fetch("/api/firewalls/" + fid, {method: "DELETE"})
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      loadFirewalls();
+      var d = document.getElementById("firewall-detail"); if (d) d.innerHTML = "";
+    })
+    .catch(function(e) { console.error(e); alert("삭제 오류"); });
 }
 
 function showFirewallDetail(fid) {

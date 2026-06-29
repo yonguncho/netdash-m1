@@ -307,29 +307,38 @@ def import_switches_bulk(db_path, rows):
     with _db_lock:
         with get_db(db_path) as conn:
             cursor = conn.cursor()
+            # FIX: 구버전 스키마 DB는 일부 컬럼(hostname/vendor/location/status/alert 등)이
+            # 없을 수 있어 고정 INSERT/UPDATE가 "no such column"으로 실패했다. 실제 존재하는
+            # 컬럼만 골라 동적으로 INSERT/UPDATE한다(name 기준 수동 UPSERT, ON CONFLICT 비의존).
+            existing_cols = {r[1] for r in cursor.execute("PRAGMA table_info(switches)").fetchall()}
             for row in rows:
                 name = row.get("name") or row.get("hostname") or row.get("ip")
-                ip = row.get("ip", "")
-                hostname = row.get("hostname", "")
-                vendor = row.get("vendor", "unknown")
-                location = row.get("location", "")
-                # FIX: ON CONFLICT(name) 의존 제거. 구버전 DB는 switches.name에 UNIQUE
-                # 제약이 없어 "ON CONFLICT clause does not match ... unique constraint"
-                # 오류가 났다. name 기준 수동 UPSERT로 모든 스키마에서 안전하게 동작.
+                candidate = {
+                    "name": name,
+                    "ip": row.get("ip", ""),
+                    "hostname": row.get("hostname", ""),
+                    "vendor": row.get("vendor", "unknown"),
+                    "location": row.get("location", ""),
+                }
+                # 실제 테이블에 존재하는 컬럼만 사용 (키는 하드코딩 → SQL 인젝션 없음)
+                vals = {k: v for k, v in candidate.items() if k in existing_cols}
                 cursor.execute("SELECT id FROM switches WHERE name = ?", (name,))
                 existing = cursor.fetchone()
                 if existing:
-                    cursor.execute(
-                        """UPDATE switches SET ip=?, hostname=?, vendor=?, location=?
-                           WHERE name=?""",
-                        (ip, hostname, vendor, location, name),
-                    )
+                    set_cols = [k for k in vals if k != "name"]
+                    if set_cols:
+                        assignments = ", ".join(f"{c}=?" for c in set_cols)
+                        cursor.execute(
+                            f"UPDATE switches SET {assignments} WHERE name=?",
+                            [vals[c] for c in set_cols] + [name],
+                        )
                     results.append(existing[0])
                 else:
+                    ins_cols = list(vals.keys())
+                    placeholders = ", ".join("?" for _ in ins_cols)
                     cursor.execute(
-                        """INSERT INTO switches (name, ip, hostname, vendor, location, status, alert)
-                           VALUES (?, ?, ?, ?, ?, 'new', 'none')""",
-                        (name, ip, hostname, vendor, location),
+                        f"INSERT INTO switches ({', '.join(ins_cols)}) VALUES ({placeholders})",
+                        [vals[c] for c in ins_cols],
                     )
                     results.append(cursor.lastrowid)
     utils.log_event("info", "import_switches_bulk", count=len(rows))
@@ -829,6 +838,46 @@ def get_switches(db_path):
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM switches ORDER BY id LIMIT 100000")
         return [dict(row) for row in cursor.fetchall()]
+
+
+def delete_switch(db_path, switch_id):
+    """스위치 1대 삭제 + 관련 수집 데이터 정리. 반환: 삭제 여부(bool)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM switches WHERE id=?", (switch_id,))
+            if not cur.fetchone():
+                return False
+            # 수집 데이터 정리 (존재하는 테이블만 안전 시도)
+            for sql, params in [
+                ("DELETE FROM ports WHERE switch_id=?", (switch_id,)),
+                ("DELETE FROM mac_entries WHERE switch_id=?", (switch_id,)),
+                ("DELETE FROM arp_entries WHERE switch_id=?", (switch_id,)),
+                ("DELETE FROM snapshots WHERE switch_id=?", (switch_id,)),
+                ("DELETE FROM port_events WHERE switch_id=?", (switch_id,)),
+                # hosts는 인벤토리이므로 보존하되 위치(측정) 무효화
+                ("UPDATE hosts SET switch_id=NULL, located=0 WHERE switch_id=?", (switch_id,)),
+                ("DELETE FROM switches WHERE id=?", (switch_id,)),
+            ]:
+                try:
+                    cur.execute(sql, params)
+                except Exception:
+                    pass
+            return True
+
+
+def delete_firewall(db_path, firewall_id):
+    """방화벽 1대 삭제 + 인터페이스/ARP 정리. 반환: 삭제 여부(bool)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM firewalls WHERE id=?", (firewall_id,))
+            if not cur.fetchone():
+                return False
+            cur.execute("DELETE FROM firewall_interfaces WHERE firewall_id=?", (firewall_id,))
+            cur.execute("DELETE FROM firewall_arp WHERE firewall_id=?", (firewall_id,))
+            cur.execute("DELETE FROM firewalls WHERE id=?", (firewall_id,))
+            return True
 
 
 # ── M10: 방화벽 (Palo Alto / Fortinet) ────────────────────────────

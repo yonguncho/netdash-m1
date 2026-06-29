@@ -620,6 +620,34 @@ def create_app(demo_mode=None):
             log_event("error", "test_firewall_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/switches/<int:switch_id>", methods=["DELETE"])
+    @rate_limit("delete_switch", max_requests=20, window_seconds=60)
+    def delete_switch_endpoint(switch_id):
+        """스위치 삭제 (잘못 등록 시 제거)."""
+        try:
+            ok = db.delete_switch(db_path, switch_id)
+            if not ok:
+                return jsonify({"error": "not found"}), 404
+            log_event("info", "switch_deleted", switch_id=switch_id)
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "delete_switch_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls/<int:fid>", methods=["DELETE"])
+    @rate_limit("delete_firewall", max_requests=20, window_seconds=60)
+    def delete_firewall_endpoint(fid):
+        """방화벽 삭제 (잘못 등록 시 제거)."""
+        try:
+            ok = db.delete_firewall(db_path, fid)
+            if not ok:
+                return jsonify({"error": "not found"}), 404
+            log_event("info", "firewall_deleted", firewall_id=fid)
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "delete_firewall_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/netinfo", methods=["GET"])
     def get_netinfo():
         """M11: PC 로컬 네트워크 정보(이더넷 IP) 조회. 장비 접근에 쓰는 IP 안내용."""
