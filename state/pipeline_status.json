@@ -26,11 +26,11 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.3.0",
+    "latest": "v3.3.1",
     "date": "2026-06-29",
-    "scope": "M11 장비 연결성/등록 개선 (연결테스트 + 방화벽 자격증명 저장 + PC 이더넷 IP)",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.3.0",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.3.0/netdash.exe",
+    "scope": "스위치 등록 DB오류(컬럼 누락) 수정 + 스위치/방화벽 삭제 기능",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.3.1",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.3.1/netdash.exe",
     "asset": "netdash.exe (29MB)",
     "repo_visibility": "PUBLIC (외부 다운로드 가능, 익명 200 검증)",
     "history": [
@@ -43,8 +43,10 @@
       "v3.2.0 — M10 방화벽 현황(Palo Alto / Fortinet)",
       "v3.2.1 — 핫픽스: 수동 추가 ON CONFLICT 오류(구버전 DB) 수정",
       "v3.2.2 — 핫픽스: ON CONFLICT 전면 제거(hosts/ledger/firewall 포함)",
-      "v3.3.0 — M11: 연결테스트 + 방화벽 자격증명 저장(DPAPI) + PC 이더넷 IP"
+      "v3.3.0 — M11: 연결테스트 + 방화벽 자격증명 저장(DPAPI) + PC 이더넷 IP",
+      "v3.3.1 — 스위치 등록 DB오류(컬럼 누락) 수정 + 스위치/방화벽 삭제 기능"
     ],
+    "db_legacy_rule": "구버전 스키마 DB 호환: ON CONFLICT 금지(수동 UPSERT) + 신규 INSERT/UPDATE는 PRAGMA table_info로 존재 컬럼만 동적 사용(import_switches_bulk 참고). 컬럼 누락 'no such column' 방지.",
     "on_conflict_resolved": "db.py의 모든 ON CONFLICT를 수동 UPSERT로 전환 완료. 신규 INSERT 시 ON CONFLICT 사용 금지(구버전 DB 호환).",
     "next_milestone": "M11 — 장비 연결성/등록 개선 (사용자 요청)",
     "m11_plan": {
