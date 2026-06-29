@@ -1,5 +1,15 @@
 # NetDash 릴리스 노트
 
+## v3.2.1 (2026-06-29) — 핫픽스 (수동 추가 Internal server error)
+
+**구버전 DB에서 스위치 수동 추가 실패 수정**
+- 증상: 스위치 수동 추가 시 `Internal server error` —
+  "ON CONFLICT clause does not match any primary key or unique constraint".
+- 원인: 구버전 스키마로 생성된 DB의 `switches` 테이블에 `name` UNIQUE 제약이 없는데,
+  `import_switches_bulk`가 `ON CONFLICT(name)`을 사용.
+- 수정: `ON CONFLICT` 의존을 제거하고 name 기준 **수동 UPSERT(SELECT→UPDATE/INSERT)**로
+  변경 — UNIQUE 제약 유무와 무관하게 모든 DB에서 안전하게 동작(멱등 유지).
+
 ## v3.2.0 (2026-06-29) — M10 방화벽 현황 (Palo Alto / Fortinet)
 
 **방화벽 모니터링 기능 추가**

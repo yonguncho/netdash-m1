@@ -307,17 +307,25 @@ def import_switches_bulk(db_path, rows):
                 hostname = row.get("hostname", "")
                 vendor = row.get("vendor", "unknown")
                 location = row.get("location", "")
-                cursor.execute(
-                    """INSERT INTO switches (name, ip, hostname, vendor, location, status, alert)
-                       VALUES (?, ?, ?, ?, ?, 'new', 'none')
-                       ON CONFLICT(name) DO UPDATE SET
-                         ip=excluded.ip, hostname=excluded.hostname,
-                         vendor=excluded.vendor, location=excluded.location""",
-                    (name, ip, hostname, vendor, location),
-                )
+                # FIX: ON CONFLICT(name) 의존 제거. 구버전 DB는 switches.name에 UNIQUE
+                # 제약이 없어 "ON CONFLICT clause does not match ... unique constraint"
+                # 오류가 났다. name 기준 수동 UPSERT로 모든 스키마에서 안전하게 동작.
                 cursor.execute("SELECT id FROM switches WHERE name = ?", (name,))
-                row_id = cursor.fetchone()
-                results.append(row_id[0] if row_id else None)
+                existing = cursor.fetchone()
+                if existing:
+                    cursor.execute(
+                        """UPDATE switches SET ip=?, hostname=?, vendor=?, location=?
+                           WHERE name=?""",
+                        (ip, hostname, vendor, location, name),
+                    )
+                    results.append(existing[0])
+                else:
+                    cursor.execute(
+                        """INSERT INTO switches (name, ip, hostname, vendor, location, status, alert)
+                           VALUES (?, ?, ?, ?, ?, 'new', 'none')""",
+                        (name, ip, hostname, vendor, location),
+                    )
+                    results.append(cursor.lastrowid)
     utils.log_event("info", "import_switches_bulk", count=len(rows))
     return results
 
