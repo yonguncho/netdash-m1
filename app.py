@@ -622,6 +622,34 @@ def create_app(demo_mode=None):
             log_event("error", "test_firewall_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/switches/<int:switch_id>", methods=["PUT"])
+    @rate_limit("update_switch", max_requests=20, window_seconds=60)
+    def update_switch_endpoint(switch_id):
+        """스위치 등록 정보 수정."""
+        try:
+            data = request.get_json() or {}
+            ip = (data.get("ip") or "").strip()
+            if ip:  # IP 변경 시 SSRF 검증
+                try:
+                    ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
+                except ValueError as e:
+                    return jsonify({"error": str(e)}), 400
+            ok = db.update_switch(
+                db_path, switch_id,
+                name=(data.get("name") or "").strip() or None,
+                ip=ip or None,
+                hostname=(data.get("hostname") or "").strip() or None,
+                vendor=(data.get("vendor") or "").strip() or None,
+                location=(data.get("location") or "").strip() or None,
+            )
+            if not ok:
+                return jsonify({"error": "not found"}), 404
+            log_event("info", "switch_updated", switch_id=switch_id)
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "update_switch_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/switches/<int:switch_id>", methods=["DELETE"])
     @rate_limit("delete_switch", max_requests=20, window_seconds=60)
     def delete_switch_endpoint(switch_id):
@@ -634,6 +662,39 @@ def create_app(demo_mode=None):
             return jsonify({"ok": True})
         except Exception as e:
             log_event("error", "delete_switch_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls/<int:fid>", methods=["PUT"])
+    @rate_limit("update_firewall", max_requests=20, window_seconds=60)
+    def update_firewall_endpoint(fid):
+        """방화벽 등록 정보 수정."""
+        try:
+            data = request.get_json() or {}
+            host = (data.get("host") or "").strip()
+            if host:
+                try:
+                    host = validate_ipv4(host, config.collector.get("allowed_ip_ranges"))
+                except ValueError as e:
+                    return jsonify({"error": f"host rejected: {e}"}), 400
+            vendor = (data.get("vendor") or "").strip().lower()
+            if vendor and vendor not in firewall_mod.SUPPORTED_VENDORS:
+                return jsonify({"error": "vendor must be fortigate or paloalto"}), 400
+            port = data.get("port")
+            if port not in (None, "") and not (str(port).isdigit() and 1 <= int(port) <= 65535):
+                return jsonify({"error": "port must be 1-65535"}), 400
+            ok = db.update_firewall(
+                db_path, fid,
+                name=(data.get("name") or "").strip() or None,
+                vendor=vendor or None,
+                host=host or None,
+                port=int(port) if port not in (None, "") else None,
+            )
+            if not ok:
+                return jsonify({"error": "not found"}), 404
+            log_event("info", "firewall_updated", firewall_id=fid)
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "update_firewall_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/firewalls/<int:fid>", methods=["DELETE"])

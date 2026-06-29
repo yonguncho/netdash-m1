@@ -32,6 +32,23 @@ _worker_threads = []
 _collecting_switches = set()
 _collector_lock = threading.Lock()
 
+# UI/단축 vendor 값 → netmiko device_type & config/parser 키 정규화.
+# 연결 테스트(connectivity)는 매핑했으나 수집 경로는 raw vendor를 써서
+# "unsupported device_type" 오류가 났다 → 동일 정규화 적용.
+_NETMIKO_VENDOR = {
+    "cisco": "cisco_ios",
+    "arista": "arista_eos",
+    "extreme": "extreme_exos",
+    "juniper": "juniper_junos",
+    "paloalto": "paloalto_panos",
+}
+
+
+def _norm_vendor(vendor):
+    """벤더 값을 netmiko device_type/내부 키로 정규화(이미 정확하면 그대로)."""
+    v = (vendor or "").strip().lower()
+    return _NETMIKO_VENDOR.get(v, v)
+
 
 def init_collector():
     global _worker_queue, _worker_threads
@@ -144,7 +161,8 @@ def _worker_loop():
             if not switch:
                 raise ValueError(f"Switch {switch_id} not found")
 
-            vendor = switch["vendor"]
+            # 벤더 정규화(cisco→cisco_ios 등): device_type/commands/parser 일관 사용
+            vendor = _norm_vendor(switch["vendor"])
             config = get_config()
 
             if config.app.get("demo_mode"):

@@ -206,9 +206,24 @@ function renderSwitchTable(switches) {
       escHtml(sw.status) + "</span></td><td>" +
       (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "-") +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
-      "<td><button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
+      "<td>" +
+      "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+      "onclick=\"editSwitch(JSON.parse(decodeURIComponent('" + encodeURIComponent(JSON.stringify(sw)) + "')))\">수정</button> " +
+      "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
       "onclick=\"deleteSwitch(" + sw.id + ")\">삭제</button></td></tr>";
   }).join("");
+}
+
+var _editSwitchId = null;
+
+function editSwitch(sw) {
+  _editSwitchId = sw.id;
+  document.getElementById("add-name").value = sw.name || "";
+  document.getElementById("add-ip").value = sw.ip || "";
+  document.getElementById("add-hostname").value = sw.hostname || "";
+  document.getElementById("add-vendor").value = sw.vendor || "unknown";
+  document.getElementById("add-location").value = sw.location || "";
+  openModal("modal-add-switch");
 }
 
 function deleteSwitch(id) {
@@ -343,10 +358,27 @@ function renderFirewalls(firewalls) {
         "onclick=\"openFwCollect(JSON.parse(decodeURIComponent('" + fjson + "')))\">수집</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
         "onclick=\"showFirewallDetail(" + f.id + ")\">상세</button> " +
+        "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+        "onclick=\"editFirewall(JSON.parse(decodeURIComponent('" + encodeURIComponent(JSON.stringify(f)) + "')))\">수정</button> " +
         "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
         "onclick=\"deleteFirewall(" + f.id + ")\">삭제</button>" +
       "</td></tr>";
   }).join("");
+}
+
+var _editFirewallId = null;
+
+function editFirewall(f) {
+  _editFirewallId = f.id;
+  document.getElementById("fw-name").value = f.name || "";
+  document.getElementById("fw-vendor").value = f.vendor || "fortigate";
+  document.getElementById("fw-host").value = f.host || "";
+  document.getElementById("fw-port").value = f.port || "";
+  // 수정 시 자격증명은 변경하지 않음(비워두면 기존 유지) — 안내
+  ["fw-add-token", "fw-add-username", "fw-add-password"].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.value = "";
+  });
+  openModal("modal-add-firewall");
 }
 
 function deleteFirewall(fid) {
@@ -407,6 +439,7 @@ function openFwCollect(fw) {
 }
 
 document.getElementById("btn-add-firewall").addEventListener("click", function() {
+  _editFirewallId = null;  // 신규 추가 모드
   ["fw-name", "fw-host", "fw-port", "fw-add-token", "fw-add-username", "fw-add-password"].forEach(function(id) {
     var el = document.getElementById(id); if (el) el.value = "";
   });
@@ -418,22 +451,29 @@ document.getElementById("btn-fw-add-confirm").addEventListener("click", function
   var host = document.getElementById("fw-host").value.trim();
   if (!host) { alert("호스트 IP를 입력하세요."); return; }
   var portVal = document.getElementById("fw-port").value.trim();
-  fetch("/api/firewalls", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      name: document.getElementById("fw-name").value.trim(),
-      vendor: document.getElementById("fw-vendor").value,
-      host: host,
-      port: portVal ? parseInt(portVal, 10) : null,
-      token: document.getElementById("fw-add-token").value,
-      username: document.getElementById("fw-add-username").value.trim(),
-      password: document.getElementById("fw-add-password").value,
-    }),
+  var body = {
+    name: document.getElementById("fw-name").value.trim(),
+    vendor: document.getElementById("fw-vendor").value,
+    host: host,
+    port: portVal ? parseInt(portVal, 10) : null,
+  };
+  var url, method;
+  if (_editFirewallId) {
+    // 수정 모드: name/vendor/host/port만 변경(자격증명은 유지)
+    url = "/api/firewalls/" + _editFirewallId; method = "PUT";
+  } else {
+    // 신규: 자격증명 포함
+    body.token = document.getElementById("fw-add-token").value;
+    body.username = document.getElementById("fw-add-username").value.trim();
+    body.password = document.getElementById("fw-add-password").value;
+    url = "/api/firewalls"; method = "POST";
+  }
+  fetch(url, {
+    method: method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
   }).then(function(r) { return r.json().then(function(d) { return {status: r.status, d: d}; }); })
     .then(function(res) {
-      if (res.status === 201) { closeModal("modal-add-firewall"); loadFirewalls(); }
-      else alert(res.d.error || "추가 실패");
+      if (res.status === 200 || res.status === 201) { closeModal("modal-add-firewall"); _editFirewallId = null; loadFirewalls(); }
+      else alert(res.d.error || "저장 실패");
     }).catch(function(e) { console.error(e); alert("서버 오류"); });
 });
 
@@ -541,6 +581,7 @@ function collectSwitch(switchId, username, password) {
 
 // ─── 수동 추가 모달 ──────────────────────────────────────────────
 document.getElementById("btn-add-manual").addEventListener("click", function() {
+  _editSwitchId = null;  // 신규 추가 모드
   ["add-name","add-ip","add-hostname","add-location"].forEach(function(id) {
     document.getElementById(id).value = "";
   });
@@ -551,8 +592,11 @@ document.getElementById("btn-add-manual").addEventListener("click", function() {
 document.getElementById("btn-add-confirm").addEventListener("click", function() {
   var ip = document.getElementById("add-ip").value.trim();
   if (!ip) { alert("IP를 입력하세요."); return; }
-  fetch("/api/switches/manual", {
-    method: "POST",
+  // 수정 모드(_editSwitchId)면 PUT, 신규면 POST
+  var url = _editSwitchId ? ("/api/switches/" + _editSwitchId) : "/api/switches/manual";
+  var method = _editSwitchId ? "PUT" : "POST";
+  fetch(url, {
+    method: method,
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({
       name: document.getElementById("add-name").value.trim(),
@@ -562,8 +606,8 @@ document.getElementById("btn-add-confirm").addEventListener("click", function() 
       location: document.getElementById("add-location").value.trim(),
     }),
   }).then(function(r) { return r.json(); }).then(function(data) {
-    if (data.ok) { closeModal("modal-add-switch"); pollState(); }
-    else alert(data.error || "추가 실패");
+    if (data.ok) { closeModal("modal-add-switch"); _editSwitchId = null; pollState(); }
+    else alert(data.error || "저장 실패");
   }).catch(function(e) { console.error(e); alert("서버 오류"); });
 });
 

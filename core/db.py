@@ -849,6 +849,42 @@ def get_switches(db_path):
         return [dict(row) for row in cursor.fetchall()]
 
 
+def update_switch(db_path, switch_id, name=None, ip=None, hostname=None, vendor=None, location=None):
+    """스위치 등록 정보 수정(제공된 필드만, 존재 컬럼만). 반환: 성공 여부."""
+    fields = {"name": name, "ip": ip, "hostname": hostname, "vendor": vendor, "location": location}
+    fields = {k: v for k, v in fields.items() if v is not None}
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM switches WHERE id=?", (switch_id,))
+            if not cur.fetchone():
+                return False
+            cols = {r[1] for r in cur.execute("PRAGMA table_info(switches)").fetchall()}
+            sets = {k: v for k, v in fields.items() if k in cols}
+            if sets:
+                assignments = ", ".join(f"{k}=?" for k in sets)
+                cur.execute(f"UPDATE switches SET {assignments} WHERE id=?",
+                            list(sets.values()) + [switch_id])
+            return True
+
+
+def update_firewall(db_path, firewall_id, name=None, vendor=None, host=None, port=None):
+    """방화벽 등록 정보 수정(제공된 필드만). 반환: 성공 여부."""
+    fields = {"name": name, "vendor": vendor, "host": host, "port": port}
+    fields = {k: v for k, v in fields.items() if v is not None}
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM firewalls WHERE id=?", (firewall_id,))
+            if not cur.fetchone():
+                return False
+            if fields:
+                assignments = ", ".join(f"{k}=?" for k in fields)
+                cur.execute(f"UPDATE firewalls SET {assignments} WHERE id=?",
+                            list(fields.values()) + [firewall_id])
+            return True
+
+
 def delete_switch(db_path, switch_id):
     """스위치 1대 삭제 + 관련 수집 데이터 정리. 반환: 삭제 여부(bool)."""
     with _db_lock:
