@@ -735,11 +735,22 @@ if __name__ == "__main__":
 
         log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=demo_mode)
 
-        # headless UX: 서버가 뜨면 자동으로 브라우저를 연다 (외부 바인딩이면 127.0.0.1로).
         open_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        url = f"http://{open_host}:{port}"
+
+        # 가시적 콘솔 배너 (console=True): 사용자가 실행 상태/접속 주소/종료법을 명확히 인지.
+        mode_label = "데모" if demo_mode else "운영"
+        print("=" * 56)
+        print("  NetDash 가 시작되었습니다.  (모드: " + mode_label + ")")
+        print("  접속 주소:  " + url)
+        print("  종료하려면 이 창을 닫거나 Ctrl+C 를 누르세요.")
+        print("=" * 56, flush=True)
+
+        # 편의: 서버가 뜨면 브라우저를 자동으로 연다. 콘솔이 떠 있으므로
+        # 백그라운드 은닉이 아니라 보조 기능이다(자동으로 안 열려도 위 주소로 접속).
         browser_thread = threading.Thread(
             target=_open_browser_when_ready,
-            args=(f"http://{open_host}:{port}", port),
+            args=(url, port),
             daemon=True,
         )
         browser_thread.start()

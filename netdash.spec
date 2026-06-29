@@ -34,7 +34,10 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # SEC: Disable console to prevent EDR evasion and debug output exposure
+    console=True,  # SEC: Visible console = transparent process. A hidden background
+                   # server that opens network ports + auto-launches a browser looks like
+                   # a backdoor/dropper to EDR/SmartScreen. A console window makes the
+                   # process visible and user-controllable (close window to stop).
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
