@@ -153,20 +153,25 @@ def test_security_headers_present(client):
 
 # Fix for WARNING: Missing Test for Production Mode Config Validation
 def test_production_mode_requires_api_token(tmp_path, monkeypatch, no_api_token_env):
-    """Production mode should raise ValueError during create_app if api_token is missing"""
+    """Production + externally reachable bind (0.0.0.0) must still require api_token.
+
+    (Loopback binds auto-generate a token — covered in test_config_loader.)
+    """
     monkeypatch.chdir(tmp_path)
 
-    # Create config.yaml WITHOUT api_token
+    # Create config.yaml WITHOUT api_token, externally reachable bind
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""flap_threshold: 3
 upload_max_mb: 16
 db_path: netdash.db
+app:
+  host: 0.0.0.0
 """)
 
     monkeypatch.setenv("NETDASH_CONFIG", str(config_file))
 
     # create_app in production mode should raise ValueError because api_token is missing
-    # (and no_api_token_env fixture removes the API_TOKEN environment variable)
+    # and the bind host is externally reachable (no_api_token_env removes API_TOKEN env var)
     with pytest.raises(ValueError, match="api_token is required in production mode"):
         create_app(demo_mode=False)
 
