@@ -874,9 +874,16 @@ def delete_firewall(db_path, firewall_id):
             cur.execute("SELECT id FROM firewalls WHERE id=?", (firewall_id,))
             if not cur.fetchone():
                 return False
-            cur.execute("DELETE FROM firewall_interfaces WHERE firewall_id=?", (firewall_id,))
-            cur.execute("DELETE FROM firewall_arp WHERE firewall_id=?", (firewall_id,))
-            cur.execute("DELETE FROM firewalls WHERE id=?", (firewall_id,))
+            # 관련 테이블이 구버전 DB에 없을 수 있으므로 각 DELETE를 개별 보호.
+            for sql in [
+                "DELETE FROM firewall_interfaces WHERE firewall_id=?",
+                "DELETE FROM firewall_arp WHERE firewall_id=?",
+                "DELETE FROM firewalls WHERE id=?",
+            ]:
+                try:
+                    cur.execute(sql, (firewall_id,))
+                except Exception:
+                    pass
             return True
 
 
