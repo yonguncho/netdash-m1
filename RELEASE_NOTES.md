@@ -1,5 +1,18 @@
 # NetDash 릴리스 노트
 
+## v3.2.0 (2026-06-29) — M10 방화벽 현황 (Palo Alto / Fortinet)
+
+**방화벽 모니터링 기능 추가**
+- 방화벽 장비(Fortinet FortiGate, Palo Alto PAN-OS)를 등록하고 **인터페이스 + ARP
+  (연결된 IP/MAC)** 를 수집해 "방화벽 현황" 탭에 표시합니다.
+- FortiGate: REST API(토큰/계정) 또는 SSH. Palo Alto: SSH CLI(netmiko).
+- 방화벽 추가 모달 + 수집(자격증명 입력) 모달 + 장비별 인터페이스/ARP 상세 뷰.
+- 자격증명은 수집 시점에만 사용하고 저장하지 않습니다.
+
+**보안**
+- 방화벽 host는 등록·수집 양 시점 모두 허용 대역(allowed_ip_ranges)으로 검증, port는
+  정수 1-65535로 강제(SSRF 방어, CWE-918). FortiGate 무검증 TLS는 경고 로깅.
+
 ## v3.1.4 (2026-06-29) — 실행 투명성 + 로컬 인증/UI 수정
 
 **보안·투명성 (콘솔 표시 전환)**

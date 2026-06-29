@@ -51,14 +51,25 @@
       </div>
     </div>
 
-    <!-- 방화벽 현황 탭 -->
+    <!-- 방화벽 현황 탭 (M10: Palo Alto / Fortinet) -->
     <div id="tab-firewall" class="tab-pane">
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">방화벽 현황</span>
+        <div class="pane-toolbar__actions">
+          <button id="btn-add-firewall" class="btn btn--primary">+ 방화벽 추가</button>
+        </div>
       </div>
-      <div class="coming-soon">
-        <p>방화벽 모니터링 기능은 다음 버전에서 제공됩니다.</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>이름</th><th>벤더</th><th>호스트</th><th>상태</th><th>인터페이스</th><th>ARP</th><th>작업</th></tr>
+          </thead>
+          <tbody id="firewall-table-body">
+            <tr><td colspan="7" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
+          </tbody>
+        </table>
       </div>
+      <div id="firewall-detail"></div>
     </div>
 
     <!-- 스위치 현황 탭 -->
@@ -168,6 +179,62 @@
       <div class="modal__footer">
         <button id="btn-add-confirm" class="btn btn--primary">추가</button>
         <button class="btn btn--ghost" data-close="modal-add-switch">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 방화벽 추가 모달 (M10) -->
+  <div id="modal-add-firewall" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box">
+      <div class="modal__header">
+        <span>방화벽 추가</span>
+        <button class="modal__close" data-close="modal-add-firewall">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label>이름</label>
+        <input id="fw-name" type="text" placeholder="FW-01">
+        <label>벤더 <span class="required">*</span></label>
+        <select id="fw-vendor">
+          <option value="fortigate">Fortinet (FortiGate)</option>
+          <option value="paloalto">Palo Alto (PAN-OS)</option>
+        </select>
+        <label>호스트 IP <span class="required">*</span></label>
+        <input id="fw-host" type="text" placeholder="10.0.0.1">
+        <label>포트 (선택)</label>
+        <input id="fw-port" type="text" placeholder="FortiGate 443 / PaloAlto 22">
+      </div>
+      <div class="modal__footer">
+        <button id="btn-fw-add-confirm" class="btn btn--primary">추가</button>
+        <button class="btn btn--ghost" data-close="modal-add-firewall">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 방화벽 수집 자격증명 모달 (M10) -->
+  <div id="modal-fw-collect" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box">
+      <div class="modal__header">
+        <span id="modal-fw-collect-title">방화벽 정보 수집</span>
+        <button class="modal__close" data-close="modal-fw-collect">&times;</button>
+      </div>
+      <div class="modal__body">
+        <div class="switch-info-box" id="modal-fw-collect-info"></div>
+        <p style="font-size:12px;color:#64748b" id="fw-cred-hint"></p>
+        <label>API 토큰 (FortiGate, 선택)</label>
+        <input id="fw-token" type="password" placeholder="Bearer 토큰" autocomplete="new-password">
+        <label>아이디</label>
+        <input id="fw-username" type="text" placeholder="admin" autocomplete="off">
+        <label>패스워드</label>
+        <input id="fw-password" type="password" placeholder="••••••••" autocomplete="new-password">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:8px">
+          <input id="fw-verify-ssl" type="checkbox"> TLS 인증서 검증 (FortiGate)
+        </label>
+      </div>
+      <div class="modal__footer">
+        <button id="btn-fw-collect" class="btn btn--primary">수집</button>
+        <button class="btn btn--ghost" data-close="modal-fw-collect">취소</button>
       </div>
     </div>
   </div>

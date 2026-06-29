@@ -21,6 +21,12 @@ def _make_session(host, port, token, username, password, verify_ssl):
     s = requests.Session()
     s.verify = verify_ssl
 
+    if not verify_ssl:
+        # 자체서명 인증서 환경 허용. 단 무검증 수집은 audit를 위해 경고로 남긴다.
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        logger.warning("fortigate TLS verification DISABLED host=%s", host)
+
     if token:
         s.headers["Authorization"] = f"Bearer {token}"
     elif username and password:

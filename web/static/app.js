@@ -17,6 +17,7 @@ document.querySelectorAll(".tab-nav__btn").forEach(btn => {
     if (btn.dataset.tab === "vlan") loadVlans();
     if (btn.dataset.tab === "switch") renderSwitchTable(_switches);
     if (btn.dataset.tab === "reconcile") loadReconcile();
+    if (btn.dataset.tab === "firewall") loadFirewalls();
   });
 });
 
@@ -298,6 +299,144 @@ function renderReconcile(data) {
       "<td>" + escHtml(h.actual_port || "-") + "</td></tr>";
   }).join("");
 }
+
+// ─── M10: 방화벽 현황 (Palo Alto / Fortinet) ─────────────────────
+var _fwStatusMeta = {
+  done: "ok", collecting: "collecting", failed: "critical", new: "new",
+};
+
+function loadFirewalls() {
+  fetch("/api/firewalls")
+    .then(function(r) { return r.json(); })
+    .then(function(data) { renderFirewalls(data.firewalls || []); })
+    .catch(function(e) { console.error("firewalls load:", e); });
+}
+
+function renderFirewalls(firewalls) {
+  var tbody = document.getElementById("firewall-table-body");
+  if (!tbody) return;
+  if (!firewalls.length) {
+    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>";
+    return;
+  }
+  tbody.innerHTML = firewalls.map(function(f) {
+    var sc = _fwStatusMeta[f.status] || "new";
+    var fjson = encodeURIComponent(JSON.stringify(f));
+    return "<tr><td>" + escHtml(f.name) + "</td>" +
+      "<td>" + escHtml(f.vendor) + "</td>" +
+      "<td><code>" + escHtml(f.host) + "</code></td>" +
+      "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(f.status || "new") + "</span></td>" +
+      "<td>" + (f.interface_count != null ? f.interface_count : "-") + "</td>" +
+      "<td>" + (f.arp_count != null ? f.arp_count : "-") + "</td>" +
+      "<td>" +
+        "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
+        "onclick=\"openFwCollect(JSON.parse(decodeURIComponent('" + fjson + "')))\">수집</button> " +
+        "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+        "onclick=\"showFirewallDetail(" + f.id + ")\">상세</button>" +
+      "</td></tr>";
+  }).join("");
+}
+
+function showFirewallDetail(fid) {
+  fetch("/api/firewalls/" + fid)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById("firewall-detail");
+      if (!el) return;
+      var ifaces = data.interfaces || [];
+      var arp = data.arp || [];
+      var ifHtml = ifaces.length
+        ? "<table class='data-table'><thead><tr><th>인터페이스</th><th>IP</th><th>마스크</th><th>VDOM/Zone</th></tr></thead><tbody>" +
+          ifaces.map(function(i) {
+            return "<tr><td>" + escHtml(i.name) + "</td><td>" + escHtml(i.ip || "-") + "</td><td>" +
+              escHtml(i.mask || "-") + "</td><td>" + escHtml(i.vdom_zone || "-") + "</td></tr>";
+          }).join("") + "</tbody></table>"
+        : "<p style='color:#64748b'>인터페이스 정보 없음</p>";
+      var arpHtml = arp.length
+        ? "<table class='data-table'><thead><tr><th>IP</th><th>MAC</th><th>인터페이스</th></tr></thead><tbody>" +
+          arp.map(function(a) {
+            return "<tr><td>" + escHtml(a.ip) + "</td><td><code>" + escHtml(a.mac) + "</code></td><td>" +
+              escHtml(a.interface || "-") + "</td></tr>";
+          }).join("") + "</tbody></table>"
+        : "<p style='color:#64748b'>ARP 정보 없음</p>";
+      el.innerHTML = "<h3 style='margin:16px 0 8px'>" + escHtml(data.firewall.name) +
+        " — 인터페이스</h3>" + ifHtml +
+        "<h3 style='margin:16px 0 8px'>ARP (연결된 IP)</h3>" + arpHtml;
+    })
+    .catch(function(e) { console.error("firewall detail:", e); });
+}
+
+var _selectedFirewall = null;
+
+function openFwCollect(fw) {
+  _selectedFirewall = fw;
+  document.getElementById("modal-fw-collect-title").textContent = fw.name + " 수집";
+  document.getElementById("modal-fw-collect-info").innerHTML =
+    "<strong>벤더:</strong> " + escHtml(fw.vendor) + "&nbsp;&nbsp;<strong>호스트:</strong> " + escHtml(fw.host);
+  document.getElementById("fw-cred-hint").textContent =
+    fw.vendor === "fortigate"
+      ? "FortiGate: API 토큰 또는 아이디/패스워드 중 하나를 입력하세요."
+      : "Palo Alto: 아이디/패스워드를 입력하세요.";
+  document.getElementById("fw-token").value = "";
+  document.getElementById("fw-username").value = "";
+  document.getElementById("fw-password").value = "";
+  openModal("modal-fw-collect");
+}
+
+document.getElementById("btn-add-firewall").addEventListener("click", function() {
+  document.getElementById("fw-name").value = "";
+  document.getElementById("fw-host").value = "";
+  document.getElementById("fw-port").value = "";
+  document.getElementById("fw-vendor").value = "fortigate";
+  openModal("modal-add-firewall");
+});
+
+document.getElementById("btn-fw-add-confirm").addEventListener("click", function() {
+  var host = document.getElementById("fw-host").value.trim();
+  if (!host) { alert("호스트 IP를 입력하세요."); return; }
+  var portVal = document.getElementById("fw-port").value.trim();
+  fetch("/api/firewalls", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      name: document.getElementById("fw-name").value.trim(),
+      vendor: document.getElementById("fw-vendor").value,
+      host: host,
+      port: portVal ? parseInt(portVal, 10) : null,
+    }),
+  }).then(function(r) { return r.json().then(function(d) { return {status: r.status, d: d}; }); })
+    .then(function(res) {
+      if (res.status === 201) { closeModal("modal-add-firewall"); loadFirewalls(); }
+      else alert(res.d.error || "추가 실패");
+    }).catch(function(e) { console.error(e); alert("서버 오류"); });
+});
+
+document.getElementById("btn-fw-collect").addEventListener("click", function() {
+  if (!_selectedFirewall) return;
+  var payload = {
+    token: document.getElementById("fw-token").value,
+    username: document.getElementById("fw-username").value.trim(),
+    password: document.getElementById("fw-password").value,
+    verify_ssl: document.getElementById("fw-verify-ssl").checked,
+  };
+  closeModal("modal-fw-collect");
+  var fid = _selectedFirewall.id;
+  fetch("/api/firewalls/" + fid + "/collect", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload),
+  }).then(function(r) { return r.json().then(function(d) { return {status: r.status, d: d}; }); })
+    .then(function(res) {
+      if (res.status === 200) {
+        alert("수집 완료 (인터페이스 " + res.d.interfaces + ", ARP " + res.d.arp + ")");
+        loadFirewalls();
+        showFirewallDetail(fid);
+      } else {
+        alert("수집 실패: " + (res.d.detail || res.d.error || ""));
+        loadFirewalls();
+      }
+    }).catch(function(e) { console.error(e); alert("서버 오류"); });
+});
 
 // ─── 계정 입력 모달 ──────────────────────────────────────────────
 var _selectedSwitch = null;

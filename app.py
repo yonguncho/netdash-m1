@@ -14,6 +14,7 @@ from pathlib import Path
 
 from config import get_config, reset_config
 from core import db, collector, correlator, credentials, report_builder
+from core import firewall as firewall_mod
 from core.demo import run_demo
 from core import flapping as flapping_mod
 from core.utils import log_event
@@ -569,6 +570,116 @@ def create_app(demo_mode=None):
             sanitized = collector._sanitize_error_msg(str(e))
             log_event("error", "report_error", error=sanitized)
             return jsonify({"error": "Internal server error"}), 500
+
+    # ── M10: 방화벽 (Palo Alto / Fortinet) ─────────────────────────
+    @app.route("/api/firewalls", methods=["GET"])
+    def list_firewalls_endpoint():
+        """방화벽 장비 목록 조회."""
+        try:
+            return jsonify({"firewalls": db.list_firewalls(db_path)})
+        except Exception as e:
+            log_event("error", "firewalls_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls", methods=["POST"])
+    @rate_limit("add_firewall", max_requests=10, window_seconds=60)
+    def add_firewall_endpoint():
+        """방화벽 장비 등록 (벤더: fortigate | paloalto)."""
+        try:
+            data = request.get_json() or {}
+            vendor = (data.get("vendor") or "").lower()
+            host = (data.get("host") or "").strip()
+            name = (data.get("name") or host).strip()
+            if vendor not in firewall_mod.SUPPORTED_VENDORS:
+                return jsonify({"error": "vendor must be fortigate or paloalto"}), 400
+            if not host:
+                return jsonify({"error": "host required"}), 400
+            # SSRF: 방화벽 host도 허용 대역 검증
+            try:
+                host = validate_ipv4(host, config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                log_event("warning", "firewall_blocked_invalid_ip", host=host, reason=str(e))
+                return jsonify({"error": f"host rejected: {e}"}), 400
+            # SSRF(CWE-918): port를 정수 1-65535로 강제 검증. SQLite는 타입 강제를
+            # 하지 않으므로 '443@evil' 같은 문자열이 저장되어 요청 URL에 주입되는 것을 차단.
+            port_raw = data.get("port")
+            port = None
+            if port_raw is not None and port_raw != "":
+                try:
+                    port = int(port_raw)
+                except (ValueError, TypeError):
+                    return jsonify({"error": "port must be an integer 1-65535"}), 400
+                if not (1 <= port <= 65535):
+                    return jsonify({"error": "port must be an integer 1-65535"}), 400
+            fid = db.save_firewall(db_path, name, vendor, host,
+                                   port, data.get("auth_type", "token"))
+            log_event("info", "firewall_added", firewall_id=fid, vendor=vendor)
+            return jsonify({"ok": True, "firewall_id": fid}), 201
+        except Exception as e:
+            log_event("error", "firewall_add_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls/<int:fid>", methods=["GET"])
+    def get_firewall_detail(fid):
+        """방화벽 상세 (인터페이스 + ARP)."""
+        try:
+            fw = db.get_firewall(db_path, fid)
+            if not fw:
+                return jsonify({"error": "not found"}), 404
+            return jsonify({
+                "firewall": fw,
+                "interfaces": db.get_firewall_interfaces(db_path, fid),
+                "arp": db.get_firewall_arp(db_path, fid),
+            })
+        except Exception as e:
+            log_event("error", "firewall_detail_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls/<int:fid>/collect", methods=["POST"])
+    @rate_limit("collect_firewall", max_requests=10, window_seconds=60)
+    def collect_firewall_endpoint(fid):
+        """방화벽에서 인터페이스 + ARP 수집 (자격증명은 요청 시점에만 사용)."""
+        fw = db.get_firewall(db_path, fid)
+        if not fw:
+            return jsonify({"error": "not found"}), 404
+        # SSRF(CWE-918): collect 시점에도 저장된 host/port를 재검증한다(스위치 collect와
+        # 동일 정책). legacy/seed 데이터나 우회 저장이 요청 대상이 되는 것을 차단.
+        try:
+            validate_ipv4(fw.get("host"), config.collector.get("allowed_ip_ranges"))
+        except ValueError as e:
+            db.set_firewall_status(db_path, fid, "failed")
+            log_event("warning", "firewall_collect_blocked_invalid_ip", firewall_id=fid, reason=str(e))
+            return jsonify({"error": f"firewall host rejected: {e}"}), 400
+        fw_port = fw.get("port")
+        if fw_port is not None and not (isinstance(fw_port, int) and 1 <= fw_port <= 65535):
+            db.set_firewall_status(db_path, fid, "failed")
+            return jsonify({"error": "stored firewall port is invalid"}), 400
+        data = request.get_json() or {}
+        token = data.get("token", "")
+        username = data.get("username", "")
+        password = data.get("password", "")
+        db.set_firewall_status(db_path, fid, "collecting")
+        try:
+            result = firewall_mod.collect_firewall(
+                fw["vendor"], fw["host"], fw.get("port"),
+                token=token, username=username, password=password,
+                verify_ssl=bool(data.get("verify_ssl", False)),
+            )
+            db.save_firewall_interfaces(db_path, fid, result["interfaces"])
+            db.save_firewall_arp(db_path, fid, result["arp"])
+            db.set_firewall_status(db_path, fid, "done")
+            log_event("info", "firewall_collected", firewall_id=fid,
+                      interfaces=len(result["interfaces"]), arp=len(result["arp"]))
+            return jsonify({"ok": True,
+                            "interfaces": len(result["interfaces"]),
+                            "arp": len(result["arp"])})
+        except Exception as e:
+            db.set_firewall_status(db_path, fid, "failed")
+            sanitized = collector._sanitize_error_msg(str(e))
+            log_event("error", "firewall_collect_error", firewall_id=fid, error=sanitized)
+            return jsonify({"error": "수집 실패", "detail": sanitized}), 502
+        finally:
+            token = username = password = None
 
     @app.route("/api/switches/<int:switch_id>/events", methods=["GET"])
     def get_switch_events(switch_id):

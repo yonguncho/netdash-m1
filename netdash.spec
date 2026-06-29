@@ -4,6 +4,9 @@ from PyInstaller.utils.hooks import collect_submodules
 hiddenimports = []
 hiddenimports += collect_submodules('flask')
 hiddenimports += collect_submodules('werkzeug')
+# M10: 방화벽 클라이언트가 함수 내부에서 lazy import하므로 명시 (FortiGate REST/SSH).
+hiddenimports += ['requests', 'paramiko']
+hiddenimports += collect_submodules('netmiko')
 
 
 a = Analysis(
