@@ -7,6 +7,7 @@ import argparse
 import tempfile
 import ipaddress
 import time
+import threading
 from functools import wraps
 from flask import Flask, jsonify, request, render_template, Response
 from pathlib import Path
@@ -679,36 +680,77 @@ def create_app(demo_mode=None):
     return app
 
 
+def _open_browser_when_ready(url, port):
+    """서버 기동(포트 LISTEN)을 확인한 뒤 기본 브라우저를 연다.
+
+    headless 웹앱(console=False)이라 더블클릭 시 화면이 안 뜨는 문제를 해결한다.
+    별도 스레드에서 포트를 폴링하므로 app.run()을 막지 않는다.
+    """
+    import socket
+    import time
+    import webbrowser
+
+    for _ in range(60):  # 최대 ~30초 대기
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.5)
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="NetDash - Network switch current status dashboard")
-    parser.add_argument("--demo", action="store_true", help="Run in demo mode with sample data")
-    args = parser.parse_args()
+    import traceback
+    try:
+        parser = argparse.ArgumentParser(description="NetDash - Network switch current status dashboard")
+        parser.add_argument("--demo", action="store_true", help="Run in demo mode with sample data")
+        args = parser.parse_args()
 
-    # CLI --demo flag takes precedence over DEMO_MODE environment variable
-    demo_mode = args.demo if args.demo else (os.getenv("DEMO_MODE", "").lower() == "true")
+        # CLI --demo flag takes precedence over DEMO_MODE environment variable
+        demo_mode = args.demo if args.demo else (os.getenv("DEMO_MODE", "").lower() == "true")
 
-    # Create config with determined demo_mode
-    reset_config()
-    config = get_config(demo_mode=demo_mode)
+        # Create config with determined demo_mode
+        reset_config()
+        config = get_config(demo_mode=demo_mode)
 
-    app = create_app(demo_mode=demo_mode)
+        app = create_app(demo_mode=demo_mode)
 
-    # CWE-306 fix: In production mode, API token MUST be configured
-    if not demo_mode and not config.api_token:
-        # Require API_TOKEN environment variable in production
-        api_token_env = os.getenv("API_TOKEN", "")
-        if not api_token_env:
-            log_event("error", "app_start_failed", reason="API_TOKEN required in production mode")
-            raise RuntimeError("API_TOKEN environment variable required in production mode")
-        # Update config with API token from environment
-        config.api_token = api_token_env
+        # CWE-306 fix: In production mode, API token MUST be configured.
+        # (config_loader auto-generates a token for loopback binds; this is a safety net.)
+        if not demo_mode and not config.api_token:
+            api_token_env = os.getenv("API_TOKEN", "")
+            if not api_token_env:
+                log_event("error", "app_start_failed", reason="API_TOKEN required in production mode")
+                raise RuntimeError("API_TOKEN environment variable required in production mode")
+            config.api_token = api_token_env
 
-    host = config.app.get("host", "127.0.0.1")
-    port = config.app.get("port", 8082)
-    # CRITICAL FIX (CWE-489): In production mode, force debug=False to prevent credential/stack-trace exposure.
-    # Do NOT allow debug override via environment variables in production (app.run() receives final value here).
-    debug = config.app.get("debug", False) and demo_mode
+        host = config.app.get("host", "127.0.0.1")
+        port = config.app.get("port", 8082)
+        # CRITICAL FIX (CWE-489): In production mode, force debug=False to prevent credential/stack-trace exposure.
+        # Do NOT allow debug override via environment variables in production (app.run() receives final value here).
+        debug = config.app.get("debug", False) and demo_mode
 
-    log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=demo_mode)
+        log_event("info", "app_start", host=host, port=port, debug=debug, demo_mode=demo_mode)
 
-    app.run(host=host, port=port, debug=debug)
+        # headless UX: 서버가 뜨면 자동으로 브라우저를 연다 (외부 바인딩이면 127.0.0.1로).
+        open_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        browser_thread = threading.Thread(
+            target=_open_browser_when_ready,
+            args=(f"http://{open_host}:{port}", port),
+            daemon=True,
+        )
+        browser_thread.start()
+
+        app.run(host=host, port=port, debug=debug)
+    except Exception:
+        # console=False(windowed) exe에서는 콘솔에 트레이스백이 보이지 않으므로
+        # 작업 디렉터리에 에러 로그를 남겨 진단을 가능하게 한다.
+        try:
+            with open("netdash_error.log", "w", encoding="utf-8") as _f:
+                _f.write(traceback.format_exc())
+        except OSError:
+            pass
+        raise

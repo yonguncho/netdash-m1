@@ -133,22 +133,34 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 
+# 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
+_acl_applied = set()
+
+
 def _restrict_db_permissions(db_path):
     """HARDENING (CWE-276): Restrict database file permissions to owner-only.
 
     Supports both Unix (chmod 0o600) and Windows (NTFS ACL via icacls).
+    동일 경로는 프로세스 수명 동안 1회만 적용한다.
     """
     import platform
     db_path_str = str(db_path)
+
+    if db_path_str in _acl_applied:
+        return
+    _acl_applied.add(db_path_str)
 
     if platform.system() == "Windows":
         # Windows: Use icacls to set owner-only ACL
         try:
             import subprocess
+            # CREATE_NO_WINDOW: console=False(windowed) exe에서 icacls가 콘솔 창을
+            # 깜빡 띄우는 것을 방지한다.
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             # Remove inheritance and set explicit owner-only permissions
             subprocess.run(
                 ["icacls", db_path_str, "/inheritance:r", "/grant:r", f"{os.getenv('USERNAME', 'SYSTEM')}:F"],
-                check=True, capture_output=True
+                check=True, capture_output=True, creationflags=creationflags
             )
             utils.log_event("info", "db_windows_acl_set", path=db_path_str)
         except Exception as e:
