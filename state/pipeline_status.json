@@ -26,11 +26,16 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.3.1",
+    "latest": "v3.4.0",
     "date": "2026-06-29",
-    "scope": "스위치 등록 DB오류(컬럼 누락) 수정 + 스위치/방화벽 삭제 기능",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.3.1",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.3.1/netdash.exe",
+    "scope": "M12 출발지 IP 바인딩(장비 ACL 통과) — 접근 IP 선택",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.4.0",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.4.0/netdash.exe",
+    "recent": [
+      "v3.3.1 스위치 등록 DB오류+삭제기능", "v3.3.2 방화벽 삭제 수정",
+      "v3.4.0 M12 출발지 IP 바인딩"
+    ],
+    "known_bug": "collector._ssh_collect: finally의 device.clear()가 retry 2회차에 빈 dict 생성 → retry 무효(pre-existing, retry 빈도 낮음). 추후 수정: device.clear()를 루프 밖으로 또는 conn_device만 정리.",
     "asset": "netdash.exe (29MB)",
     "repo_visibility": "PUBLIC (외부 다운로드 가능, 익명 200 검증)",
     "history": [
