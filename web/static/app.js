@@ -120,11 +120,34 @@ function loadDetailData(switchId) {
     fetch("/api/switches/" + switchId + "/events").then(r => r.json()),
   ]).then(function(results) {
     var detail = results[0], evts = results[1];
-    renderPortsTab(detail.ports || []);
-    renderMacsTab(detail.macs || []);
-    renderArpsTab(detail.arps || []);
+    var ports = detail.ports || [], macs = detail.macs || [], arps = detail.arps || [];
+    renderDetailSummary(ports, macs, arps);
+    renderPortsTab(ports);
+    renderMacsTab(macs);
+    renderArpsTab(arps);
     renderEventsTab(evts.events || []);
   }).catch(function(e) { console.error("detail load error:", e); });
+}
+
+function renderDetailSummary(ports, macs, arps) {
+  var el = document.getElementById("detail-summary");
+  if (!el) return;
+  var up = ports.filter(function(p) { return p.status === "up"; }).length;
+  var down = ports.length - up;
+  var vlanSet = {};
+  ports.forEach(function(p) { if (p.vlan != null) vlanSet[p.vlan] = 1; });
+  macs.forEach(function(m) { if (m.vlan != null) vlanSet[m.vlan] = 1; });
+  function stat(num, label, cls) {
+    return "<div class='stat " + (cls || "") + "'><div class='stat__num'>" + num +
+      "</div><div class='stat__label'>" + label + "</div></div>";
+  }
+  el.innerHTML =
+    stat(ports.length, "전체 포트") +
+    stat(up, "Up", "stat--up") +
+    stat(down, "Down", "stat--down") +
+    stat(macs.length, "MAC") +
+    stat(arps.length, "ARP") +
+    stat(Object.keys(vlanSet).length, "VLAN");
 }
 
 function renderPortsTab(ports) {
