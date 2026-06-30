@@ -190,6 +190,17 @@ CREATE TABLE IF NOT EXISTS vlan_names (
 )
 """
 
+# show logging/show log — 스위치별 최근 로그 + 탐지 이벤트
+CREATE_SWITCH_LOGS_TABLE = """
+CREATE TABLE IF NOT EXISTS switch_logs (
+    switch_id INTEGER PRIMARY KEY,
+    recent_lines TEXT,
+    events_json TEXT,
+    log_alert TEXT,
+    updated TEXT
+)
+"""
+
 
 # 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
 _acl_applied = set()
@@ -274,6 +285,7 @@ def init_schema(db_path):
                 CREATE_FIREWALL_ARP_TABLE,
                 CREATE_APP_SETTINGS_TABLE,
                 CREATE_VLAN_NAMES_TABLE,
+                CREATE_SWITCH_LOGS_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -434,6 +446,35 @@ def search_everywhere(db_path, query):
              lambda r: {"source": "장부 호스트", "ip": r["ip"], "label": r["hostname"] or "-",
                         "detail": "스위치 " + (r["sw"] or "-") + " · 포트 " + (r["port"] or "-")})
     return results
+
+
+def save_switch_logs(db_path, switch_id, recent_lines, events_json, log_alert):
+    """show logging 분석 결과 저장(스위치별 교체). recent_lines/events_json은 문자열."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """INSERT OR REPLACE INTO switch_logs
+                       (switch_id, recent_lines, events_json, log_alert, updated)
+                       VALUES (?, ?, ?, ?, datetime('now'))""",
+                    (switch_id, recent_lines, events_json, log_alert))
+            except Exception as e:
+                log_event("warning", "save_switch_logs_skipped", error=str(e))
+
+
+def get_switch_logs(db_path, switch_id):
+    """스위치 최근 로그/이벤트 반환(없으면 None)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT recent_lines, events_json, log_alert, updated FROM switch_logs WHERE switch_id=?",
+                (switch_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        except Exception:
+            return None
 
 
 def save_vlan_names(db_path, switch_id, vlans):

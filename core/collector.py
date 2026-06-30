@@ -218,6 +218,24 @@ def _worker_loop():
             if parsed_data.get("vlans"):
                 db.save_vlan_names(db_path, switch_id, parsed_data.get("vlans", []))
 
+            # show logging/show log 분석: 최근 15줄 + flapping/looping/err 탐지
+            log_out = outputs.get("logging", "")
+            if log_out:
+                try:
+                    import json as _json
+                    from . import log_analyzer
+                    la = log_analyzer.analyze(log_out, tail=15)
+                    db.save_switch_logs(
+                        db_path, switch_id, "\n".join(la["recent"]),
+                        _json.dumps(la["events"], ensure_ascii=False), la["alert"])
+                    if la["alert"] in ("warning", "critical"):
+                        utils.log_event("warning", "log_anomaly_detected",
+                                        switch_id=switch_id, alert=la["alert"],
+                                        events=len(la["events"]))
+                except Exception as e:
+                    utils.log_event("warning", "log_analyze_skipped",
+                                    error=_sanitize_error_msg(str(e)))
+
             db.set_switch_status(db_path, switch_id, "done")
             utils.log_event("info", "collect_done", switch_id=switch_id, snapshot_id=snapshot_id)
 

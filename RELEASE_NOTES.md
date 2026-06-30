@@ -1,5 +1,15 @@
 # NetDash 릴리스 노트
 
+## v3.13.0 (2026-06-30) — 시스템 로그 수집 + 이상 탐지
+
+- 수집 시 **show logging**(Cisco/Arista) / **show log**(Extreme)를 함께 읽어 상세 화면의
+  **"시스템 로그"** 탭에 **최근 15줄**을 표시합니다.
+- 로그에서 **이상 자동 탐지**:
+  - **플래핑**: 같은 포트 link up/down 반복(임계 3회+)
+  - **루프**: MAC flapping(포트 간 이동)·loop-guard·loopback·ELRP 등
+  - **오류**: err-disable 등
+- 탐지 시 유형별로 표시하고 경보 색으로 강조합니다.
+
 ## v3.12.0 (2026-06-30) — 포트 상태 세분화 + 속도/듀플렉스/타입
 
 - **포트 상태 구분**: `connected`(up) 외에 **notconnect / disabled / err-disabled**를

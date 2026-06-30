@@ -1077,12 +1077,29 @@ def create_app(demo_mode=None):
             arps = db.get_arp_entries_by_switch(db_path, switch_id)
             hosts = db.get_hosts_by_switch(db_path, switch_id)
 
+            # show logging 분석 결과(최근 로그 + 탐지 이벤트)
+            logs = None
+            raw_logs = db.get_switch_logs(db_path, switch_id)
+            if raw_logs:
+                import json as _json
+                try:
+                    events = _json.loads(raw_logs.get("events_json") or "[]")
+                except (ValueError, TypeError):
+                    events = []
+                logs = {
+                    "recent": (raw_logs.get("recent_lines") or "").split("\n"),
+                    "events": events,
+                    "alert": raw_logs.get("log_alert") or "none",
+                    "updated": raw_logs.get("updated"),
+                }
+
             return jsonify({
                 "switch": switch,
                 "ports": ports,
                 "macs": macs,
                 "arps": arps,
-                "hosts": hosts
+                "hosts": hosts,
+                "logs": logs
             })
         except Exception as e:
             # CWE-532 fix: Sanitize error messages to prevent credential/path exposure in logs

@@ -30,22 +30,26 @@ collector:
       mac: "show mac address-table"
       arp: "show ip arp"
       vlan: "show vlan brief"
+      logging: "show logging last 100"
     arista_eos:
       status: "show interfaces"
       description: "show interfaces description"
       mac: "show mac address-table dynamic"
       arp: "show ip arp"
+      logging: "show logging last 100"
     extreme_exos:
       status: "show ports"
       description: "show ports description"
       mac: "show mac-address"
       arp: "show arp"
+      logging: "show log"
     cisco_nxos:
       status: "show interface brief"
       description: "show interface description"
       mac: "show mac address-table dynamic"
       arp: "show ip arp"
       vlan: "show vlan brief"
+      logging: "show logging last 100"
 
 correlator:
   uplink_mac_threshold: 4

@@ -193,8 +193,40 @@ function loadDetailData(switchId) {
     renderPortsTab(ports);
     renderMacsTab(macs);
     renderArpsTab(arps);
+    renderSyslogTab(detail.logs);
     renderEventsTab(evts.events || []);
   }).catch(function(e) { console.error("detail load error:", e); });
+}
+
+function renderSyslogTab(logs) {
+  var el = document.getElementById("dtab-syslog");
+  if (!el) return;
+  if (!logs) {
+    el.innerHTML = "<p style='color:#64748b'>수집된 시스템 로그가 없습니다. (show logging / show log)</p>";
+    return;
+  }
+  var html = "";
+  var events = logs.events || [];
+  if (events.length) {
+    var alertColor = logs.alert === "critical" ? "#b91c1c" : (logs.alert === "warning" ? "#b45309" : "#64748b");
+    html += "<div style='margin-bottom:10px'><strong style='color:" + alertColor + "'>⚠ 탐지된 이벤트 " +
+      events.length + "건</strong></div>";
+    html += "<table class='data-table'><thead><tr><th>유형</th><th>내용</th></tr></thead><tbody>";
+    html += events.map(function(e) {
+      var typeLabel = e.type === "looping" ? "🔁 루프" : (e.type === "flapping" ? "📶 플래핑" : "⚠ 오류");
+      return "<tr><td>" + typeLabel + "</td><td><code style='font-size:12px'>" + escHtml(e.detail || "") + "</code></td></tr>";
+    }).join("");
+    html += "</tbody></table>";
+  } else {
+    html += "<p style='color:#15803d;margin-bottom:10px'>✓ 특이 이벤트(플래핑/루프/오류) 미탐지</p>";
+  }
+  // 최근 로그 원문
+  html += "<h4 style='margin:14px 0 6px'>최근 로그</h4>" +
+    "<pre style='background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;font-size:12px;" +
+    "overflow:auto;max-height:320px;white-space:pre-wrap'>" +
+    escHtml((logs.recent || []).join("\n") || "(없음)") + "</pre>";
+  if (logs.updated) html += "<p style='font-size:11px;color:#64748b;margin-top:6px'>수집: " + escHtml(logs.updated) + "</p>";
+  el.innerHTML = html;
 }
 
 function renderDetailSummary(ports, macs, arps) {
