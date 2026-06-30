@@ -549,11 +549,23 @@ function renderFacilityTable(hosts) {
     return;
   }
   tbody.innerHTML = hosts.map(function (h) {
-    var sw = h.switch_name ? escHtml(h.switch_name) : "<span style='color:#b45309'>미상</span>";
+    // direct=1 직접연결(물리 액세스 포트), 0 업링크 경유(Po/Vl·트렁크 — 직접연결 불확실)
+    var direct = (h.direct === undefined || h.direct === null) ? 1 : h.direct;
+    var sw, badge = "";
+    if (!h.switch_name) {
+      sw = "<span style='color:#b45309'>미상</span>";
+    } else if (direct) {
+      sw = escHtml(h.switch_name);
+      badge = " <span class='status-badge status-badge--ok'>직접</span>";
+    } else {
+      sw = escHtml(h.switch_name);
+      badge = " <span class='status-badge status-badge--new' title='업링크/트렁크(Po·Vl·트렁크) 경유로만 관측 — 직접 연결 스위치가 아닐 수 있음'>간접·업링크</span>";
+    }
+    var via = h.via ? "<div style='color:#94a3b8;font-size:11px'>그 외 관측: " + escHtml(h.via) + "</div>" : "";
     var on = h.online ? "<span class='status-badge status-badge--ok'>온라인</span>"
                       : "<span class='status-badge status-badge--new'>오프라인</span>";
     return "<tr><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
-      "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + sw + "</td><td>" +
+      "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + sw + badge + via + "</td><td>" +
       escHtml(h.port || "-") + "</td><td>" + on + "</td></tr>";
   }).join("");
 }

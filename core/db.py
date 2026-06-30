@@ -215,6 +215,8 @@ CREATE TABLE IF NOT EXISTS facility_hosts (
     switch_name TEXT,
     port TEXT,
     online INTEGER DEFAULT 0,
+    direct INTEGER DEFAULT 1,
+    via TEXT,
     updated TEXT,
     UNIQUE(subnet, ip)
 )
@@ -341,6 +343,15 @@ def init_schema(db_path):
                 cursor.execute("ALTER TABLE firewalls ADD COLUMN cred_blob TEXT")
             except Exception:
                 pass
+            # 설비 현황: 직접연결 여부(direct) + 업링크 경유 관측(via) 컬럼 마이그레이션
+            for col, definition in [
+                ("direct", "INTEGER DEFAULT 1"),
+                ("via", "TEXT"),
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE facility_hosts ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
             conn.commit()
             utils.log_event("info", "schema_created", tables=8)
 
@@ -521,8 +532,32 @@ def get_mac_to_switchport(db_path):
     return mapping
 
 
+def get_port_mac_counts(db_path):
+    """최신 스냅샷 기준 (switch_id, 소문자 포트) → 해당 포트에서 학습된 MAC 수.
+
+    설비 직접연결 판별용: 액세스(엣지) 포트는 보통 MAC 1~소수,
+    트렁크/업링크 포트는 다수 MAC을 학습한다.
+    Returns: {(switch_id, port_lower): count}
+    """
+    counts = {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """SELECT switch_id, port, COUNT(*) AS c
+                   FROM mac_entries
+                   WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id)
+                   GROUP BY switch_id, port""")
+            for r in cur.fetchall():
+                counts[(r["switch_id"], (r["port"] or "").lower())] = r["c"]
+        except Exception:
+            pass
+    return counts
+
+
 def save_facility_hosts(db_path, hosts):
-    """설비 현황 저장(subnet+ip 기준 upsert). hosts=[{subnet,ip,mac,switch_id,switch_name,port,online}]."""
+    """설비 현황 저장(subnet+ip 기준 upsert).
+    hosts=[{subnet,ip,mac,switch_id,switch_name,port,online,direct,via}]."""
     with _db_lock:
         with get_db(db_path) as conn:
             cur = conn.cursor()
@@ -530,10 +565,11 @@ def save_facility_hosts(db_path, hosts):
                 try:
                     cur.execute(
                         """INSERT OR REPLACE INTO facility_hosts
-                           (subnet, ip, mac, switch_id, switch_name, port, online, updated)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                           (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, updated)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
                         (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
-                         h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0))
+                         h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
+                         1 if h.get("direct", 1) else 0, h.get("via")))
                 except Exception as e:
                     log_event("warning", "save_facility_skipped", error=str(e))
 

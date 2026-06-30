@@ -32,6 +32,52 @@ def _set(**kw):
         _status.update(kw)
 
 
+# 논리(가상) 인터페이스 접두어 — 이 포트의 MAC은 업링크/트렁크를 경유한 것이라
+# 설비가 "직접" 붙은 곳이 아니다. (Po=포트채널, Vl=VLAN/SVI, Lo=루프백, Tu=터널, ae=Juniper 본딩)
+_LOGICAL_PREFIXES = ("po", "port-channel", "vl", "vlan", "lo", "loopback",
+                     "tu", "tunnel", "ae", "bundle", "irb")
+# 물리 액세스 포트로 인정할 MAC 수 상한. 이보다 많으면 트렁크/업링크로 간주(직접연결 불확실).
+_EDGE_MAC_MAX = 4
+
+
+def _is_physical_port(port):
+    """Gi/Te/Fa/Eth 등 물리 포트면 True, Po/Vl 등 논리 포트면 False."""
+    p = (port or "").strip().lower()
+    if not p:
+        return False
+    return not p.startswith(_LOGICAL_PREFIXES)
+
+
+def _choose_attachment(matches, port_counts):
+    """여러 스위치 MAC 테이블 매치 중 설비가 '직접' 붙은 스위치/포트를 선택.
+
+    matches: [(switch_id, switch_name, port), ...]
+    port_counts: {(switch_id, port소문자): 해당 포트 MAC 수}
+    반환: (switch_id, switch_name, port, direct(bool), via(list[str]))
+      - direct=True : 물리 액세스 포트(소수 MAC)에서 관측 → 직접 연결로 확신
+      - direct=False: 논리 포트(Po/Vl)뿐이거나 트렁크(다수 MAC)만 → 업링크 경유, 직접연결 불확실
+      - via: 선택된 곳을 제외한 나머지 관측 위치("SW:port") 목록(진단용)
+    """
+    if not matches:
+        return None, None, None, False, []
+
+    def _cnt(m):
+        return port_counts.get((m[0], (m[2] or "").lower()), 9999)
+
+    physical = [m for m in matches if _is_physical_port(m[2])]
+    if physical:
+        # MAC 수가 가장 적은 물리 포트 = 액세스(엣지) 포트
+        best = min(physical, key=_cnt)
+        direct = _cnt(best) <= _EDGE_MAC_MAX
+    else:
+        # 물리 포트 관측이 없음 → 업링크(Po/Vl) 경유로만 보임 → 직접연결 미확인
+        best = matches[0]
+        direct = False
+
+    via = ["%s:%s" % (m[1], m[2]) for m in matches if m is not best]
+    return best[0], best[1], best[2], direct, via
+
+
 def _parse_connected_subnets(route_out, iface_out):
     """show ip route connected / show interface 출력에서 directly-connected 대역 추출.
 
@@ -150,21 +196,20 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
 
     arp = cisco_ios._parse_arps(arp_out, switch_id)  # [{ip, mac, interface}]
     mac_map = db.get_mac_to_switchport(db_path)       # {mac: [(sid, sname, port)]}
+    port_counts = db.get_port_mac_counts(db_path)     # {(sid, port_lower): MAC수}
 
-    # IP별로 1행: MAC이 여러 스위치 포트에 보이면 합쳐서 보존(다중 손실 방지).
+    # IP별 1행: 같은 MAC이 여러 스위치/포트에 보일 때 "직접 연결된 스위치"를 가려낸다.
+    #  - Po(포트채널)·Vl(VLAN/SVI) 등 논리 인터페이스는 업링크 경유 → 직접 연결 아님
+    #  - 물리 포트 중 MAC 수가 가장 적은 포트 = 액세스(엣지) 포트 → 직접 연결
     by_ip = {}
     for a in arp:
         mac = (a.get("mac") or "").lower()
         matches = mac_map.get(mac, [])
-        if matches:
-            port_str = "; ".join("%s:%s" % (sn, p) for (sid, sn, p) in matches)
-            sw_str = "; ".join(sorted(set(sn for (sid, sn, p) in matches)))
-            by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
-                              "switch_id": matches[0][0], "switch_name": sw_str,
-                              "port": port_str, "online": 1}
-        else:
-            by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
-                              "switch_id": None, "switch_name": None, "port": None, "online": 1}
+        sid, sname, port, direct, via = _choose_attachment(matches, port_counts)
+        by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
+                          "switch_id": sid, "switch_name": sname, "port": port,
+                          "online": 1, "direct": 1 if direct else 0,
+                          "via": "; ".join(via) if via else None}
 
     saved_hosts = list(by_ip.values())
     db.clear_facility_subnet(db_path, subnet)  # 재수집 시 기존 대역 결과 비우기
