@@ -166,12 +166,13 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
             by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
                               "switch_id": None, "switch_name": None, "port": None, "online": 1}
 
+    saved_hosts = list(by_ip.values())
     db.clear_facility_subnet(db_path, subnet)  # 재수집 시 기존 대역 결과 비우기
-    db.save_facility_hosts(db_path, list(by_ip.values()))
+    db.save_facility_hosts(db_path, saved_hosts)
     utils.log_event("info", "facility_collected", subnet=subnet,
-                    pinged=len(ips), arp=len(arp), saved=len(hosts))
-    _set(running=False, message="완료(%d개 설비)" % len(hosts))
-    return {"subnet": subnet, "pinged": len(ips), "arp": len(arp), "saved": len(hosts)}
+                    pinged=len(ips), arp=len(arp), saved=len(saved_hosts))
+    _set(running=False, message="완료(%d개 설비)" % len(saved_hosts))
+    return {"subnet": subnet, "pinged": len(ips), "arp": len(arp), "saved": len(saved_hosts)}
 
 
 def start_collect_band(db_path, switch_id, subnet, username, password, source_ip=None):

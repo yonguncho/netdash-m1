@@ -35,6 +35,25 @@ def test_search_empty_query(temp_db):
     assert db.search_everywhere(temp_db, "") == []
 
 
+def test_search_facility_host_by_ip(temp_db):
+    """수집된 설비 IP 검색 — facility_hosts 포함 (회귀: 이전엔 0건)."""
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.92.174.0/23", "ip": "10.92.174.200", "mac": "00:50:56:a1:b2:c3",
+         "switch_id": 1, "switch_name": "SW12", "port": "Gi1/0/10", "online": 1}])
+    res = db.search_everywhere(temp_db, "10.92.174.200")
+    assert any(r["source"] == "설비 현황" and r["ip"] == "10.92.174.200" for r in res)
+
+
+def test_search_by_mac(temp_db):
+    """MAC 부분 검색 — MAC 테이블 + 설비 모두 (회귀: 이전엔 0건)."""
+    sid = db.save_switch(temp_db, "SW12", "10.0.0.12", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sid)
+    db.save_mac_entries(temp_db, snap, sid, [
+        {"switch_id": sid, "vlan": 100, "mac": "00:50:56:a1:b2:c3", "port": "Gi1/0/10", "type": "dynamic"}])
+    res = db.search_everywhere(temp_db, "b2:c3")
+    assert any(r["source"] == "MAC 테이블" for r in res)
+
+
 def test_api_search_returns_results(client):
     client.post("/api/switches/manual", json={"ip": "10.2.2.2", "name": "SW-X", "vendor": "cisco"})
     r = client.get("/api/search?ip=10.2.2.2")

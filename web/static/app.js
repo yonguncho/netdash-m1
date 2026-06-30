@@ -1033,7 +1033,7 @@ function doSearch() {
           }).join("") + "</tbody></table>";
       } else {
         body.innerHTML = "<p style='color:#64748b'><strong>" + escHtml(ip) +
-          "</strong> 검색 결과가 없습니다. (등록 스위치·방화벽 IP, 수집된 ARP, 장부에서 찾습니다 — 수집 전이면 ARP 결과가 없습니다)</p>";
+          "</strong> 검색 결과가 없습니다. (등록 스위치·방화벽, 수집 ARP/MAC 테이블, 설비 현황, 장부에서 IP·이름·MAC으로 찾습니다 — 수집 전이면 ARP/MAC/설비 결과가 없습니다)</p>";
       }
       openModal("modal-search-result");
     })
