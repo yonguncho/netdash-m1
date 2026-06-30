@@ -43,17 +43,39 @@ def _make_session(host, port, token, username, password, verify_ssl, source_ip=N
     return s, base
 
 
+# FortiOS 버전별 ARP monitor 엔드포인트(상위 우선 시도). 7.x는 network/arp,
+# 일부 빌드는 router/arp. 모두 404면 REST에 ARP monitor가 없는 버전이다.
+_ARP_PATHS = (
+    "/api/v2/monitor/network/arp",
+    "/api/v2/monitor/router/arp",
+)
+
+
 def get_arp_table(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
     """FortiGate 전체 ARP 테이블 수집.
 
     Returns: [{"ip", "mac", "interface"}, ...]
     """
     s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
-    r = s.get(f"{base}/api/v2/monitor/router/arp", timeout=15)
-    r.raise_for_status()
+
+    data = None
+    tried = []
+    for path in _ARP_PATHS:
+        r = s.get(f"{base}{path}", timeout=15)
+        tried.append(f"{path}={r.status_code}")
+        if r.status_code == 404:
+            continue  # 이 버전엔 없는 경로 → 다음 후보
+        r.raise_for_status()
+        data = r.json()
+        break
+
+    if data is None:
+        # 어떤 ARP monitor 경로도 없음 → 빈 결과. 계정이 있으면 SSH(get system arp) 권장.
+        logger.warning("fortigate ARP REST endpoint not found host=%s tried=%s", host, ",".join(tried))
+        return []
 
     entries = []
-    for e in r.json().get("results", []):
+    for e in data.get("results", []):
         ip = (e.get("ip") or "").strip()
         mac = (e.get("mac") or "").strip().upper()
         iface = (e.get("interface") or "").strip()
