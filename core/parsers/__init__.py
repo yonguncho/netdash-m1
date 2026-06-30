@@ -1,6 +1,6 @@
 ﻿"""Parser factory for switch output parsing."""
 
-from . import cisco_ios, arista_eos, extreme_exos
+from . import cisco_ios, arista_eos, extreme_exos, cisco_nxos
 
 
 def get_parser(vendor: str):
@@ -9,6 +9,7 @@ def get_parser(vendor: str):
         "cisco_ios": cisco_ios,
         "arista_eos": arista_eos,
         "extreme_exos": extreme_exos,
+        "cisco_nxos": cisco_nxos,
     }
 
     if vendor not in parsers:

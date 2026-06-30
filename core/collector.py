@@ -37,6 +37,8 @@ _collector_lock = threading.Lock()
 # "unsupported device_type" 오류가 났다 → 동일 정규화 적용.
 _NETMIKO_VENDOR = {
     "cisco": "cisco_ios",
+    "nexus": "cisco_nxos",
+    "cisco_nexus": "cisco_nxos",
     "arista": "arista_eos",
     "extreme": "extreme_exos",
     "juniper": "juniper_junos",

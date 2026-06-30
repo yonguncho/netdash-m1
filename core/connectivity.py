@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 _NETMIKO_TYPE = {
     "cisco": "cisco_ios", "arista": "arista_eos", "extreme": "extreme_exos",
     "juniper": "juniper_junos", "paloalto": "paloalto_panos",
+    "nexus": "cisco_nxos", "cisco_nexus": "cisco_nxos",
     "cisco_ios": "cisco_ios", "arista_eos": "arista_eos", "extreme_exos": "extreme_exos",
-    "paloalto_panos": "paloalto_panos",
+    "cisco_nxos": "cisco_nxos", "paloalto_panos": "paloalto_panos",
 }
 
 

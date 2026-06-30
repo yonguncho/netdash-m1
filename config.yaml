@@ -39,6 +39,11 @@ collector:
       description: "show ports description"
       mac: "show mac-address"
       arp: "show arp"
+    cisco_nxos:
+      status: "show interface brief"
+      description: "show interface description"
+      mac: "show mac address-table dynamic"
+      arp: "show ip arp"
 
 correlator:
   uplink_mac_threshold: 4

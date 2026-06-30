@@ -1,5 +1,15 @@
 # NetDash 릴리스 노트
 
+## v3.7.0 (2026-06-30) — Cisco Nexus(NX-OS) 지원 추가
+
+- 증상: Cisco Nexus 스위치 수집 시 MAC만 수집되고 포트/ARP는 `% Invalid command at
+  '^' marker.`로 빈 결과(수집은 "정상"으로 표시).
+- 원인: NX-OS는 IOS와 명령이 다른데(IOS용 `show interfaces`/`show arp` 사용) NX-OS
+  벤더가 없어 IOS 명령을 보냈습니다.
+- 수정: **Cisco Nexus(NX-OS) 벤더 추가** — 올바른 명령(`show interface brief` /
+  `show interface description` / `show ip arp`)과 NX-OS 전용 파서(dot 형식 MAC 등).
+- 스위치 수동 추가 벤더 목록에 **"Cisco Nexus (NX-OS)"**가 추가됐습니다.
+
 ## v3.6.1 (2026-06-30) — 자격증명 복호화 버그 수정
 
 - 증상: 저장된 API 토큰으로 수집 시 "token 또는 username/password 중 하나 필요" 오류.
