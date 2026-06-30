@@ -19,6 +19,15 @@ def parse(outputs, switch_id):
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
 
+    # CRC/입출력 오류 병합 (show interfaces 상세 = Cisco와 동일 형식, 파서 재사용)
+    from . import cisco_ios
+    errors = cisco_ios.parse_interface_errors(outputs.get("errors", "") or outputs.get("status", ""))
+    for p in ports:
+        e = errors.get(cisco_ios._abbr(p["name"]), {})
+        p["crc_errors"] = e.get("crc", 0)
+        p["in_errors"] = e.get("in_errors", 0)
+        p["out_errors"] = e.get("out_errors", 0)
+
     return {
         "ports": ports,
         "macs": macs,

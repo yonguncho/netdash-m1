@@ -1,5 +1,13 @@
 # NetDash 릴리스 노트
 
+## v3.15.0 (2026-06-30) — 벤더 확장(로그 탐지 전벤더 + Arista CRC/errors)
+
+- **시스템 로그 이상 탐지를 전 벤더 적용**: Cisco IOS/IOS-XE·Arista(`show logging`),
+  Extreme(`show log`), NX-OS 모두 수집·탐지(플래핑/루프/오류). 범용 분석기라 Extreme
+  "Port x:y link down/up" 같은 형식도 인식합니다.
+- **Arista CRC/입출력 오류** 병합(`show interfaces` 상세, 약어 통일로 정확 매칭).
+- (NX-OS errors·벤더별 포트 상태 세분화는 실장비 출력 확인 후 보강 예정.)
+
 ## v3.14.0 (2026-06-30) — 포트 CRC/입출력 오류 모니터링
 
 - 수집 시 `show interfaces`(전체 상세) 1회로 **모든 포트의 CRC·input/output errors**를

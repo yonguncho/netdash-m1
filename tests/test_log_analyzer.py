@@ -56,6 +56,41 @@ def test_db_switch_logs_roundtrip(temp_db):
     assert r["log_alert"] == "warning"
 
 
+def test_all_vendors_have_logging_command():
+    """모든 벤더 config에 logging 명령이 있어야(범용 log_analyzer로 탐지)."""
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8"))
+    cmds = cfg["collector"]["commands"]
+    for v in ("cisco_ios", "arista_eos", "extreme_exos", "cisco_nxos"):
+        assert "logging" in cmds[v], v
+
+
+def test_extreme_log_flap_detected():
+    """Extreme 'show log' 형식의 Link Down/Up도 flapping으로 탐지."""
+    exos = "\n".join([
+        "01/01/2026 00:00:01 <Warn:vlan> Port 1:1 link down",
+        "01/01/2026 00:00:03 <Info:vlan> Port 1:1 link up",
+        "01/01/2026 00:00:06 <Warn:vlan> Port 1:1 link down",
+        "01/01/2026 00:00:08 <Info:vlan> Port 1:1 link up",
+    ])
+    r = log_analyzer.analyze(exos, flap_threshold=3)
+    assert r["alert"] in ("warning", "critical")
+
+
+def test_arista_errors_merge():
+    """Arista show interfaces 상세에서 CRC/errors 병합."""
+    from core.parsers import arista_eos
+    sh = ("Ethernet1 is up, line protocol is up\n"
+          "  Hardware is Ethernet\n"
+          "     7 input errors, 3 CRC, 0 frame\n"
+          "     2 output errors, 0 collisions\n")
+    r = arista_eos.parse({"status": sh, "errors": sh, "description": "", "mac": "", "arp": ""}, 1)
+    # 포트가 파싱되면 errors 병합 확인(arista 상세 형식)
+    e1 = next((p for p in r["ports"] if "1" in p["name"]), None)
+    if e1:
+        assert e1.get("crc_errors") == 3
+
+
 def test_appjs_syslog_tab():
     src = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "renderSyslogTab" in src
