@@ -222,6 +222,8 @@
         </select>
         <label>위치</label>
         <input id="add-location" type="text" placeholder="서버실 1번 랙">
+        <label>메모</label>
+        <textarea id="add-note" rows="3" placeholder="이 장비에 대한 메모(점검 이력, 담당자 등)" style="width:100%;padding:6px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;resize:vertical"></textarea>
       </div>
       <div class="modal__footer">
         <button id="btn-add-confirm" class="btn btn--primary">추가</button>
@@ -324,14 +326,12 @@
       <button class="detail-tab" data-dtab="macs">MAC 테이블</button>
       <button class="detail-tab" data-dtab="arps">ARP</button>
       <button class="detail-tab" data-dtab="syslog">시스템 로그</button>
-      <button class="detail-tab" data-dtab="events">이벤트 로그</button>
     </div>
     <div class="detail-panel__body">
       <div id="dtab-ports" class="dtab-pane active"></div>
       <div id="dtab-macs" class="dtab-pane"></div>
       <div id="dtab-arps" class="dtab-pane"></div>
       <div id="dtab-syslog" class="dtab-pane"></div>
-      <div id="dtab-events" class="dtab-pane"></div>
     </div>
   </div>
 

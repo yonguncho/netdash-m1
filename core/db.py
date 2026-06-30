@@ -297,6 +297,7 @@ def init_schema(db_path):
                 ("location", "TEXT"),
                 ("alert", "TEXT DEFAULT 'none'"),
                 ("subnet", "TEXT"),
+                ("note", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")
@@ -362,6 +363,8 @@ def import_switches_bulk(db_path, rows):
                     "hostname": row.get("hostname", ""),
                     "vendor": row.get("vendor", "unknown"),
                     "location": row.get("location", ""),
+                    "subnet": row.get("subnet", ""),
+                    "note": row.get("note", ""),
                 }
                 # 실제 테이블에 존재하는 컬럼만 사용 (키는 하드코딩 → SQL 인젝션 없음)
                 vals = {k: v for k, v in candidate.items() if k in existing_cols}
@@ -625,7 +628,7 @@ def get_switch(db_path, switch_id):
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, name, ip, hostname, vendor, model, location, status, alert, last_collected FROM switches WHERE id = ?",
+            "SELECT id, name, ip, hostname, vendor, model, location, status, alert, note, last_collected FROM switches WHERE id = ?",
             (switch_id,)
         )
         row = cursor.fetchone()
@@ -1013,9 +1016,13 @@ def get_switch_credential(db_path, switch_id):
         return row["cred_blob"] if row and row["cred_blob"] else None
 
 
-def update_switch(db_path, switch_id, name=None, ip=None, hostname=None, vendor=None, location=None):
-    """스위치 등록 정보 수정(제공된 필드만, 존재 컬럼만). 반환: 성공 여부."""
-    fields = {"name": name, "ip": ip, "hostname": hostname, "vendor": vendor, "location": location}
+def update_switch(db_path, switch_id, name=None, ip=None, hostname=None, vendor=None, location=None, note=None):
+    """스위치 등록 정보 수정(제공된 필드만, 존재 컬럼만). 반환: 성공 여부.
+
+    note는 빈 문자열("")도 유효(메모 비우기). None이면 변경하지 않음.
+    """
+    fields = {"name": name, "ip": ip, "hostname": hostname, "vendor": vendor,
+              "location": location, "note": note}
     fields = {k: v for k, v in fields.items() if v is not None}
     with _db_lock:
         with get_db(db_path) as conn:

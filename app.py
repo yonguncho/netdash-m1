@@ -277,7 +277,8 @@ def create_app(demo_mode=None):
             if not name:
                 name = hostname or validated_ip
 
-            rows = [{"name": name, "ip": validated_ip, "hostname": hostname, "vendor": vendor, "location": location}]
+            rows = [{"name": name, "ip": validated_ip, "hostname": hostname,
+                     "vendor": vendor, "location": location, "note": data.get("note", "")}]
             ids = db.import_switches_bulk(db_path, rows)
             return jsonify({"ok": True, "switch_id": ids[0]}), 201
         except Exception as e:
@@ -716,6 +717,7 @@ def create_app(demo_mode=None):
                     hostname=(data.get("hostname") or "").strip() or None,
                     vendor=(data.get("vendor") or "").strip() or None,
                     location=(data.get("location") or "").strip() or None,
+                    note=(data.get("note") if "note" in data else None),
                 )
             except sqlite3.IntegrityError:
                 return jsonify({"error": "이미 사용 중인 이름 또는 IP입니다"}), 409

@@ -184,19 +184,16 @@ function closeDetailPanel() {
 }
 
 function loadDetailData(switchId) {
-  Promise.all([
-    fetch("/api/switches/" + switchId + "/detail").then(r => r.json()),
-    fetch("/api/switches/" + switchId + "/events").then(r => r.json()),
-  ]).then(function(results) {
-    var detail = results[0], evts = results[1];
-    var ports = detail.ports || [], macs = detail.macs || [], arps = detail.arps || [];
-    renderDetailSummary(ports, macs, arps);
-    renderPortsTab(ports);
-    renderMacsTab(macs);
-    renderArpsTab(arps);
-    renderSyslogTab(detail.logs);
-    renderEventsTab(evts.events || []);
-  }).catch(function(e) { console.error("detail load error:", e); });
+  fetch("/api/switches/" + switchId + "/detail")
+    .then(function(r) { return r.json(); })
+    .then(function(detail) {
+      var ports = detail.ports || [], macs = detail.macs || [], arps = detail.arps || [];
+      renderDetailSummary(ports, macs, arps);
+      renderPortsTab(ports);
+      renderMacsTab(macs);
+      renderArpsTab(arps);
+      renderSyslogTab(detail.logs);
+    }).catch(function(e) { console.error("detail load error:", e); });
 }
 
 function renderSyslogTab(logs) {
@@ -409,6 +406,7 @@ function swCardHTML(sw) {
     (sw.hostname ? "<span>" + escHtml(sw.hostname) + "</span>" : "") +
     (sw.tps_location ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" : "") +
     (sw.location ? "<span style='font-size:10px'>" + escHtml(sw.location) + "</span>" : "") +
+    (sw.note ? "<span style='font-size:10px;color:#9a3412'>📝 " + escHtml(sw.note) + "</span>" : "") +
     "</div>" +
     "<div class='sw-card__status'>" +
     "<span class='dot " + dotClass + "'></span>" +
@@ -466,6 +464,7 @@ function editSwitch(sw) {
   document.getElementById("add-hostname").value = sw.hostname || "";
   document.getElementById("add-vendor").value = sw.vendor || "unknown";
   document.getElementById("add-location").value = sw.location || "";
+  document.getElementById("add-note").value = sw.note || "";
   openModal("modal-add-switch");
 }
 
@@ -848,7 +847,7 @@ function collectSwitch(switchId, username, password, persist) {
 // ─── 수동 추가 모달 ──────────────────────────────────────────────
 document.getElementById("btn-add-manual").addEventListener("click", function() {
   _editSwitchId = null;  // 신규 추가 모드
-  ["add-name","add-ip","add-hostname","add-location"].forEach(function(id) {
+  ["add-name","add-ip","add-hostname","add-location","add-note"].forEach(function(id) {
     document.getElementById(id).value = "";
   });
   document.getElementById("add-vendor").value = "unknown";
@@ -870,6 +869,7 @@ document.getElementById("btn-add-confirm").addEventListener("click", function() 
       hostname: document.getElementById("add-hostname").value.trim(),
       vendor: document.getElementById("add-vendor").value,
       location: document.getElementById("add-location").value.trim(),
+      note: document.getElementById("add-note").value,
     }),
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.ok) { closeModal("modal-add-switch"); _editSwitchId = null; pollState(); }
