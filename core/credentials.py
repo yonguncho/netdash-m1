@@ -128,9 +128,9 @@ def decrypt_credential(cred_blob):
 
     try:
         encrypted_bytes = base64.b64decode(cred_blob)
-        decrypted_bytes = win32crypt.CryptUnprotectData(encrypted_bytes, None, None, None, 0)
-        plaintext = decrypted_bytes[0].decode("utf-8")
-        return plaintext
+        # CryptUnprotectData → (설명문자열, 데이터바이트). 데이터는 [1]이다([0]은 빈 설명).
+        decrypted = win32crypt.CryptUnprotectData(encrypted_bytes, None, None, None, 0)
+        return decrypted[1].decode("utf-8")
     except Exception as e:
         logger.error(f"[DPAPI] Decryption error: {e}")
         return None
@@ -158,8 +158,9 @@ def decrypt_text(blob):
         return None
     try:
         enc = base64.b64decode(blob)
+        # CryptUnprotectData → (설명문자열, 데이터바이트). 데이터는 [1]이다([0]은 빈 설명).
         dec = win32crypt.CryptUnprotectData(enc, None, None, None, 0)
-        return dec[0].decode("utf-8")
+        return dec[1].decode("utf-8")
     except Exception as e:
         logger.error(f"[DPAPI] decrypt_text error: {e}")
         return None

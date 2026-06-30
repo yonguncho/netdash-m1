@@ -25,3 +25,17 @@ def test_appjs_collect_direct_reuse():
     src = APP_JS.read_text(encoding="utf-8")
     assert "collectFirewallDirect" in src
     assert "has_credential" in src
+
+
+def test_dpapi_encrypt_decrypt_roundtrip():
+    """DPAPI 왕복: CryptUnprotectData 반환 [1](데이터)을 써야 복호화 성공.
+
+    과거 [0](빈 설명)을 decode해 'str has no attribute decode'로 복호화가 실패했다.
+    """
+    from core import credentials
+    if not credentials.IS_WINDOWS:
+        import pytest
+        pytest.skip("non-Windows")
+    blob = credentials.encrypt_text("secret-token-123")
+    assert blob is not None
+    assert credentials.decrypt_text(blob) == "secret-token-123"
