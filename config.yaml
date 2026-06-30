@@ -25,10 +25,11 @@ collector:
 
   commands:
     cisco_ios:
-      status: "show interfaces"
-      description: "show interfaces description"
-      mac: "show mac address-table dynamic"
-      arp: "show arp"
+      status: "show interface status"
+      description: "show interface description"
+      mac: "show mac address-table"
+      arp: "show ip arp"
+      vlan: "show vlan brief"
     arista_eos:
       status: "show interfaces"
       description: "show interfaces description"

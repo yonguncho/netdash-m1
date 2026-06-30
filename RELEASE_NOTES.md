@@ -1,5 +1,16 @@
 # NetDash 릴리스 노트
 
+## v3.7.1 (2026-06-30) — Cisco IOS/IOS-XE 수집 개선 + MAC 파싱 버그 수정
+
+- **MAC 파싱 버그 수정(중요)**: 기존 IOS 파서가 colon 형식 MAC만 인식하고 Cisco의
+  dot 형식(`0050.56a1.b2c3`)을 놓쳐, mac 출력이 있어도 0건으로 저장되던 버그를
+  수정했습니다.
+- **명령 세트를 IOS-XE/Catalyst 표준으로 통일**: `show interface status` /
+  `show interface description` / `show mac address-table` / `show ip arp`. 포트
+  상태·VLAN·속도·설명을 안정적으로 수집합니다(`show interface status` 테이블 파싱).
+- IOS-XE/Catalyst 혼재 환경 호환성이 향상됩니다. (Nexus 장비는 "Cisco Nexus(NX-OS)"
+  벤더로 등록하세요.)
+
 ## v3.7.0 (2026-06-30) — Cisco Nexus(NX-OS) 지원 추가
 
 - 증상: Cisco Nexus 스위치 수집 시 MAC만 수집되고 포트/ARP는 `% Invalid command at
