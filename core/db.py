@@ -520,6 +520,16 @@ def save_facility_hosts(db_path, hosts):
                     log_event("warning", "save_facility_skipped", error=str(e))
 
 
+def clear_facility_subnet(db_path, subnet):
+    """재수집 전 해당 대역의 기존 설비 결과 삭제(중복 누적 방지)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute("DELETE FROM facility_hosts WHERE subnet=?", (subnet,))
+            except Exception:
+                pass
+
+
 def get_facility_hosts(db_path):
     """설비 현황 전체 조회(대역·IP 정렬)."""
     with get_db(db_path) as conn:

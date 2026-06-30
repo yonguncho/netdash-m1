@@ -151,20 +151,23 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     arp = cisco_ios._parse_arps(arp_out, switch_id)  # [{ip, mac, interface}]
     mac_map = db.get_mac_to_switchport(db_path)       # {mac: [(sid, sname, port)]}
 
-    hosts = []
+    # IP별로 1행: MAC이 여러 스위치 포트에 보이면 합쳐서 보존(다중 손실 방지).
+    by_ip = {}
     for a in arp:
         mac = (a.get("mac") or "").lower()
         matches = mac_map.get(mac, [])
         if matches:
-            for (sid, sname, port) in matches:
-                hosts.append({"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
-                              "switch_id": sid, "switch_name": sname, "port": port, "online": 1})
+            port_str = "; ".join("%s:%s" % (sn, p) for (sid, sn, p) in matches)
+            sw_str = "; ".join(sorted(set(sn for (sid, sn, p) in matches)))
+            by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
+                              "switch_id": matches[0][0], "switch_name": sw_str,
+                              "port": port_str, "online": 1}
         else:
-            # ARP엔 있으나 어느 스위치 포트인지 미상(해당 스위치 MAC 미수집 등)
-            hosts.append({"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
-                          "switch_id": None, "switch_name": None, "port": None, "online": 1})
+            by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
+                              "switch_id": None, "switch_name": None, "port": None, "online": 1}
 
-    db.save_facility_hosts(db_path, hosts)
+    db.clear_facility_subnet(db_path, subnet)  # 재수집 시 기존 대역 결과 비우기
+    db.save_facility_hosts(db_path, list(by_ip.values()))
     utils.log_event("info", "facility_collected", subnet=subnet,
                     pinged=len(ips), arp=len(arp), saved=len(hosts))
     _set(running=False, message="완료(%d개 설비)" % len(hosts))
@@ -172,10 +175,15 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
 
 
 def start_collect_band(db_path, switch_id, subnet, username, password, source_ip=None):
-    """백그라운드 스레드로 대역 수집 시작. 이미 실행 중이면 거부."""
+    """백그라운드 스레드로 대역 수집 시작. 이미 실행 중이면 거부.
+
+    TOCTOU 방지: running 플래그를 같은 lock 구간에서 즉시 True로 set한다.
+    """
     with _lock:
         if _status["running"]:
             return False
+        _status["running"] = True
+        _status["message"] = "시작 중"
     def _run():
         try:
             collect_band(db_path, switch_id, subnet, username, password, source_ip)

@@ -54,6 +54,27 @@ def test_facility_list_endpoint(client):
     assert "hosts" in b and "status" in b
 
 
+def test_clear_facility_subnet(temp_db):
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.1.0.0/24", "ip": "10.1.0.5", "mac": "aa", "online": 1},
+        {"subnet": "10.2.0.0/24", "ip": "10.2.0.5", "mac": "bb", "online": 1}])
+    db.clear_facility_subnet(temp_db, "10.1.0.0/24")
+    hosts = db.get_facility_hosts(temp_db)
+    subs = {h["subnet"] for h in hosts}
+    assert "10.1.0.0/24" not in subs
+    assert "10.2.0.0/24" in subs
+
+
+def test_start_collect_sets_running_under_lock():
+    """TOCTOU: 두 번째 호출은 즉시 거부(첫 호출이 lock 내 running=True)."""
+    from core import facility
+    facility._status["running"] = False
+    # 실제 스레드는 SSH 시도 후 곧 실패하지만, 두 번째 즉시 호출은 running=True로 거부
+    facility._status["running"] = True
+    assert facility.start_collect_band(":memory:", 1, "10.0.0.0/30", "u", "p") is False
+    facility._status["running"] = False
+
+
 def test_parse_connected_subnets():
     from core import facility
     route = (
