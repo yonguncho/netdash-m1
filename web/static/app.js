@@ -21,7 +21,11 @@ document.addEventListener("click", function (e) {
     case "detail-switch": e.stopPropagation(); openDetailPanel(obj); break;
     case "edit-switch": editSwitch(obj); break;
     case "delete-switch": deleteSwitch(nid); break;
-    case "collect-fw": openFwCollect(obj); break;
+    case "collect-fw":
+      // 저장된 자격증명이 있으면 모달 없이 바로 수집(매번 토큰 재입력 방지)
+      if (obj && obj.has_credential) collectFirewallDirect(obj.id);
+      else openFwCollect(obj);
+      break;
     case "detail-fw": showFirewallDetail(nid); break;
     case "edit-fw": editFirewall(obj); break;
     case "delete-fw": deleteFirewall(nid); break;
@@ -443,6 +447,22 @@ function showFirewallDetail(fid) {
 }
 
 var _selectedFirewall = null;
+
+function collectFirewallDirect(fid) {
+  // 저장된 자격증명으로 즉시 수집(빈 body → 서버가 저장된 토큰 사용)
+  var url = "/api/firewalls/" + fid + "/collect";
+  fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
+    .then(function(r) { return r.json().then(function(d) { return {status: r.status, d: d}; }); })
+    .then(function(res) {
+      if (res.status === 200) {
+        alert("수집 완료 (인터페이스 " + res.d.interfaces + ", ARP " + res.d.arp + ")");
+      } else {
+        alert("수집 실패: " + (res.d.detail || res.d.error || ""));
+      }
+      loadFirewalls();
+    })
+    .catch(function(e) { console.error(e); alert("서버 오류"); });
+}
 
 function openFwCollect(fw) {
   _selectedFirewall = fw;

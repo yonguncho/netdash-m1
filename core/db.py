@@ -966,7 +966,13 @@ def list_firewalls(db_path):
     with get_db(db_path) as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM firewalls ORDER BY id LIMIT 10000")
-        return [_strip_cred(dict(r)) for r in cur.fetchall()]
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            # 저장된 자격증명 보유 여부만 노출(blob 자체는 _strip_cred로 제거).
+            d["has_credential"] = bool(d.get("cred_blob"))
+            rows.append(_strip_cred(d))
+        return rows
 
 
 def get_firewall(db_path, firewall_id):

@@ -853,6 +853,7 @@ def create_app(demo_mode=None):
         token = data.get("token", "")
         username = data.get("username", "")
         password = data.get("password", "")
+        provided = bool(token or username or password)  # 요청에 cred 직접 입력 여부
         # M11: 요청에 자격증명이 없으면 저장된(암호화) 자격증명을 복호화해 사용.
         if not (token or username or password):
             blob = db.get_firewall_credential(db_path, fid)
@@ -877,6 +878,16 @@ def create_app(demo_mode=None):
             )
             db.save_firewall_interfaces(db_path, fid, result["interfaces"])
             db.save_firewall_arp(db_path, fid, result["arp"])
+            # 수집 모달에서 처음 입력한 자격증명은 저장해 다음 수집부터 재입력 불필요.
+            if provided:
+                try:
+                    import json as _json
+                    blob = credentials.encrypt_text(_json.dumps(
+                        {"token": token, "username": username, "password": password}))
+                    if blob:
+                        db.save_firewall_credential(db_path, fid, blob)
+                except Exception:
+                    pass  # 저장 실패는 수집 성공에 영향 없음
             db.set_firewall_status(db_path, fid, "done")
             log_event("info", "firewall_collected", firewall_id=fid,
                       interfaces=len(result["interfaces"]), arp=len(result["arp"]))
