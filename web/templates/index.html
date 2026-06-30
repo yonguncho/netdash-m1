@@ -42,9 +42,11 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">TPS 스위치 현황판</span>
         <div class="pane-toolbar__actions">
+          <input id="loc-filter-dash" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
           <button id="btn-add-manual" class="btn btn--secondary">+ 수동 추가</button>
           <button id="btn-import-excel" class="btn btn--primary">엑셀 가져오기</button>
           <button id="btn-export-report" class="btn btn--secondary">보고서 내보내기</button>
+          <button id="btn-auto-collect" class="btn btn--secondary">⏱ 자동 수집</button>
           <input id="excel-file-input" type="file" accept=".xlsx,.xls" style="display:none">
         </div>
       </div>
@@ -79,6 +81,9 @@
     <div id="tab-switch" class="tab-pane">
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">스위치 현황 상세</span>
+        <div class="pane-toolbar__actions">
+          <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+        </div>
       </div>
       <div id="switch-table-wrap" class="table-wrap">
         <table class="data-table">
@@ -133,6 +138,33 @@
   </main>
 
   <!-- 계정 입력 모달 -->
+  <!-- M14: 자동 수집 설정 모달 -->
+  <div id="modal-auto-collect" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box">
+      <div class="modal__header">
+        <span>자동 수집 설정</span>
+        <button class="btn btn--ghost" data-close="modal-auto-collect">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
+          <input id="ac-enabled" type="checkbox"> 자동 수집 사용
+        </label>
+        <label style="margin-top:12px">수집 시각 (HH:MM, 쉼표로 구분)</label>
+        <input id="ac-times" type="text" placeholder="06:00,18:00">
+        <p style="margin-top:8px;color:#64748b;font-size:12px">
+          예) 하루 2회: <code>06:00,18:00</code><br>
+          저장된 자격증명이 있는 스위치/방화벽만 자동 수집됩니다(수집 시 "계정 저장" 체크).
+          문제 발생 시 언제든 수동 수집도 가능합니다.
+        </p>
+      </div>
+      <div class="modal__footer">
+        <button id="btn-ac-save" class="btn btn--primary">저장</button>
+        <button class="btn btn--ghost" data-close="modal-auto-collect">취소</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-credential" class="modal hidden">
     <div class="modal__backdrop"></div>
     <div class="modal__box">
@@ -146,6 +178,10 @@
         <input id="cred-username" type="text" placeholder="admin" autocomplete="off">
         <label>패스워드</label>
         <input id="cred-password" type="password" placeholder="••••••••" autocomplete="new-password">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;cursor:pointer">
+          <input id="cred-persist" type="checkbox">
+          이 계정을 저장해 자동 수집에 사용 (암호화 저장, 화면 비노출)
+        </label>
         <div id="cred-test-result" style="margin-top:8px;font-size:12px"></div>
       </div>
       <div class="modal__footer">

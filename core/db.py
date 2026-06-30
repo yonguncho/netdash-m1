@@ -941,11 +941,23 @@ def list_hosts(db_path):
 
 
 def get_switches(db_path):
-    """M7: 전체 스위치 조회 (reconcile의 switch_id→name 매핑용)."""
+    """M7: 전체 스위치 조회 (reconcile의 switch_id→name 매핑용).
+
+    SECURITY: cred_blob(DPAPI 자격증명)은 조회/UI로 절대 노출하지 않는다.
+    """
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM switches ORDER BY id LIMIT 100000")
-        return [dict(row) for row in cursor.fetchall()]
+        return [_strip_cred(dict(row)) for row in cursor.fetchall()]
+
+
+def get_switch_credential(db_path, switch_id):
+    """자동 수집용: 저장된 스위치 자격증명 blob 반환(없으면 None)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT cred_blob FROM switches WHERE id=?", (switch_id,))
+        row = cur.fetchone()
+        return row["cred_blob"] if row and row["cred_blob"] else None
 
 
 def update_switch(db_path, switch_id, name=None, ip=None, hostname=None, vendor=None, location=None):

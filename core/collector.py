@@ -362,3 +362,64 @@ def _parse_outputs(vendor, outputs, switch_id):
     except ValueError:
         utils.log_event("warning", "parser_not_found", vendor=vendor)
         return {"ports": [], "macs": [], "arps": []}
+
+
+def collect_all_registered(db_path):
+    """자동 수집: 저장된 자격증명이 있는 모든 스위치/방화벽을 일괄 수집.
+
+    스위치는 워커 큐로(비동기), 방화벽은 즉시 수집. 자격증명 없는 장비는 건너뜀.
+    Returns: {"switches": n, "firewalls": n}
+    """
+    import json as _json
+    result = {"switches": 0, "firewalls": 0}
+
+    # 스위치: 저장된 계정 복호화 → 큐잉(기존 워커가 수집)
+    try:
+        for sw in db.get_switches(db_path):
+            blob = db.get_switch_credential(db_path, sw["id"])
+            if not blob:
+                continue
+            # 스위치 자격증명은 "username|password" 형식(credentials.encrypt_credential)
+            dec = credentials.decrypt_credential(blob)
+            if not dec or "|" not in dec:
+                continue
+            username, password = dec.split("|", 1)
+            collect_switch(db_path, sw["id"], username, password)
+            result["switches"] += 1
+    except Exception as e:
+        utils.log_event("error", "auto_collect_switches_error", error=_sanitize_error_msg(str(e)))
+
+    # 방화벽: 저장된 토큰/계정으로 즉시 수집
+    try:
+        from . import firewall as firewall_mod
+        src = db.get_setting(db_path, "source_ip") or None
+        for fw in db.list_firewalls(db_path):
+            blob = db.get_firewall_credential(db_path, fw["id"])
+            if not blob:
+                continue
+            dec = credentials.decrypt_text(blob)
+            if not dec:
+                continue
+            try:
+                saved = _json.loads(dec)
+            except (ValueError, TypeError):
+                continue
+            try:
+                db.set_firewall_status(db_path, fw["id"], "collecting")
+                r = firewall_mod.collect_firewall(
+                    fw["vendor"], fw["host"], fw.get("port"),
+                    token=saved.get("token", ""), username=saved.get("username", ""),
+                    password=saved.get("password", ""), source_ip=src)
+                db.save_firewall_interfaces(db_path, fw["id"], r["interfaces"])
+                db.save_firewall_arp(db_path, fw["id"], r["arp"])
+                db.set_firewall_status(db_path, fw["id"], "done")
+                result["firewalls"] += 1
+            except Exception as e:
+                db.set_firewall_status(db_path, fw["id"], "failed")
+                utils.log_event("error", "auto_collect_fw_error", firewall_id=fw["id"],
+                                error=_sanitize_error_msg(str(e)))
+    except Exception as e:
+        utils.log_event("error", "auto_collect_firewalls_error", error=_sanitize_error_msg(str(e)))
+
+    utils.log_event("info", "auto_collect_done", switches=result["switches"], firewalls=result["firewalls"])
+    return result

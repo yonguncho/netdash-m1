@@ -35,7 +35,14 @@ document.addEventListener("click", function (e) {
 // ─── 테이블 검색 위임 (.tbl-search → data-target tbody 행 필터) ──────
 document.addEventListener("input", function (e) {
   var inp = e.target;
-  if (!inp.classList || !inp.classList.contains("tbl-search")) return;
+  if (!inp.classList) return;
+  // 위치 필터(현황판/스위치 현황) → 카드/표 재렌더
+  if (inp.classList.contains("loc-filter")) {
+    renderSwitchGrid(_switches);
+    renderSwitchTable(_switches);
+    return;
+  }
+  if (!inp.classList.contains("tbl-search")) return;
   var tbody = document.getElementById(inp.getAttribute("data-target"));
   if (!tbody) return;
   var q = inp.value.trim().toLowerCase();
@@ -43,6 +50,39 @@ document.addEventListener("input", function (e) {
     tr.style.display = (!q || tr.textContent.toLowerCase().indexOf(q) >= 0) ? "" : "none";
   });
 });
+
+// 위치 필터 적용 헬퍼(현황판=loc-filter-dash, 스위치현황=loc-filter-sw)
+function _applyLocFilter(list, inputId) {
+  var el = document.getElementById(inputId);
+  var q = el ? el.value.trim().toLowerCase() : "";
+  if (!q) return list;
+  return list.filter(function (s) { return (s.location || "").toLowerCase().indexOf(q) >= 0; });
+}
+
+// ─── M14: 자동 수집 설정 ─────────────────────────────────────────
+(function () {
+  var btn = document.getElementById("btn-auto-collect");
+  if (btn) btn.addEventListener("click", function () {
+    fetch("/api/settings/auto_collect").then(function (r) { return r.json(); }).then(function (d) {
+      document.getElementById("ac-enabled").checked = !!d.enabled;
+      document.getElementById("ac-times").value = d.times || "06:00,18:00";
+      openModal("modal-auto-collect");
+    }).catch(function (e) { console.error(e); });
+  });
+  var save = document.getElementById("btn-ac-save");
+  if (save) save.addEventListener("click", function () {
+    var body = {
+      enabled: document.getElementById("ac-enabled").checked,
+      times: document.getElementById("ac-times").value,
+    };
+    fetch("/api/settings/auto_collect", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) { closeModal("modal-auto-collect"); alert("자동 수집 설정이 저장되었습니다. (시각: " + res.times + ")"); }
+      else alert(res.error || "저장 실패");
+    }).catch(function (e) { console.error(e); alert("서버 오류"); });
+  });
+})();
 
 // 테이블 검색창 HTML 생성 헬퍼
 function _searchBox(targetId, placeholder) {
@@ -195,9 +235,10 @@ function renderEventsTab(events) {
 
 // ─── 스위치 카드 렌더링 ──────────────────────────────────────────
 function renderSwitchGrid(switches) {
+  switches = _applyLocFilter(switches, "loc-filter-dash");
   var grid = document.getElementById("switch-grid");
   if (!switches.length) {
-    grid.innerHTML = "<p class='placeholder'>스위치를 추가하거나 엑셀 파일을 가져오세요.</p>";
+    grid.innerHTML = "<p class='placeholder'>표시할 스위치가 없습니다. (위치 필터를 확인하거나 스위치를 추가하세요)</p>";
     return;
   }
   grid.innerHTML = switches.map(swCardHTML).join("");
@@ -273,6 +314,7 @@ function renderMiniPorts(sw) {
 
 // ─── 스위치 테이블 (스위치 현황 탭) ─────────────────────────────
 function renderSwitchTable(switches) {
+  switches = _applyLocFilter(switches, "loc-filter-sw");
   var tbody = document.getElementById("switch-table-body");
   tbody.innerHTML = switches.map(function(sw) {
     var sc = swStatusClass(sw);
@@ -635,8 +677,9 @@ document.getElementById("btn-collect").addEventListener("click", function() {
   var username = document.getElementById("cred-username").value.trim();
   var password = document.getElementById("cred-password").value;
   if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
+  var persist = document.getElementById("cred-persist");
   closeModal("modal-credential");
-  collectSwitch(_selectedSwitch.id, username, password);
+  collectSwitch(_selectedSwitch.id, username, password, persist && persist.checked);
 });
 
 // ─── M11: 연결 테스트 (수집 전 선검증) ───────────────────────────
@@ -667,11 +710,11 @@ document.getElementById("btn-test-switch").addEventListener("click", function() 
     .catch(function(e) { console.error(e); document.getElementById("cred-test-result").textContent = "테스트 오류"; });
 });
 
-function collectSwitch(switchId, username, password) {
+function collectSwitch(switchId, username, password, persist) {
   fetch("/api/switches/" + switchId + "/collect", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({username: username, password: password}),
+    body: JSON.stringify({username: username, password: password, persist: !!persist}),
   }).then(function(r) { return r.json(); }).then(function() {
     pollState();
   }).catch(function(e) { console.error("collect error:", e); });

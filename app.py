@@ -148,6 +148,12 @@ def create_app(demo_mode=None):
     db.validate_schema(db_path)
 
     collector.init_collector()
+    # M14: 하루 N회 자동 수집 스케줄러 시작(설정으로 on/off)
+    try:
+        from core import scheduler
+        scheduler.start_scheduler(db_path)
+    except Exception as e:
+        log_event("warning", "scheduler_start_failed", error=str(e))
 
     # Load demo data in demo mode
     if config.app.get("demo_mode"):
@@ -736,6 +742,42 @@ def create_app(demo_mode=None):
             return jsonify(info)
         except Exception as e:
             log_event("error", "netinfo_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/settings/auto_collect", methods=["GET"])
+    def get_auto_collect():
+        """M14: 자동 수집 설정 조회."""
+        try:
+            return jsonify({
+                "enabled": db.get_setting(db_path, "auto_collect_enabled", "0") == "1",
+                "times": db.get_setting(db_path, "auto_collect_times", "06:00,18:00") or "06:00,18:00",
+            })
+        except Exception as e:
+            log_event("error", "get_auto_collect_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/settings/auto_collect", methods=["POST"])
+    @rate_limit("set_auto_collect", max_requests=20, window_seconds=60)
+    def set_auto_collect():
+        """M14: 자동 수집 on/off + 시각(HH:MM,HH:MM) 설정."""
+        try:
+            data = request.get_json() or {}
+            enabled = "1" if data.get("enabled") else "0"
+            raw = (data.get("times") or "").strip()
+            # HH:MM 형식만 허용(쉼표 구분, 최대 6개)
+            valid = []
+            for t in raw.split(","):
+                t = t.strip()
+                if re.match(r"^([01]\d|2[0-3]):[0-5]\d$", t):
+                    valid.append(t)
+            if not valid:
+                valid = ["06:00", "18:00"]
+            db.set_setting(db_path, "auto_collect_enabled", enabled)
+            db.set_setting(db_path, "auto_collect_times", ",".join(valid[:6]))
+            log_event("info", "auto_collect_set", enabled=enabled, times=",".join(valid[:6]))
+            return jsonify({"ok": True, "enabled": enabled == "1", "times": ",".join(valid[:6])})
+        except Exception as e:
+            log_event("error", "set_auto_collect_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/settings/source_ip", methods=["POST"])
