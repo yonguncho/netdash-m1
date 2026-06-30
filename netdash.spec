@@ -5,6 +5,8 @@ hiddenimports = []
 hiddenimports += collect_submodules('flask')
 hiddenimports += collect_submodules('werkzeug')
 hiddenimports += ['requests']
+# DPAPI 자격증명 암호화(win32crypt). 미번들 시 암호화가 None→자격증명 저장 실패.
+hiddenimports += ['win32crypt', 'win32api', 'pywintypes']
 
 datas = [('web', 'web'), ('config.yaml', '.'), ('fixtures', 'fixtures')]
 binaries = []
