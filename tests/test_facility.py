@@ -54,10 +54,35 @@ def test_facility_list_endpoint(client):
     assert "hosts" in b and "status" in b
 
 
+def test_parse_connected_subnets():
+    from core import facility
+    route = (
+        "Codes: C - connected, S - static\n"
+        "C    10.92.174.0/23 is directly connected, Vlan100\n"
+        "C    10.92.176.0/24 is directly connected, Vlan200\n"
+        "C    10.0.0.0/8 is directly connected, Vlan1\n")  # /8 너무 큼 → 제외
+    iface = "Vlan100 is up\n  Internet address is 10.92.174.11/23\n"
+    subnets = facility._parse_connected_subnets(route, iface)
+    assert "10.92.174.0/23" in subnets
+    assert "10.92.176.0/24" in subnets
+    assert "10.0.0.0/8" not in subnets   # /22 초과 제외
+    # 중복 제거(route+iface 같은 대역)
+    assert subnets.count("10.92.174.0/23") == 1
+
+
+def test_facility_detect_validates(client):
+    sid = client.post("/api/switches/manual", json={"ip": "10.0.0.11", "name": "GW", "vendor": "cisco"}).get_json()["switch_id"]
+    # 계정 없음 → 400
+    r = client.post("/api/facility/detect-subnets", json={"switch_id": sid})
+    assert r.status_code == 400
+
+
 def test_facility_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'data-tab="facility"' in html
     assert 'id="facility-table-body"' in html
+    assert 'id="btn-fac-detect"' in html
     js = APP_JS.read_text(encoding="utf-8")
     assert "function loadFacility" in js
     assert "/api/facility/collect" in js
+    assert "/api/facility/detect-subnets" in js

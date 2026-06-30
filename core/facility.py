@@ -11,6 +11,7 @@
 성능: ping은 1개씩이라 /23(≈510개)은 수~십 분. 백그라운드 + 진행률로 처리한다.
 """
 import ipaddress
+import re
 import threading
 
 from . import db, utils
@@ -29,6 +30,79 @@ def get_status():
 def _set(**kw):
     with _lock:
         _status.update(kw)
+
+
+def _parse_connected_subnets(route_out, iface_out):
+    """show ip route connected / show interface 출력에서 directly-connected 대역 추출.
+
+    Returns: ["10.92.174.0/23", ...] (중복 제거, /22 이하만)
+    """
+    found = []
+    # show ip route: "C  10.92.174.0/23 is directly connected, Vlan100"
+    for line in (route_out or "").splitlines():
+        m = re.search(r"([\d.]+/\d{1,2})\s+is\s+directly\s+connected", line)
+        if m:
+            found.append(m.group(1))
+    # show interface: "Internet address is 10.92.174.11/23"
+    for line in (iface_out or "").splitlines():
+        m = re.search(r"Internet address is\s+([\d.]+)/(\d{1,2})", line)
+        if m:
+            try:
+                net = ipaddress.IPv4Network("%s/%s" % (m.group(1), m.group(2)), strict=False)
+                found.append(str(net))
+            except (ipaddress.AddressValueError, ValueError):
+                pass
+    # 정규화 + 중복 제거 + 크기 제한(/22 이하 = num_addresses<=1024)
+    out, seen = [], set()
+    for s in found:
+        try:
+            net = ipaddress.IPv4Network(s, strict=False)
+        except (ipaddress.AddressValueError, ValueError):
+            continue
+        key = str(net)
+        if key in seen or net.num_addresses > 1024 or net.num_addresses < 4:
+            continue
+        if net.is_loopback or net.is_link_local:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def detect_subnets(db_path, switch_id, username, password, source_ip=None):
+    """11번 스위치에 접속해 directly-connected 대역을 자동 도출."""
+    from netmiko import ConnectHandler
+    from . import netbind
+    sw = db.get_switch(db_path, switch_id)
+    if not sw:
+        raise ValueError("switch not found")
+    device = {
+        "device_type": _collector._norm_vendor(sw.get("vendor")),
+        "ip": sw["ip"], "username": username, "password": password,
+        "secret": password, "conn_timeout": 30, "fast_cli": False,
+    }
+    if source_ip:
+        device["sock"] = netbind.bind_socket(sw["ip"], 22, source_ip, 30)
+    route_out, iface_out = "", ""
+    with ConnectHandler(**device) as conn:
+        try:
+            if hasattr(conn, "check_enable_mode") and not conn.check_enable_mode():
+                conn.enable()
+        except Exception:
+            pass
+        try:
+            conn.send_command("terminal length 0", read_timeout=10)
+        except Exception:
+            pass
+        try:
+            route_out = conn.send_command("show ip route connected", read_timeout=30)
+        except Exception:
+            pass
+        try:
+            iface_out = conn.send_command("show ip interface", read_timeout=30)
+        except Exception:
+            pass
+    return _parse_connected_subnets(route_out, iface_out)
 
 
 def collect_band(db_path, switch_id, subnet, username, password, source_ip=None):

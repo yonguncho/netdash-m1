@@ -614,6 +614,32 @@ def create_app(demo_mode=None):
             log_event("error", "facility_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/facility/detect-subnets", methods=["POST"])
+    @rate_limit("facility_detect", max_requests=20, window_seconds=60)
+    def facility_detect_subnets():
+        """11번 스위치의 directly-connected 대역 자동 도출."""
+        try:
+            data = request.get_json() or {}
+            switch_id = data.get("switch_id")
+            if not switch_id:
+                return jsonify({"error": "switch_id required"}), 400
+            username = data.get("username", "")
+            password = data.get("password", "")
+            if not (username and password):
+                blob = db.get_switch_credential(db_path, switch_id)
+                if blob:
+                    dec = credentials.decrypt_credential(blob)
+                    if dec and "|" in dec:
+                        username, password = dec.split("|", 1)
+            if not (username and password):
+                return jsonify({"error": "스위치 계정이 필요합니다(입력 또는 저장)"}), 400
+            src = db.get_setting(db_path, "source_ip") or None
+            subnets = facility_mod.detect_subnets(db_path, switch_id, username, password, src)
+            return jsonify({"ok": True, "subnets": subnets})
+        except Exception as e:
+            log_event("error", "facility_detect_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error", "detail": collector._sanitize_error_msg(str(e))}), 500
+
     @app.route("/api/facility/collect", methods=["POST"])
     @rate_limit("facility_collect", max_requests=10, window_seconds=60)
     def facility_collect():

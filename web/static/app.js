@@ -559,6 +559,27 @@ function renderFacilityTable(hosts) {
 }
 
 (function () {
+  var dbtn = document.getElementById("btn-fac-detect");
+  if (dbtn) dbtn.addEventListener("click", function () {
+    var sid = document.getElementById("fac-switch").value;
+    if (!sid) { alert("먼저 11번 스위치를 선택하세요."); return; }
+    document.getElementById("fac-progress").textContent = "대역 조회 중...";
+    fetch("/api/facility/detect-subnets", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({switch_id: parseInt(sid, 10)}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok && res.subnets && res.subnets.length) {
+        document.getElementById("fac-subnet").value = res.subnets[0];
+        document.getElementById("fac-progress").innerHTML =
+          "찾은 대역: " + res.subnets.map(escHtml).join(", ") +
+          (res.subnets.length > 1 ? " (대역을 바꿔가며 각각 수집하세요)" : "");
+      } else {
+        document.getElementById("fac-progress").textContent =
+          "directly-connected 대역을 찾지 못했습니다. 대역을 직접 입력하세요.";
+      }
+    }).catch(function (e) { console.error(e); document.getElementById("fac-progress").textContent = "조회 오류"; });
+  });
+
   var btn = document.getElementById("btn-fac-collect");
   if (!btn) return;
   btn.addEventListener("click", function () {
