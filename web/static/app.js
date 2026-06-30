@@ -231,7 +231,9 @@ function swCardHTML(sw) {
     "</div>" +
     "<div class='sw-card__actions'>" +
     "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
-    "data-action='detail-switch' data-payload='" + swJson + "'>상세보기</button>" +
+    "data-action='detail-switch' data-payload='" + swJson + "'>상세보기</button> " +
+    "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
+    "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button>" +
     "</div>" +
     "</div>";
 }
@@ -734,17 +736,18 @@ function doSearch() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var body = document.getElementById("search-result-body");
-      if (data.found && data.result) {
-        var r = data.result;
+      var results = data.results || [];
+      if (results.length) {
         body.innerHTML =
-          "<p><strong>IP:</strong> " + escHtml(r.ip) + "</p>" +
-          "<p><strong>MAC:</strong> " + escHtml(r.mac || "-") + "</p>" +
-          "<p><strong>연결 스위치:</strong> " + escHtml(r.switch_name || "-") + " (" + escHtml(r.switch_ip || "-") + ")</p>" +
-          "<p><strong>포트:</strong> " + escHtml(r.port || "-") + "</p>" +
-          "<p><strong>신뢰도:</strong> " + (r.confidence ? (r.confidence * 100).toFixed(0) + "%" : "-") + "</p>" +
-          (r.reason ? "<p style='margin-top:8px;color:#64748b;font-size:12px'>" + escHtml(r.reason) + "</p>" : "");
+          "<p style='margin-bottom:8px'><strong>" + results.length + "건</strong> 발견 — '" + escHtml(ip) + "'</p>" +
+          "<table class='data-table'><thead><tr><th>구분</th><th>IP</th><th>이름</th><th>상세</th></tr></thead><tbody>" +
+          results.map(function(r) {
+            return "<tr><td>" + escHtml(r.source) + "</td><td><code>" + escHtml(r.ip || "-") + "</code></td><td>" +
+              escHtml(r.label || "-") + "</td><td>" + escHtml(r.detail || "") + "</td></tr>";
+          }).join("") + "</tbody></table>";
       } else {
-        body.innerHTML = "<p style='color:#64748b'>IP <strong>" + escHtml(ip) + "</strong> 의 위치 정보가 없습니다. 해당 스위치의 정보를 먼저 수집하세요.</p>";
+        body.innerHTML = "<p style='color:#64748b'><strong>" + escHtml(ip) +
+          "</strong> 검색 결과가 없습니다. (등록 스위치·방화벽 IP, 수집된 ARP, 장부에서 찾습니다 — 수집 전이면 ARP 결과가 없습니다)</p>";
       }
       openModal("modal-search-result");
     })

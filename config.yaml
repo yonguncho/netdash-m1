@@ -25,8 +25,8 @@ collector:
 
   commands:
     cisco_ios:
-      status: "show interface status"
-      description: "show interface description"
+      status: "show interfaces status"
+      description: "show interfaces description"
       mac: "show mac address-table"
       arp: "show ip arp"
       vlan: "show vlan brief"

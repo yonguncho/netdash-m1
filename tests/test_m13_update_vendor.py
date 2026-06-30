@@ -20,7 +20,9 @@ def test_norm_vendor():
     assert collector._norm_vendor("arista_eos") == "arista_eos"
     # 대소문자/공백
     assert collector._norm_vendor(" Cisco ") == "cisco_ios"
-    assert collector._norm_vendor(None) == ""
+    # 미지정(None/빈/unknown)은 Cisco IOS로 fallback
+    assert collector._norm_vendor(None) == "cisco_ios"
+    assert collector._norm_vendor("unknown") == "cisco_ios"
 
 
 # ── DB 수정 ────────────────────────────────────────────────────────

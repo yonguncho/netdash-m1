@@ -47,8 +47,13 @@ _NETMIKO_VENDOR = {
 
 
 def _norm_vendor(vendor):
-    """벤더 값을 netmiko device_type/내부 키로 정규화(이미 정확하면 그대로)."""
+    """벤더 값을 netmiko device_type/내부 키로 정규화(이미 정확하면 그대로).
+
+    벤더 미지정('unknown'/빈값)은 가장 흔한 Cisco IOS로 시도(fallback).
+    """
     v = (vendor or "").strip().lower()
+    if v in ("", "unknown"):
+        return "cisco_ios"
     return _NETMIKO_VENDOR.get(v, v)
 
 

@@ -18,6 +18,7 @@ _NETMIKO_TYPE = {
     "cisco": "cisco_ios", "arista": "arista_eos", "extreme": "extreme_exos",
     "juniper": "juniper_junos", "paloalto": "paloalto_panos",
     "nexus": "cisco_nxos", "cisco_nexus": "cisco_nxos",
+    "unknown": "cisco_ios", "": "cisco_ios",  # 미지정 → IOS로 시도
     "cisco_ios": "cisco_ios", "arista_eos": "arista_eos", "extreme_exos": "extreme_exos",
     "cisco_nxos": "cisco_nxos", "paloalto_panos": "paloalto_panos",
 }

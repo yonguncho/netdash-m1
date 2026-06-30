@@ -526,15 +526,13 @@ def create_app(demo_mode=None):
 
     @app.route("/api/search", methods=["GET"])
     def search_ip():
-        """IP로 호스트 위치(스위치+포트) 검색."""
+        """IP/이름 종합 검색: 등록 스위치·방화벽 + 수집 ARP + 장부 호스트."""
         ip = request.args.get("ip", "").strip()
         if not ip:
             return jsonify({"error": "ip parameter required"}), 400
         try:
-            result = db.search_host_by_ip(db_path, ip)
-            if result:
-                return jsonify({"found": True, "result": result})
-            return jsonify({"found": False, "result": None})
+            results = db.search_everywhere(db_path, ip)
+            return jsonify({"results": results, "count": len(results)})
         except Exception as e:
             sanitized = collector._sanitize_error_msg(str(e))
             log_event("error", "search_ip_error", error=sanitized)

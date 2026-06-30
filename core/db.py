@@ -382,6 +382,59 @@ def search_host_by_ip(db_path, ip):
         return dict(row) if row else None
 
 
+def search_everywhere(db_path, query):
+    """IP/이름으로 모든 소스를 종합 검색: 등록 스위치·방화벽, 수집 ARP, 장부 호스트.
+
+    Returns: [{source, ip, label, detail}] (각 매치). 부분 일치(LIKE) 지원.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    like = "%" + q + "%"
+    results = []
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+
+        def _try(sql, params, mapper):
+            try:
+                for r in cur.execute(sql, params):
+                    results.append(mapper(r))
+            except Exception:
+                pass  # 구버전 DB에 테이블/컬럼이 없을 수 있음
+
+        # 1) 등록 스위치 (장비 자체)
+        _try("SELECT name, ip, hostname FROM switches "
+             "WHERE ip LIKE ? OR name LIKE ? OR IFNULL(hostname,'') LIKE ? LIMIT 50",
+             (like, like, like),
+             lambda r: {"source": "등록 스위치", "ip": r["ip"], "label": r["name"],
+                        "detail": "hostname: " + (r["hostname"] or "-")})
+        # 2) 등록 방화벽 (장비 자체)
+        _try("SELECT name, host, vendor FROM firewalls WHERE host LIKE ? OR name LIKE ? LIMIT 50",
+             (like, like),
+             lambda r: {"source": "등록 방화벽", "ip": r["host"], "label": r["name"],
+                        "detail": "vendor: " + (r["vendor"] or "-")})
+        # 3) 스위치 수집 ARP (어느 스위치에서 IP가 보이는지)
+        _try("SELECT a.ip, a.mac, a.interface, s.name AS sw FROM arp_entries a "
+             "JOIN switches s ON a.switch_id = s.id WHERE a.ip LIKE ? LIMIT 100",
+             (like,),
+             lambda r: {"source": "스위치 ARP", "ip": r["ip"], "label": r["sw"],
+                        "detail": "MAC " + (r["mac"] or "-") + " · 포트 " + (r["interface"] or "-")})
+        # 4) 방화벽 수집 ARP
+        _try("SELECT fa.ip, fa.mac, fa.interface, f.name AS fw FROM firewall_arp fa "
+             "JOIN firewalls f ON fa.firewall_id = f.id WHERE fa.ip LIKE ? LIMIT 100",
+             (like,),
+             lambda r: {"source": "방화벽 ARP", "ip": r["ip"], "label": r["fw"],
+                        "detail": "MAC " + (r["mac"] or "-") + " · " + (r["interface"] or "-")})
+        # 5) 장부 호스트 (대조 위치)
+        _try("SELECT h.ip, h.hostname, h.port, s.name AS sw FROM hosts h "
+             "LEFT JOIN switches s ON h.switch_id = s.id "
+             "WHERE h.ip LIKE ? OR IFNULL(h.hostname,'') LIKE ? LIMIT 100",
+             (like, like),
+             lambda r: {"source": "장부 호스트", "ip": r["ip"], "label": r["hostname"] or "-",
+                        "detail": "스위치 " + (r["sw"] or "-") + " · 포트 " + (r["port"] or "-")})
+    return results
+
+
 def save_vlan_names(db_path, switch_id, vlans):
     """show vlan brief 파싱 결과 저장(스위치별 전체 교체). vlans=[{vlan,name,status}]."""
     with _db_lock:
