@@ -245,6 +245,15 @@ body {
   padding: 8px 12px; font-size: 13px; outline: none; width: 100%;
 }
 .modal__body input:focus, .modal__body select:focus { border-color: var(--primary); }
+
+/* IP 검색 결과 모달: 표가 잘리지 않게 넓게 + 스크롤 */
+#modal-search-result .modal__box { width: 820px; }
+#modal-search-result .modal__body { max-height: 72vh; overflow: auto; }
+#search-result-body { display: block; }
+#search-result-body .data-table { table-layout: auto; }
+#search-result-body .data-table td,
+#search-result-body .data-table th { word-break: break-word; white-space: normal; vertical-align: top; }
+#search-result-body code { word-break: break-all; }
 .modal__footer {
   padding: 14px 20px; border-top: 1px solid var(--border);
   display: flex; gap: 8px; justify-content: flex-end;
