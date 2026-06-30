@@ -75,3 +75,24 @@ def test_appjs_source_select():
     src = APP_JS.read_text(encoding="utf-8")
     assert "source-ip-select" in src
     assert "/api/settings/source_ip" in src
+
+
+def test_test_switch_response_includes_source_ip(client):
+    """연결 테스트 응답에 실제 사용한 출발지 IP가 포함돼야(화면 표시용)."""
+    r = client.post("/api/switches/test", json={"ip": "10.0.0.50", "vendor": "cisco"})
+    assert "source_ip" in r.get_json()
+
+
+def test_test_switch_uses_configured_source_ip(client):
+    """헤더에서 설정한 접근 IP가 연결 테스트 출발지로 반영돼야."""
+    ips = netinfo.get_local_ipv4_addresses()
+    if not ips:
+        pytest.skip("로컬 IPv4 없음")
+    client.post("/api/settings/source_ip", json={"ip": ips[0]})
+    r = client.post("/api/switches/test", json={"ip": "10.0.0.50", "vendor": "cisco"})
+    assert r.get_json().get("source_ip") == ips[0]
+
+
+def test_appjs_shows_source_ip_note():
+    src = APP_JS.read_text(encoding="utf-8")
+    assert "출발지" in src

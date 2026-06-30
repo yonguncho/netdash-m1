@@ -572,8 +572,12 @@ function _renderTestResult(elId, res) {
   if (!el) return;
   el.style.color = res.ok ? "#15803d" : "#991b1b";
   var label = res.ok ? "✓ 연결 가능" : "✗ 연결 실패";
+  // 출발지 IP 안내: 설정값이 있으면 그 IP, 없으면 자동(OS 기본) 경고
+  var srcNote = res.source_ip
+    ? "  · 출발지 IP: " + res.source_ip
+    : "  · 출발지: 자동(OS 기본) — 헤더 '접근 IP'에서 이더넷 IP를 선택하세요";
   // textContent 사용 → XSS 안전 (서버 detail은 sanitize되지만 이중 안전)
-  el.textContent = label + " [" + (res.stage || "") + "] " + (res.detail || "");
+  el.textContent = label + " [" + (res.stage || "") + "] " + (res.detail || "") + srcNote;
 }
 
 document.getElementById("btn-test-switch").addEventListener("click", function() {

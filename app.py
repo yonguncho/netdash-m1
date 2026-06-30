@@ -590,10 +590,13 @@ def create_app(demo_mode=None):
                 ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
             except ValueError as e:
                 return jsonify({"ok": False, "stage": "reachable", "detail": f"IP rejected: {e}"}), 400
+            src = db.get_setting(db_path, "source_ip") or None
             result = connectivity.test_switch(
                 ip, data.get("vendor", ""), data.get("username", ""),
                 data.get("password", ""), int(data.get("port", 22)),
-                source_ip=db.get_setting(db_path, "source_ip") or None)
+                source_ip=src)
+            if isinstance(result, dict):
+                result["source_ip"] = src or ""  # 화면에 출발지 표시(자동이면 빈값)
             return jsonify(result)
         except Exception as e:
             log_event("error", "test_switch_error", error=collector._sanitize_error_msg(str(e)))
@@ -618,11 +621,14 @@ def create_app(demo_mode=None):
             port = data.get("port")
             if port not in (None, "") and not (str(port).isdigit() and 1 <= int(port) <= 65535):
                 return jsonify({"error": "port must be 1-65535"}), 400
+            src = db.get_setting(db_path, "source_ip") or None
             result = connectivity.test_firewall(
                 vendor, host, int(port) if port else None,
                 token=data.get("token", ""), username=data.get("username", ""),
                 password=data.get("password", ""), verify_ssl=bool(data.get("verify_ssl", False)),
-                source_ip=db.get_setting(db_path, "source_ip") or None)
+                source_ip=src)
+            if isinstance(result, dict):
+                result["source_ip"] = src or ""  # 화면에 출발지 표시(자동이면 빈값)
             return jsonify(result)
         except Exception as e:
             log_event("error", "test_firewall_error", error=collector._sanitize_error_msg(str(e)))
