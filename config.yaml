@@ -45,6 +45,7 @@ collector:
       description: "show interface description"
       mac: "show mac address-table dynamic"
       arp: "show ip arp"
+      vlan: "show vlan brief"
 
 correlator:
   uplink_mac_threshold: 4

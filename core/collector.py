@@ -209,6 +209,9 @@ def _worker_loop():
             db.save_ports(db_path, snapshot_id, switch_id, parsed_data.get("ports", []))
             db.save_mac_entries(db_path, snapshot_id, switch_id, parsed_data.get("macs", []))
             db.save_arp_entries(db_path, snapshot_id, switch_id, parsed_data.get("arps", []))
+            # VLAN 이름(show vlan brief)은 스냅샷 무관 최신값으로 교체 저장
+            if parsed_data.get("vlans"):
+                db.save_vlan_names(db_path, switch_id, parsed_data.get("vlans", []))
 
             db.set_switch_status(db_path, switch_id, "done")
             utils.log_event("info", "collect_done", switch_id=switch_id, snapshot_id=snapshot_id)

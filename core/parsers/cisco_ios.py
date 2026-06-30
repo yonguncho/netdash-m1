@@ -34,7 +34,30 @@ def parse(outputs, switch_id):
     ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id)
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
-    return {"ports": ports, "macs": macs, "arps": arps}
+    vlans = parse_vlans(outputs.get("vlan", ""), switch_id)
+    return {"ports": ports, "macs": macs, "arps": arps, "vlans": vlans}
+
+
+def parse_vlans(vlan_output, switch_id):
+    """show vlan brief → [{vlan, name, status}]. IOS/IOS-XE/NX-OS 공통 형식."""
+    vlans = []
+    if not vlan_output or len(vlan_output) > 1_000_000:
+        return vlans
+    for i, line in enumerate(vlan_output.split("\n")):
+        if i > 10000 or len(line) > 500:
+            continue
+        # VLAN  Name  Status  Ports
+        m = re.match(r"^(\d{1,4})\s+(\S+)\s+(\S+)", line)
+        if m:
+            vid, name, status = m.groups()
+            try:
+                vlan = int(vid)
+            except ValueError:
+                continue
+            if 1 <= vlan <= 4094:
+                vlans.append({"switch_id": switch_id, "vlan": vlan,
+                              "name": name, "status": status})
+    return utils.deduplicate_list(vlans, lambda v: v["vlan"])
 
 
 def _parse_descriptions(desc_output):

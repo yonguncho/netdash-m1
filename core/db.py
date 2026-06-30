@@ -179,6 +179,17 @@ CREATE TABLE IF NOT EXISTS app_settings (
 )
 """
 
+# VLAN 이름(show vlan brief) — 스위치별 VLAN ID→Name
+CREATE_VLAN_NAMES_TABLE = """
+CREATE TABLE IF NOT EXISTS vlan_names (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    switch_id INTEGER NOT NULL,
+    vlan INTEGER NOT NULL,
+    name TEXT,
+    status TEXT
+)
+"""
+
 
 # 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
 _acl_applied = set()
@@ -262,6 +273,7 @@ def init_schema(db_path):
                 CREATE_FIREWALL_INTERFACES_TABLE,
                 CREATE_FIREWALL_ARP_TABLE,
                 CREATE_APP_SETTINGS_TABLE,
+                CREATE_VLAN_NAMES_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -370,16 +382,50 @@ def search_host_by_ip(db_path, ip):
         return dict(row) if row else None
 
 
+def save_vlan_names(db_path, switch_id, vlans):
+    """show vlan brief 파싱 결과 저장(스위치별 전체 교체). vlans=[{vlan,name,status}]."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            # vlan_names 테이블이 구버전 DB에 없을 수 있으므로 보호
+            try:
+                cur.execute("DELETE FROM vlan_names WHERE switch_id=?", (switch_id,))
+                for v in vlans:
+                    cur.execute(
+                        "INSERT INTO vlan_names (switch_id, vlan, name, status) VALUES (?, ?, ?, ?)",
+                        (switch_id, v.get("vlan"), v.get("name"), v.get("status")))
+            except Exception as e:
+                log_event("warning", "save_vlan_names_skipped", error=str(e))
+
+
 def get_vlan_summary(db_path):
-    """전체 VLAN 목록과 스위치별 사용 현황."""
+    """전체 VLAN 목록과 스위치별 사용 현황 + VLAN 이름(show vlan brief).
+
+    MAC이 학습된 VLAN(mac_entries)과 show vlan brief로 수집한 VLAN(vlan_names)을
+    합집합으로 보여준다(MAC 0개인 VLAN도 이름과 함께 표시).
+    """
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT m.vlan, s.name as switch_name, s.ip as switch_ip, COUNT(*) as mac_count
+            """SELECT v.vlan AS vlan, s.name AS switch_name, s.ip AS switch_ip,
+                      v.name AS vlan_name, v.status AS vlan_status,
+                      (SELECT COUNT(*) FROM mac_entries m
+                       WHERE m.switch_id = v.switch_id AND m.vlan = v.vlan) AS mac_count
+               FROM vlan_names v
+               JOIN switches s ON v.switch_id = s.id
+               UNION
+               SELECT m.vlan AS vlan, s.name AS switch_name, s.ip AS switch_ip,
+                      (SELECT vn.name FROM vlan_names vn
+                       WHERE vn.switch_id = m.switch_id AND vn.vlan = m.vlan) AS vlan_name,
+                      (SELECT vn.status FROM vlan_names vn
+                       WHERE vn.switch_id = m.switch_id AND vn.vlan = m.vlan) AS vlan_status,
+                      COUNT(*) AS mac_count
                FROM mac_entries m
                JOIN switches s ON m.switch_id = s.id
+               WHERE NOT EXISTS (SELECT 1 FROM vlan_names vn2
+                                 WHERE vn2.switch_id = m.switch_id AND vn2.vlan = m.vlan)
                GROUP BY m.vlan, m.switch_id
-               ORDER BY m.vlan, s.name""",
+               ORDER BY vlan, switch_name""",
         )
         return [dict(row) for row in cursor.fetchall()]
 

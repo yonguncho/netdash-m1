@@ -28,6 +28,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "firewalls", "firewall_interfaces", "firewall_arp",
         # M12: 앱 설정
         "app_settings",
+        # VLAN 이름(show vlan brief)
+        "vlan_names",
     }
     assert expected == tables
 

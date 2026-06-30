@@ -299,12 +299,13 @@ function loadVlans() {
     var tbody = document.getElementById("vlan-table-body");
     var vlans = data.vlans || [];
     if (!vlans.length) {
-      tbody.innerHTML = "<tr><td colspan=4 style='color:#64748b'>VLAN 정보 없음</td></tr>";
+      tbody.innerHTML = "<tr><td colspan=5 style='color:#64748b'>VLAN 정보 없음</td></tr>";
       return;
     }
     tbody.innerHTML = vlans.map(function(v) {
-      return "<tr><td><strong>VLAN " + v.vlan + "</strong></td><td>" + escHtml(v.switch_name) +
-        "</td><td><code>" + escHtml(v.switch_ip) + "</code></td><td>" + v.mac_count + "</td></tr>";
+      return "<tr><td><strong>VLAN " + v.vlan + "</strong></td><td>" + escHtml(v.vlan_name || "-") +
+        "</td><td>" + escHtml(v.switch_name) + "</td><td><code>" + escHtml(v.switch_ip) +
+        "</code></td><td>" + v.mac_count + "</td></tr>";
     }).join("");
   }).catch(function(e) { console.error("vlan load:", e); });
 }

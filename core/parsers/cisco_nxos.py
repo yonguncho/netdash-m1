@@ -30,7 +30,9 @@ def parse(outputs, switch_id):
     ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id)
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
-    return {"ports": ports, "macs": macs, "arps": arps}
+    from . import cisco_ios  # show vlan brief 파싱은 IOS와 동일 형식
+    vlans = cisco_ios.parse_vlans(outputs.get("vlan", ""), switch_id)
+    return {"ports": ports, "macs": macs, "arps": arps, "vlans": vlans}
 
 
 def _parse_descriptions(desc_output):
