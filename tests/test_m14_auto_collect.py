@@ -56,3 +56,32 @@ def test_auto_collect_ui_present():
     assert 'id="modal-auto-collect"' in html
     assert 'id="btn-auto-collect"' in html
     assert 'id="cred-persist"' in html  # 자동 수집용 계정 저장 체크박스
+
+
+# ── SSRF 재검증 (자동 수집 경로) ───────────────────────────────────
+def test_ip_allowed_ssrf():
+    from core import collector
+    rfc1918 = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+    # 사설 대역 허용
+    assert collector._ip_allowed("10.0.0.10", rfc1918) is True
+    assert collector._ip_allowed("192.168.1.5", rfc1918) is True
+    # 공인 IP 거부
+    assert collector._ip_allowed("8.8.8.8", rfc1918) is False
+    # 루프백/예약 거부
+    assert collector._ip_allowed("127.0.0.1", rfc1918) is False
+    assert collector._ip_allowed("169.254.1.1", rfc1918) is False
+    # 잘못된 값 거부
+    assert collector._ip_allowed("", rfc1918) is False
+    assert collector._ip_allowed("not-an-ip", rfc1918) is False
+
+
+def test_auto_collect_skips_invalid_ip(temp_db, monkeypatch):
+    """자동 수집이 허용 대역 밖 IP 장비를 건너뛰는지(SSRF 재검증)."""
+    from core import collector, config_loader
+    # 공인 IP로 스위치 등록(우회 저장 시나리오) + 가짜 자격증명
+    sid = db.save_switch(temp_db, "BAD", "8.8.8.8", "cisco_ios")
+    db.update_cred_blob(temp_db, sid, "fake-blob")
+    called = {"n": 0}
+    monkeypatch.setattr(collector, "collect_switch", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    collector.collect_all_registered(temp_db)
+    assert called["n"] == 0  # 공인 IP → collect_switch 호출 안 됨

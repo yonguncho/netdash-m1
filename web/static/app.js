@@ -56,7 +56,11 @@ function _applyLocFilter(list, inputId) {
   var el = document.getElementById(inputId);
   var q = el ? el.value.trim().toLowerCase() : "";
   if (!q) return list;
-  return list.filter(function (s) { return (s.location || "").toLowerCase().indexOf(q) >= 0; });
+  // 위치(location) + TPS 위치 라벨(건물명/공장/층) + hostname 모두에서 필터
+  return list.filter(function (s) {
+    var hay = ((s.location || "") + " " + (s.tps_location || "") + " " + (s.hostname || "")).toLowerCase();
+    return hay.indexOf(q) >= 0;
+  });
 }
 
 // ─── M14: 자동 수집 설정 ─────────────────────────────────────────
@@ -136,7 +140,8 @@ function openDetailPanel(sw) {
   _currentSwitchId = sw.id;
   document.getElementById("detail-title").textContent = sw.name;
   document.getElementById("detail-subtitle").textContent =
-    sw.ip + (sw.hostname ? " · " + sw.hostname : "");
+    sw.ip + (sw.hostname ? " · " + sw.hostname : "") +
+    (sw.tps_location ? "  📍 " + sw.tps_location : "");
   document.getElementById("detail-panel").classList.remove("hidden");
   document.getElementById("detail-overlay").classList.remove("hidden");
 
@@ -287,6 +292,7 @@ function swCardHTML(sw) {
     "<div class='sw-card__meta'>" +
     "<span>" + escHtml(sw.ip) + "</span>" +
     (sw.hostname ? "<span>" + escHtml(sw.hostname) + "</span>" : "") +
+    (sw.tps_location ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" : "") +
     (sw.location ? "<span style='font-size:10px'>" + escHtml(sw.location) + "</span>" : "") +
     "</div>" +
     "<div class='sw-card__status'>" +
@@ -318,9 +324,13 @@ function renderSwitchTable(switches) {
   var tbody = document.getElementById("switch-table-body");
   tbody.innerHTML = switches.map(function(sw) {
     var sc = swStatusClass(sw);
+    var locCell = sw.tps_location
+      ? "<span style='color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" +
+        (sw.location ? "<br><span style='font-size:11px;color:#64748b'>" + escHtml(sw.location) + "</span>" : "")
+      : escHtml(sw.location || "-");
     return "<tr><td>" + escHtml(sw.name) + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(sw.vendor || "-") + "</td><td>" +
-      escHtml(sw.location || "-") + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
+      locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span></td><td>" +
       (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "-") +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +

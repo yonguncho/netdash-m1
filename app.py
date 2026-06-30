@@ -218,6 +218,13 @@ def create_app(demo_mode=None):
             switches = db.get_switches(db_path)
             snapshots = db.get_snapshots(db_path)
 
+            # hostname → TPS 물리 위치 라벨 주입(포맷 일치 시)
+            from core import tps_location
+            for sw in switches:
+                info = tps_location.parse(sw.get("hostname"))
+                if info:
+                    sw["tps_location"] = info["label"]
+
             return jsonify({
                 "switches": switches,
                 "snapshots": snapshots,
@@ -1026,6 +1033,11 @@ def create_app(demo_mode=None):
             switch = db.get_switch(db_path, switch_id)
             if not switch:
                 return jsonify({"error": "Switch not found"}), 404
+
+            from core import tps_location
+            _info = tps_location.parse(switch.get("hostname"))
+            if _info:
+                switch["tps_location"] = _info["label"]
 
             ports = db.get_ports_by_switch(db_path, switch_id)
             macs = db.get_mac_entries_by_switch(db_path, switch_id)

@@ -364,18 +364,49 @@ def _parse_outputs(vendor, outputs, switch_id):
         return {"ports": [], "macs": [], "arps": []}
 
 
+def _ip_allowed(ip, allowed_ranges):
+    """SSRF 재검증: 예약/위험 대역 거부 + allowed_ip_ranges 화이트리스트.
+
+    자동 수집은 수동 엔드포인트를 거치지 않으므로 여기서 동일 검증을 수행한다.
+    """
+    import ipaddress
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.IPv4Address(str(ip).strip())
+    except (ipaddress.AddressValueError, ValueError):
+        return False
+    if addr.is_loopback or addr.is_multicast or addr.is_link_local or addr.is_reserved:
+        return False
+    if allowed_ranges:
+        for cidr in allowed_ranges:
+            try:
+                if addr in ipaddress.IPv4Network(cidr, strict=False):
+                    return True
+            except ValueError:
+                continue
+        return False
+    return True
+
+
 def collect_all_registered(db_path):
     """자동 수집: 저장된 자격증명이 있는 모든 스위치/방화벽을 일괄 수집.
 
     스위치는 워커 큐로(비동기), 방화벽은 즉시 수집. 자격증명 없는 장비는 건너뜀.
+    SSRF: 수동 경로와 동일하게 대상 IP를 collect 직전 재검증.
     Returns: {"switches": n, "firewalls": n}
     """
     import json as _json
     result = {"switches": 0, "firewalls": 0}
+    _allowed_ranges = get_config().collector.get("allowed_ip_ranges")
 
     # 스위치: 저장된 계정 복호화 → 큐잉(기존 워커가 수집)
     try:
         for sw in db.get_switches(db_path):
+            if not _ip_allowed(sw.get("ip"), _allowed_ranges):
+                utils.log_event("warning", "auto_collect_skip_invalid_ip",
+                                switch_id=sw.get("id"))
+                continue
             blob = db.get_switch_credential(db_path, sw["id"])
             if not blob:
                 continue
@@ -394,6 +425,10 @@ def collect_all_registered(db_path):
         from . import firewall as firewall_mod
         src = db.get_setting(db_path, "source_ip") or None
         for fw in db.list_firewalls(db_path):
+            if not _ip_allowed(fw.get("host"), _allowed_ranges):
+                utils.log_event("warning", "auto_collect_skip_invalid_fw_ip",
+                                firewall_id=fw.get("id"))
+                continue
             blob = db.get_firewall_credential(db_path, fw["id"])
             if not blob:
                 continue
