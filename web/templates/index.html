@@ -28,6 +28,7 @@
   <!-- 탭 네비게이션 -->
   <nav class="tab-nav">
     <button class="tab-nav__btn active" data-tab="dashboard">현황판</button>
+    <button class="tab-nav__btn" data-tab="facility">설비 현황</button>
     <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
     <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
     <button class="tab-nav__btn" data-tab="vlan">VLAN</button>
@@ -59,6 +60,30 @@
         <p class="placeholder">스위치를 추가하거나 엑셀 파일을 가져오세요.</p>
       </div>
       <div id="rack-view" class="rack-view" style="display:none"></div>
+    </div>
+
+    <!-- 설비 현황 탭 (대역 ping sweep + ARP + MAC 대조) -->
+    <div id="tab-facility" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">설비 현황</span>
+        <div class="pane-toolbar__actions">
+          <input id="fac-search" class="tbl-search" data-target="facility-table-body" placeholder="IP/MAC/스위치 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+          <select id="fac-switch" style="font-size:13px;padding:5px"></select>
+          <input id="fac-subnet" type="text" placeholder="10.92.174.0/23" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:150px">
+          <button id="btn-fac-collect" class="btn btn--primary">대역 수집(ping)</button>
+        </div>
+      </div>
+      <div id="fac-progress" style="margin:8px 0;font-size:13px;color:#475569"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>대역</th><th>IP</th><th>MAC</th><th>연결 스위치</th><th>포트</th><th>상태</th></tr>
+          </thead>
+          <tbody id="facility-table-body">
+            <tr><td colspan="6" style="color:#64748b">11번 스위치를 선택하고 대역을 입력해 '대역 수집(ping)'을 실행하세요. (스위치가 직접 대역에 ping → ARP/MAC 대조)</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- 방화벽 현황 탭 (M10: Palo Alto / Fortinet) -->

@@ -32,6 +32,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "vlan_names",
         # 시스템 로그(show logging)
         "switch_logs",
+        # 설비 현황
+        "facility_hosts",
     }
     assert expected == tables
 

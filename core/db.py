@@ -204,6 +204,22 @@ CREATE TABLE IF NOT EXISTS switch_logs (
 )
 """
 
+# 설비 현황: 대역 ping sweep + ARP + MAC 대조 결과
+CREATE_FACILITY_HOSTS_TABLE = """
+CREATE TABLE IF NOT EXISTS facility_hosts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subnet TEXT,
+    ip TEXT,
+    mac TEXT,
+    switch_id INTEGER,
+    switch_name TEXT,
+    port TEXT,
+    online INTEGER DEFAULT 0,
+    updated TEXT,
+    UNIQUE(subnet, ip)
+)
+"""
+
 
 # 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
 _acl_applied = set()
@@ -289,6 +305,7 @@ def init_schema(db_path):
                 CREATE_APP_SETTINGS_TABLE,
                 CREATE_VLAN_NAMES_TABLE,
                 CREATE_SWITCH_LOGS_TABLE,
+                CREATE_FACILITY_HOSTS_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -458,6 +475,60 @@ def search_everywhere(db_path, query):
              lambda r: {"source": "장부 호스트", "ip": r["ip"], "label": r["hostname"] or "-",
                         "detail": "스위치 " + (r["sw"] or "-") + " · 포트 " + (r["port"] or "-")})
     return results
+
+
+def get_mac_to_switchport(db_path):
+    """전체 스위치의 최신 MAC→(switch_id, switch_name, port) 매핑.
+
+    설비 현황: 11번 ARP의 MAC이 어느 스위치 어느 포트에 있는지 대조용.
+    각 스위치의 가장 최근 스냅샷 MAC만 사용.
+    Returns: {mac: [(switch_id, switch_name, port), ...]}
+    """
+    mapping = {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        # 스위치별 최신 snapshot의 mac_entries
+        cur.execute(
+            """SELECT m.mac, m.port, m.switch_id, s.name AS sname
+               FROM mac_entries m
+               JOIN switches s ON m.switch_id = s.id
+               WHERE m.snapshot_id IN (
+                   SELECT MAX(id) FROM snapshots GROUP BY switch_id
+               )""")
+        for r in cur.fetchall():
+            mac = (r["mac"] or "").lower()
+            if not mac:
+                continue
+            mapping.setdefault(mac, []).append((r["switch_id"], r["sname"], r["port"]))
+    return mapping
+
+
+def save_facility_hosts(db_path, hosts):
+    """설비 현황 저장(subnet+ip 기준 upsert). hosts=[{subnet,ip,mac,switch_id,switch_name,port,online}]."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            for h in hosts:
+                try:
+                    cur.execute(
+                        """INSERT OR REPLACE INTO facility_hosts
+                           (subnet, ip, mac, switch_id, switch_name, port, online, updated)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                        (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
+                         h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0))
+                except Exception as e:
+                    log_event("warning", "save_facility_skipped", error=str(e))
+
+
+def get_facility_hosts(db_path):
+    """설비 현황 전체 조회(대역·IP 정렬)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT * FROM facility_hosts ORDER BY subnet, ip LIMIT 100000")
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
 
 
 def save_switch_logs(db_path, switch_id, recent_lines, events_json, log_alert):

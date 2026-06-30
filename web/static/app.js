@@ -130,6 +130,7 @@ document.querySelectorAll(".tab-nav__btn").forEach(btn => {
     if (btn.dataset.tab === "switch") renderSwitchTable(_switches);
     if (btn.dataset.tab === "reconcile") loadReconcile();
     if (btn.dataset.tab === "firewall") loadFirewalls();
+    if (btn.dataset.tab === "facility") loadFacility();
   });
 });
 
@@ -500,6 +501,79 @@ function loadVlans() {
     }).join("");
   }).catch(function(e) { console.error("vlan load:", e); });
 }
+
+// ─── 설비 현황 (대역 ping sweep + ARP + MAC 대조) ────────────────
+var _facPollTimer = null;
+
+function loadFacility() {
+  // 11번 스위치 드롭다운(등록 스위치 목록)
+  var sel = document.getElementById("fac-switch");
+  if (sel) {
+    var cur = sel.value;
+    sel.innerHTML = "<option value=''>스위치 선택</option>" +
+      (_switches || []).map(function (s) {
+        return "<option value='" + s.id + "'" + (String(s.id) === cur ? " selected" : "") +
+          ">" + escHtml(s.name) + " (" + escHtml(s.ip) + ")</option>";
+      }).join("");
+  }
+  fetch("/api/facility").then(function (r) { return r.json(); }).then(function (data) {
+    renderFacilityProgress(data.status);
+    renderFacilityTable(data.hosts || []);
+    // 수집 중이면 폴링
+    if (data.status && data.status.running) {
+      if (!_facPollTimer) _facPollTimer = setInterval(loadFacility, 3000);
+    } else if (_facPollTimer) {
+      clearInterval(_facPollTimer); _facPollTimer = null;
+    }
+  }).catch(function (e) { console.error("facility:", e); });
+}
+
+function renderFacilityProgress(st) {
+  var el = document.getElementById("fac-progress");
+  if (!el) return;
+  if (!st || (!st.running && !st.message)) { el.textContent = ""; return; }
+  if (st.running) {
+    var pct = st.total ? Math.round(st.done / st.total * 100) : 0;
+    el.innerHTML = "<strong>수집 중</strong> — " + escHtml(st.subnet || "") + " · " +
+      st.done + "/" + st.total + " (" + pct + "%) · " + escHtml(st.message || "");
+  } else {
+    el.textContent = st.message || "";
+  }
+}
+
+function renderFacilityTable(hosts) {
+  var tbody = document.getElementById("facility-table-body");
+  if (!tbody) return;
+  if (!hosts.length) {
+    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>수집된 설비가 없습니다.</td></tr>";
+    return;
+  }
+  tbody.innerHTML = hosts.map(function (h) {
+    var sw = h.switch_name ? escHtml(h.switch_name) : "<span style='color:#b45309'>미상</span>";
+    var on = h.online ? "<span class='status-badge status-badge--ok'>온라인</span>"
+                      : "<span class='status-badge status-badge--new'>오프라인</span>";
+    return "<tr><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
+      "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + sw + "</td><td>" +
+      escHtml(h.port || "-") + "</td><td>" + on + "</td></tr>";
+  }).join("");
+}
+
+(function () {
+  var btn = document.getElementById("btn-fac-collect");
+  if (!btn) return;
+  btn.addEventListener("click", function () {
+    var sid = document.getElementById("fac-switch").value;
+    var subnet = document.getElementById("fac-subnet").value.trim();
+    if (!sid || !subnet) { alert("11번 스위치와 대역(CIDR)을 입력하세요."); return; }
+    fetch("/api/facility/collect", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({switch_id: parseInt(sid, 10), subnet: subnet}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) { alert("대역 수집을 시작했습니다(백그라운드). 진행률을 확인하세요."); loadFacility(); }
+      else alert(res.error || "시작 실패");
+    }).catch(function (e) { console.error(e); alert("서버 오류"); });
+  });
+})();
 
 // ─── M8: 장부 대조(Reconcile) ────────────────────────────────────
 var _reconcileVerdictMeta = {

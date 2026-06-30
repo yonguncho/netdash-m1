@@ -15,6 +15,7 @@ from pathlib import Path
 
 from config import get_config, reset_config
 from core import db, collector, correlator, credentials, report_builder, netinfo, connectivity
+from core import facility as facility_mod
 from core import firewall as firewall_mod
 from core.demo import run_demo
 from core import flapping as flapping_mod
@@ -601,6 +602,56 @@ def create_app(demo_mode=None):
         except Exception as e:
             sanitized = collector._sanitize_error_msg(str(e))
             log_event("error", "search_ip_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/facility", methods=["GET"])
+    def facility_list():
+        """설비 현황 + 수집 진행 상태 조회."""
+        try:
+            return jsonify({"hosts": db.get_facility_hosts(db_path),
+                            "status": facility_mod.get_status()})
+        except Exception as e:
+            log_event("error", "facility_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/facility/collect", methods=["POST"])
+    @rate_limit("facility_collect", max_requests=10, window_seconds=60)
+    def facility_collect():
+        """대역 ping sweep + ARP + MAC 대조 (11번 스위치가 직접 ping). 백그라운드."""
+        try:
+            data = request.get_json() or {}
+            switch_id = data.get("switch_id")
+            subnet = (data.get("subnet") or "").strip()
+            username = data.get("username", "")
+            password = data.get("password", "")
+            if not switch_id or not subnet:
+                return jsonify({"error": "switch_id and subnet required"}), 400
+            # 대역 검증: 유효 CIDR + 크기 제한(/22 이하, ping 폭증 방지)
+            try:
+                net = ipaddress.IPv4Network(subnet, strict=False)
+            except (ipaddress.AddressValueError, ValueError):
+                return jsonify({"error": "invalid subnet (CIDR)"}), 400
+            if net.num_addresses > 1024:
+                return jsonify({"error": "대역이 너무 큽니다(/22 이하 권장)"}), 400
+            sw = db.get_switch(db_path, switch_id)
+            if not sw:
+                return jsonify({"error": "switch not found"}), 404
+            # 게이트웨이 스위치 IP는 등록 시 검증됨. 계정: 입력 또는 저장된 자격증명.
+            if not (username and password):
+                blob = db.get_switch_credential(db_path, switch_id)
+                if blob:
+                    dec = credentials.decrypt_credential(blob)
+                    if dec and "|" in dec:
+                        username, password = dec.split("|", 1)
+            if not (username and password):
+                return jsonify({"error": "스위치 계정이 필요합니다(입력 또는 저장)"}), 400
+            src = db.get_setting(db_path, "source_ip") or None
+            started = facility_mod.start_collect_band(db_path, switch_id, subnet, username, password, src)
+            if not started:
+                return jsonify({"error": "이미 수집 중입니다"}), 409
+            return jsonify({"ok": True, "subnet": subnet})
+        except Exception as e:
+            log_event("error", "facility_collect_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/vlans", methods=["GET"])
