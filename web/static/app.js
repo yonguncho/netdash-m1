@@ -40,6 +40,7 @@ document.addEventListener("input", function (e) {
   if (inp.classList.contains("loc-filter")) {
     renderSwitchGrid(_switches);
     renderSwitchTable(_switches);
+    if (_viewMode === "rack") renderRackView(_switches);
     return;
   }
   if (!inp.classList.contains("tbl-search")) return;

@@ -398,6 +398,21 @@ def create_app(demo_mode=None):
             content = file.read()
             if len(content) / (1024 * 1024) > 16:
                 return jsonify({"error": "file too large (16MB)"}), 413
+            # CWE-409: 압축폭탄(zip bomb) 방어 — /api/upload와 동일 검증
+            import zipfile as _zip
+            try:
+                with _zip.ZipFile(io.BytesIO(content), "r") as zf:
+                    total = 0
+                    for info in zf.infolist():
+                        if info.file_size / (1024 * 1024) > 10:
+                            return jsonify({"error": "ZIP entry too large"}), 413
+                        total += info.file_size
+                        if info.compress_size > 0 and info.file_size / info.compress_size > 100:
+                            return jsonify({"error": "compression ratio too high (zip bomb)"}), 413
+                    if total / (1024 * 1024) > 50:
+                        return jsonify({"error": "uncompressed size too large"}), 413
+            except _zip.BadZipFile:
+                return jsonify({"error": "invalid xlsx file"}), 400
             rows = parse_switch_inventory(io.BytesIO(content))
             allowed = config.collector.get("allowed_ip_ranges")
             valid, skipped = [], 0

@@ -22,10 +22,19 @@ COMMANDS = {
 
 # MAC: dot(0050.56a1.b2c3) / colon / hyphen 형식 모두 허용
 _MAC = r"[0-9a-fA-F][0-9a-fA-F:.\-]{10,18}[0-9a-fA-F]"
-# show interface status의 상태 키워드
-_STATUS_RE = re.compile(
-    r"\b(connected|notconnect|disabled|err-disabled|errdisable|inactive|"
-    r"suspended|monitoring|sfpAbsent|xcvrAbsen|notpresent|up|down)\b", re.IGNORECASE)
+# show interface status 상태 키워드 → 표준 상태 매핑
+# (FIX: 부분 정규식 search는 Name에 들어간 'up/down' 등을 오인식하므로
+#  공백 분리 토큰의 '정확 일치'로만 상태를 판별한다.)
+_STATUS_MAP = {
+    "connected": "up", "up": "up",
+    "notconnect": "notconnect", "notpresent": "notconnect",
+    "sfpabsent": "notconnect", "xcvrabsen": "notconnect",
+    "disabled": "disabled",
+    "err-disabled": "err-disabled", "errdisable": "err-disabled",
+    "inactive": "inactive", "suspended": "suspended", "monitoring": "up",
+    "down": "down",
+}
+_STATUS_SET = frozenset(_STATUS_MAP.keys())
 
 
 _ABBR = [
@@ -146,29 +155,23 @@ def _parse_ports(status_output, descriptions, switch_id, errors=None):
             continue
         if line.strip().lower().startswith("port") or set(line.strip()) <= set("-"):
             continue  # 헤더/구분선
-        sm = _STATUS_RE.search(line)
-        if not sm:
-            continue
         toks = line.split()
-        if not toks:
+        if len(toks) < 2:
             continue
         port = utils.normalize_port(toks[0])
         if not port:
             continue
-        status_word = sm.group(1).lower()
-        # 상태 세분화: notconnect / disabled / err-disabled를 구분 보존
-        _smap = {
-            "connected": "up", "up": "up",
-            "notconnect": "notconnect", "notpresent": "notconnect",
-            "sfpabsent": "notconnect", "xcvrabsen": "notconnect",
-            "disabled": "disabled",
-            "err-disabled": "err-disabled", "errdisable": "err-disabled",
-            "inactive": "inactive", "suspended": "suspended",
-            "down": "down",
-        }
-        status = _smap.get(status_word, "down")
+        # FIX: 상태는 '정확 일치 토큰'으로만 판별(Name에 들어간 up/down 오인식 방지).
+        status_idx = None
+        for idx in range(1, len(toks)):
+            if toks[idx].lower() in _STATUS_SET:
+                status_idx = idx
+                break
+        if status_idx is None:
+            continue
+        status = _STATUS_MAP.get(toks[status_idx].lower(), "down")
         # 상태 이후 토큰: Vlan  Duplex  Speed  Type...
-        rest = line[sm.end():].split()
+        rest = toks[status_idx + 1:]
         vlan = 1
         if rest and rest[0].isdigit():
             v = utils.normalize_vlan(rest[0])

@@ -59,6 +59,25 @@ def test_ports_status_parsed():
     assert g4["status"] == "disabled"
 
 
+def test_status_keyword_in_name_not_misparsed():
+    """포트 Name에 up/down/connected 단어가 있어도 잘못 분리되면 안 됨(버그 회귀)."""
+    out = {
+        "status": (
+            "Port      Name               Status       Vlan   Duplex  Speed Type\n"
+            "Gi1/0/7   SRV-DOWN-LINK      connected    77     a-full a-1000 10/100/1000BaseTX\n"
+            "Gi1/0/8   LINK-UP-CORE       notconnect   1        auto   auto 10/100/1000BaseTX\n"),
+        "description": "", "mac": "", "arp": "",
+    }
+    r = cisco_ios.parse(out, 1)
+    g7 = next(p for p in r["ports"] if p["name"].endswith("1/0/7"))
+    assert g7["status"] == "up"      # connected (Name의 DOWN에 오인식 안 됨)
+    assert g7["vlan"] == 77          # 올바른 VLAN(1로 떨어지지 않음)
+    assert "a-1000" in g7["speed"]
+    g8 = next(p for p in r["ports"] if p["name"].endswith("1/0/8"))
+    assert g8["status"] == "notconnect"  # Name의 UP에 오인식 안 됨
+    assert g8["vlan"] == 1
+
+
 def test_dot_mac_parsed():
     """Cisco dot 형식 MAC(0050.56a1.b2c3)이 파싱돼야(과거 colon만 잡아 0건이던 버그)."""
     r = cisco_ios.parse(_out(), 1)
