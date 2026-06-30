@@ -30,7 +30,7 @@ collector:
       mac: "show mac address-table"
       arp: "show ip arp"
       vlan: "show vlan brief"
-      logging: "show logging last 100"
+      logging: "show logging"
       errors: "show interfaces"
     arista_eos:
       status: "show interfaces"
