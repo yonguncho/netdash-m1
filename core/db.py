@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS ports (
     vlan INTEGER,
     speed TEXT,
     description TEXT,
+    crc_errors INTEGER DEFAULT 0,
+    in_errors INTEGER DEFAULT 0,
+    out_errors INTEGER DEFAULT 0,
     FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
     FOREIGN KEY (switch_id) REFERENCES switches(id),
     UNIQUE(snapshot_id, switch_id, name)
@@ -297,6 +300,12 @@ def init_schema(db_path):
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
+            # ports 테이블 errors 컬럼 마이그레이션(CRC/입출력 오류)
+            for col in ("crc_errors", "in_errors", "out_errors"):
+                try:
+                    cursor.execute(f"ALTER TABLE ports ADD COLUMN {col} INTEGER DEFAULT 0")
                 except Exception:
                     pass
             # M7: hosts 테이블 장부(ledger) 컬럼 마이그레이션
@@ -810,10 +819,12 @@ def save_ports(db_path, snapshot_id, switch_id, ports):
             for port in ports:
                 cursor.execute(
                     """INSERT OR REPLACE INTO ports
-                       (snapshot_id, switch_id, name, status, vlan, speed, description)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (snapshot_id, switch_id, name, status, vlan, speed, description,
+                        crc_errors, in_errors, out_errors)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (snapshot_id, switch_id, port.get("name"), port.get("status"),
-                     port.get("vlan"), port.get("speed"), port.get("description"))
+                     port.get("vlan"), port.get("speed"), port.get("description"),
+                     port.get("crc_errors", 0), port.get("in_errors", 0), port.get("out_errors", 0))
                 )
             return len(ports)
 

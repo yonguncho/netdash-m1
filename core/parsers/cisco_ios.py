@@ -28,10 +28,60 @@ _STATUS_RE = re.compile(
     r"suspended|monitoring|sfpAbsent|xcvrAbsen|notpresent|up|down)\b", re.IGNORECASE)
 
 
+_ABBR = [
+    ("TwentyFiveGigE", "Twe"), ("TenGigabitEthernet", "Te"), ("TenGigE", "Te"),
+    ("GigabitEthernet", "Gi"), ("FastEthernet", "Fa"), ("FortyGigE", "Fo"),
+    ("Port-channel", "Po"), ("Ethernet", "Et"),
+]
+
+
+def _abbr(port):
+    """인터페이스 전체이름→표준 약어 통일(GigabitEthernet1/0/1 ↔ Gi1/0/1)."""
+    if not port:
+        return port
+    for full, ab in _ABBR:
+        if port.lower().startswith(full.lower()):
+            return ab + port[len(full):]
+    return port
+
+
+def parse_interface_errors(output):
+    """show interfaces(전체 상세) → {port: {in_errors, crc, out_errors}}.
+
+    Cisco/Arista 공통: 'N input errors, M CRC' / 'K output errors' 라인.
+    """
+    result = {}
+    cur = None
+    if not output or len(output) > 5_000_000:
+        return result
+    for line in output.splitlines():
+        m = re.match(r"^(\S+) is .*line protocol", line)
+        if m:
+            cur = _abbr(utils.normalize_port(m.group(1)))
+            if cur:
+                result[cur] = {"in_errors": 0, "crc": 0, "out_errors": 0}
+            continue
+        if not cur or cur not in result:
+            continue
+        mi = re.search(r"(\d+)\s+input errors(?:,\s*(\d+)\s+CRC)?", line)
+        if mi:
+            result[cur]["in_errors"] = int(mi.group(1))
+            if mi.group(2):
+                result[cur]["crc"] = int(mi.group(2))
+        mc = re.search(r"(\d+)\s+CRC", line)
+        if mc and result[cur]["crc"] == 0:
+            result[cur]["crc"] = int(mc.group(1))
+        mo = re.search(r"(\d+)\s+output errors", line)
+        if mo:
+            result[cur]["out_errors"] = int(mo.group(1))
+    return result
+
+
 def parse(outputs, switch_id):
     utils.log_event("info", "parse_cisco_ios", switch_id=switch_id)
     descriptions = _parse_descriptions(outputs.get("description", ""))
-    ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id)
+    errors = parse_interface_errors(outputs.get("errors", ""))
+    ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id, errors)
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
     vlans = parse_vlans(outputs.get("vlan", ""), switch_id)
@@ -81,8 +131,8 @@ def _parse_descriptions(desc_output):
     return descriptions
 
 
-def _parse_ports(status_output, descriptions, switch_id):
-    """show interface status → 포트 상태/VLAN/속도.
+def _parse_ports(status_output, descriptions, switch_id, errors=None):
+    """show interface status → 포트 상태/VLAN/속도 (+ errors 병합).
 
     형식: Port  Name(공백가능)  Status  Vlan  Duplex  Speed  Type
     상태 키워드를 기준으로 좌(포트)·우(vlan/speed)를 분리한다.
@@ -128,6 +178,7 @@ def _parse_ports(status_output, descriptions, switch_id):
         ptype = " ".join(rest[3:]) if len(rest) > 3 else ""
         # 속도/듀플렉스/타입을 함께 표기(auto-duplex/auto-speed/10/100/1000BaseTX)
         speed = " · ".join([x for x in (spd, duplex, ptype) if x]) or "unknown"
+        err = (errors or {}).get(_abbr(port), {})
         ports.append({
             "switch_id": switch_id,
             "name": port,
@@ -137,6 +188,9 @@ def _parse_ports(status_output, descriptions, switch_id):
             "duplex": duplex,
             "port_type": ptype,
             "description": descriptions.get(port, ""),
+            "crc_errors": err.get("crc", 0),
+            "in_errors": err.get("in_errors", 0),
+            "out_errors": err.get("out_errors", 0),
         })
     return utils.deduplicate_list(ports, lambda p: p["name"])
 

@@ -1,5 +1,12 @@
 # NetDash 릴리스 노트
 
+## v3.14.0 (2026-06-30) — 포트 CRC/입출력 오류 모니터링
+
+- 수집 시 `show interfaces`(전체 상세) 1회로 **모든 포트의 CRC·input/output errors**를
+  파싱해 상세 포트 탭에 표시합니다(0 초과 시 빨간색 강조).
+- 포트별 개별 명령 없이 한 번에 수집(효율적). 포트 목록은 기존 status/description 기준.
+- (Cisco IOS/IOS-XE 적용. Arista/Extreme/NX-OS 동일 동작은 후속 보강 예정.)
+
 ## v3.13.0 (2026-06-30) — 시스템 로그 수집 + 이상 탐지
 
 - 수집 시 **show logging**(Cisco/Arista) / **show log**(Extreme)를 함께 읽어 상세 화면의

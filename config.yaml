@@ -31,12 +31,14 @@ collector:
       arp: "show ip arp"
       vlan: "show vlan brief"
       logging: "show logging last 100"
+      errors: "show interfaces"
     arista_eos:
       status: "show interfaces"
       description: "show interfaces description"
       mac: "show mac address-table dynamic"
       arp: "show ip arp"
       logging: "show logging last 100"
+      errors: "show interfaces"
     extreme_exos:
       status: "show ports"
       description: "show ports description"

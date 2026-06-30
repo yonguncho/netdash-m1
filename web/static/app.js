@@ -254,13 +254,18 @@ function renderPortsTab(ports) {
   var el = document.getElementById("dtab-ports");
   if (!ports.length) { el.innerHTML = "<p style='color:#64748b'>포트 정보 없음</p>"; return; }
   el.innerHTML = _searchBox("ports-tbody", "포트/상태/VLAN/설명 검색...") +
-    "<table class='data-table'><thead><tr><th>포트</th><th>상태</th><th>VLAN</th><th>속도</th><th>설명</th></tr></thead><tbody id='ports-tbody'>" +
+    "<table class='data-table'><thead><tr><th>포트</th><th>상태</th><th>VLAN</th><th>속도</th>" +
+    "<th>CRC</th><th>In/Out 오류</th><th>설명</th></tr></thead><tbody id='ports-tbody'>" +
     ports.map(function(p) {
       // up=초록, err-disabled=빨강, notconnect/disabled/down=회색(구분 텍스트 유지)
       var pcls = p.status === "up" ? "ok" : (p.status === "err-disabled" ? "critical" : "new");
+      var crc = p.crc_errors || 0, ie = p.in_errors || 0, oe = p.out_errors || 0;
+      var errStyle = (crc > 0 || ie > 0 || oe > 0) ? " style='color:#b91c1c;font-weight:600'" : "";
       return "<tr><td>" + escHtml(p.name) + "</td><td><span class='status-badge status-badge--" +
         pcls + "'>" + escHtml(p.status || "-") + "</span></td><td>" +
-        (p.vlan != null ? p.vlan : "-") + "</td><td>" + escHtml(p.speed || "-") + "</td><td>" + escHtml(p.description || "-") + "</td></tr>";
+        (p.vlan != null ? p.vlan : "-") + "</td><td>" + escHtml(p.speed || "-") + "</td>" +
+        "<td" + errStyle + ">" + crc + "</td><td" + errStyle + ">" + ie + " / " + oe + "</td><td>" +
+        escHtml(p.description || "-") + "</td></tr>";
     }).join("") + "</tbody></table>";
 }
 
