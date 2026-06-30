@@ -10,6 +10,7 @@ SH_INT_STATUS = """
 Port      Name               Status       Vlan       Duplex  Speed Type
 Gi1/0/1   SERVER-01          connected    100        a-full a-1000 10/100/1000BaseTX
 Gi1/0/2                      notconnect   1            auto   auto 10/100/1000BaseTX
+Gi1/0/4   OLD-LINK           disabled     1            auto   auto 10/100/1000BaseTX
 Te1/1/1   UPLINK-CORE        connected    trunk        full    10G SFP-10GBase-SR
 """
 
@@ -43,13 +44,19 @@ def _out():
 
 def test_ports_status_parsed():
     r = cisco_ios.parse(_out(), 1)
-    by = {p["name"]: p for p in r["ports"]}
     g1 = next(p for p in r["ports"] if p["name"].endswith("1/0/1"))
-    assert g1["status"] == "up"           # connected → up
+    assert g1["status"] == "up"             # connected → up
     assert g1["vlan"] == 100
     assert "SERVER-01" in g1["description"]
+    # 속도/듀플렉스/타입이 함께 파싱돼야(과거 누락)
+    assert "a-1000" in g1["speed"]
+    assert "a-full" in g1["speed"]
+    assert "BaseTX" in g1["speed"]
+    # notconnect / disabled 구분 보존
     g2 = next(p for p in r["ports"] if p["name"].endswith("1/0/2"))
-    assert g2["status"] == "down"         # notconnect → down
+    assert g2["status"] == "notconnect"
+    g4 = next(p for p in r["ports"] if p["name"].endswith("1/0/4"))
+    assert g4["status"] == "disabled"
 
 
 def test_dot_mac_parsed():

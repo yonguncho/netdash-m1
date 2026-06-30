@@ -224,8 +224,10 @@ function renderPortsTab(ports) {
   el.innerHTML = _searchBox("ports-tbody", "포트/상태/VLAN/설명 검색...") +
     "<table class='data-table'><thead><tr><th>포트</th><th>상태</th><th>VLAN</th><th>속도</th><th>설명</th></tr></thead><tbody id='ports-tbody'>" +
     ports.map(function(p) {
+      // up=초록, err-disabled=빨강, notconnect/disabled/down=회색(구분 텍스트 유지)
+      var pcls = p.status === "up" ? "ok" : (p.status === "err-disabled" ? "critical" : "new");
       return "<tr><td>" + escHtml(p.name) + "</td><td><span class='status-badge status-badge--" +
-        (p.status === "up" ? "ok" : "critical") + "'>" + escHtml(p.status || "-") + "</span></td><td>" +
+        pcls + "'>" + escHtml(p.status || "-") + "</span></td><td>" +
         (p.vlan != null ? p.vlan : "-") + "</td><td>" + escHtml(p.speed || "-") + "</td><td>" + escHtml(p.description || "-") + "</td></tr>";
     }).join("") + "</tbody></table>";
 }

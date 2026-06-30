@@ -1,5 +1,13 @@
 # NetDash 릴리스 노트
 
+## v3.12.0 (2026-06-30) — 포트 상태 세분화 + 속도/듀플렉스/타입
+
+- **포트 상태 구분**: `connected`(up) 외에 **notconnect / disabled / err-disabled**를
+  구분해 표시합니다(과거엔 모두 down으로 합쳐짐). 배지 색도 구분(up=초록, err-disabled=빨강,
+  나머지=회색).
+- **속도 누락 수정**: `show interface status`의 **Duplex·Speed·Type**(예: a-full · a-1000 ·
+  10/100/1000BaseTX, auto-duplex/auto-speed)을 함께 파싱해 속도 칸에 표시합니다.
+
 ## v3.11.0 (2026-06-30) — 장비 일괄 등록 (IP/SUBNET/HOSTNAME 엑셀)
 
 - 현황판의 **"장비 일괄등록(IP목록)"** 버튼으로 IP·서브넷·HOSTNAME 엑셀을 업로드하면

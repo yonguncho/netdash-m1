@@ -106,26 +106,36 @@ def _parse_ports(status_output, descriptions, switch_id):
         if not port:
             continue
         status_word = sm.group(1).lower()
-        # show interface status 키워드 매핑: connected/up만 up, 나머지는 down
-        if status_word in ("connected", "up"):
-            status = "up"
-        elif status_word in ("err-disabled", "errdisable", "disabled"):
-            status = "error-disabled"
-        else:  # notconnect, inactive, suspended, sfpAbsent, down, ...
-            status = "down"
-        # 상태 이후 토큰: Vlan Duplex Speed
+        # 상태 세분화: notconnect / disabled / err-disabled를 구분 보존
+        _smap = {
+            "connected": "up", "up": "up",
+            "notconnect": "notconnect", "notpresent": "notconnect",
+            "sfpabsent": "notconnect", "xcvrabsen": "notconnect",
+            "disabled": "disabled",
+            "err-disabled": "err-disabled", "errdisable": "err-disabled",
+            "inactive": "inactive", "suspended": "suspended",
+            "down": "down",
+        }
+        status = _smap.get(status_word, "down")
+        # 상태 이후 토큰: Vlan  Duplex  Speed  Type...
         rest = line[sm.end():].split()
         vlan = 1
         if rest and rest[0].isdigit():
             v = utils.normalize_vlan(rest[0])
             vlan = v if v else 1
-        speed = rest[2] if len(rest) > 2 else "unknown"
+        duplex = rest[1] if len(rest) > 1 else ""
+        spd = rest[2] if len(rest) > 2 else ""
+        ptype = " ".join(rest[3:]) if len(rest) > 3 else ""
+        # 속도/듀플렉스/타입을 함께 표기(auto-duplex/auto-speed/10/100/1000BaseTX)
+        speed = " · ".join([x for x in (spd, duplex, ptype) if x]) or "unknown"
         ports.append({
             "switch_id": switch_id,
             "name": port,
             "status": status,
             "vlan": vlan,
             "speed": speed,
+            "duplex": duplex,
+            "port_type": ptype,
             "description": descriptions.get(port, ""),
         })
     return utils.deduplicate_list(ports, lambda p: p["name"])
