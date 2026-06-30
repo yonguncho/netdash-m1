@@ -301,6 +301,8 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
         "ip": switch["ip"],
         "username": username,
         "password": password,
+        # enable secret: 1차로 로그인 비밀번호를 사용(많은 환경에서 동일).
+        "secret": password,
         "conn_timeout": ssh_timeout,
         "fast_cli": False
     }
@@ -318,6 +320,14 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 from . import netbind
                 conn_device["sock"] = netbind.bind_socket(switch["ip"], 22, source_ip, ssh_timeout)
             with ConnectHandler(**conn_device) as conn:
+                # user 모드(>)면 enable 진입. IOS-XE는 user 모드에서 show 명령이
+                # "% Invalid input"으로 거부되므로 특권 모드로 올라간다.
+                try:
+                    if hasattr(conn, "check_enable_mode") and not conn.check_enable_mode():
+                        conn.enable()
+                except Exception as _e:
+                    utils.log_event("warning", "enable_failed",
+                                    switch=switch["name"], error=_sanitize_error_msg(str(_e)))
                 # 벤더별 페이징 비활성화(미정의 벤더는 생략). 실패해도 수집은 계속.
                 paging = _PAGING_CMD.get(vendor)
                 if paging:
