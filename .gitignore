@@ -1,4 +1,9 @@
 netdash.db
+netdash_token.txt
+*_token.txt
+dist/
+build/
+build_*.log
 raw_outputs/
 .env
 __pycache__/
