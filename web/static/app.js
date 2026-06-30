@@ -301,6 +301,58 @@ function renderEventsTab(events) {
 }
 
 // ─── 스위치 카드 렌더링 ──────────────────────────────────────────
+var _viewMode = "card";  // card | rack
+
+(function () {
+  var bc = document.getElementById("btn-view-card");
+  var br = document.getElementById("btn-view-rack");
+  if (!bc || !br) return;
+  function setMode(m) {
+    _viewMode = m;
+    document.getElementById("switch-grid").style.display = (m === "card") ? "" : "none";
+    document.getElementById("rack-view").style.display = (m === "rack") ? "" : "none";
+    bc.className = "btn " + (m === "card" ? "btn--primary" : "btn--secondary");
+    br.className = "btn " + (m === "rack" ? "btn--primary" : "btn--secondary");
+    bc.style.fontSize = br.style.fontSize = "12px";
+    if (m === "rack") renderRackView(_switches);
+  }
+  bc.addEventListener("click", function () { setMode("card"); });
+  br.addEventListener("click", function () { setMode("rack"); });
+})();
+
+function renderRackView(switches) {
+  var host = document.getElementById("rack-view");
+  if (!host) return;
+  switches = _applyLocFilter(switches, "loc-filter-dash");
+  // 그룹(공장/건물/층) → TPS(랙) → 스위치(유닛)
+  var groups = {};
+  switches.forEach(function (sw) {
+    var g = sw.tps_group || "위치 미상(hostname 미해석)";
+    var t = sw.tps_num || "기타";
+    (groups[g] = groups[g] || {});
+    (groups[g][t] = groups[g][t] || []).push(sw);
+  });
+  var gkeys = Object.keys(groups).sort();
+  if (!gkeys.length) { host.innerHTML = "<p class='placeholder'>표시할 스위치가 없습니다.</p>"; return; }
+  host.innerHTML = gkeys.map(function (g) {
+    var racks = groups[g];
+    var rkeys = Object.keys(racks).sort();
+    var racksHtml = rkeys.map(function (t) {
+      var units = racks[t].map(function (sw) {
+        var cls = swStatusClass(sw);
+        return "<div class='rack-unit rack-unit--" + cls + "' " +
+          "data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>" +
+          "<span class='rack-unit__name'>" + escHtml(sw.name) + "</span>" +
+          "<span class='rack-unit__ip'>" + escHtml(sw.ip) + "</span></div>";
+      }).join("");
+      return "<div class='rack'><div class='rack__label'>" + escHtml(t) + "</div>" +
+        "<div class='rack__units'>" + units + "</div></div>";
+    }).join("");
+    return "<div class='rack-group'><div class='rack-group__title'>📍 " + escHtml(g) + "</div>" +
+      "<div class='rack-row'>" + racksHtml + "</div></div>";
+  }).join("");
+}
+
 function renderSwitchGrid(switches) {
   switches = _applyLocFilter(switches, "loc-filter-dash");
   var grid = document.getElementById("switch-grid");
@@ -900,6 +952,7 @@ function pollState() {
       _switches = data.switches || [];
       renderSwitchGrid(_switches);
       renderSwitchTable(_switches);
+      if (_viewMode === "rack") renderRackView(_switches);
 
       if (_currentSwitchId) {
         var sw = _switches.find(function(s) { return s.id === _currentSwitchId; });

@@ -219,12 +219,15 @@ def create_app(demo_mode=None):
             switches = db.get_switches(db_path)
             snapshots = db.get_snapshots(db_path)
 
-            # hostname → TPS 물리 위치 라벨 주입(포맷 일치 시)
+            # hostname → TPS 물리 위치 라벨 + 랙 그룹핑 키 주입(포맷 일치 시)
             from core import tps_location
             for sw in switches:
                 info = tps_location.parse(sw.get("hostname"))
                 if info:
                     sw["tps_location"] = info["label"]
+                    sw["tps_group"] = "%d공장 · %s(%s) · %d층" % (
+                        info["phase"], info["building_name"], info["building_code"], info["floor"])
+                    sw["tps_num"] = "TPS" + info["tps"]
 
             return jsonify({
                 "switches": switches,

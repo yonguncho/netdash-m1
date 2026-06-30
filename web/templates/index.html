@@ -42,6 +42,8 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">TPS 스위치 현황판</span>
         <div class="pane-toolbar__actions">
+          <button id="btn-view-card" class="btn btn--primary" style="font-size:12px">카드 뷰</button>
+          <button id="btn-view-rack" class="btn btn--secondary" style="font-size:12px">랙 뷰</button>
           <input id="loc-filter-dash" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
           <button id="btn-add-manual" class="btn btn--secondary">+ 수동 추가</button>
           <button id="btn-import-excel" class="btn btn--primary">엑셀 가져오기</button>
@@ -56,6 +58,7 @@
       <div id="switch-grid" class="switch-grid">
         <p class="placeholder">스위치를 추가하거나 엑셀 파일을 가져오세요.</p>
       </div>
+      <div id="rack-view" class="rack-view" style="display:none"></div>
     </div>
 
     <!-- 방화벽 현황 탭 (M10: Palo Alto / Fortinet) -->

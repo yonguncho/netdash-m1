@@ -313,6 +313,36 @@ body {
 .dtab-pane { display: none; }
 .dtab-pane.active { display: block; }
 
+/* ─── 서버실 랙 뷰 (TPS 위치 그룹핑) ───────────── */
+.rack-view { display: flex; flex-direction: column; gap: 22px; padding: 4px; }
+.rack-group__title {
+  font-size: 14px; font-weight: 700; margin: 4px 0 10px;
+  padding-bottom: 6px; border-bottom: 2px solid var(--border);
+}
+.rack-row { display: flex; flex-wrap: wrap; gap: 16px; }
+.rack {
+  border: 2px solid #334155; border-radius: 8px; background: #1e293b;
+  min-width: 190px; padding: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.15);
+}
+.rack__label {
+  color: #e2e8f0; font-size: 12px; font-weight: 700; text-align: center;
+  padding: 4px; margin-bottom: 6px; letter-spacing: .5px;
+}
+.rack__units { display: flex; flex-direction: column; gap: 4px; }
+.rack-unit {
+  display: flex; align-items: center; gap: 8px;
+  background: #0f172a; border-left: 4px solid #64748b;
+  border-radius: 4px; padding: 7px 10px; cursor: pointer;
+  color: #e2e8f0; font-size: 12px; transition: background .15s;
+}
+.rack-unit:hover { background: #1e293b; }
+.rack-unit--ok { border-left-color: #22c55e; }
+.rack-unit--critical { border-left-color: #ef4444; }
+.rack-unit--collecting { border-left-color: #3b82f6; }
+.rack-unit--new { border-left-color: #94a3b8; }
+.rack-unit__name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rack-unit__ip { color: #94a3b8; font-size: 11px; }
+
 /* ─── 기타 ───────────────────────────────────── */
 .coming-soon {
   display: flex; align-items: center; justify-content: center;
