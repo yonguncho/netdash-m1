@@ -32,6 +32,25 @@ document.addEventListener("click", function (e) {
   }
 });
 
+// ─── 테이블 검색 위임 (.tbl-search → data-target tbody 행 필터) ──────
+document.addEventListener("input", function (e) {
+  var inp = e.target;
+  if (!inp.classList || !inp.classList.contains("tbl-search")) return;
+  var tbody = document.getElementById(inp.getAttribute("data-target"));
+  if (!tbody) return;
+  var q = inp.value.trim().toLowerCase();
+  tbody.querySelectorAll("tr").forEach(function (tr) {
+    tr.style.display = (!q || tr.textContent.toLowerCase().indexOf(q) >= 0) ? "" : "none";
+  });
+});
+
+// 테이블 검색창 HTML 생성 헬퍼
+function _searchBox(targetId, placeholder) {
+  return "<input class='tbl-search' data-target='" + targetId + "' placeholder='" +
+    placeholder + "' style='margin-bottom:8px;padding:5px 9px;width:240px;" +
+    "border:1px solid #cbd5e1;border-radius:4px;font-size:13px'>";
+}
+
 // ─── 탭 전환 ─────────────────────────────────────────────────────
 document.querySelectorAll(".tab-nav__btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -111,7 +130,8 @@ function loadDetailData(switchId) {
 function renderPortsTab(ports) {
   var el = document.getElementById("dtab-ports");
   if (!ports.length) { el.innerHTML = "<p style='color:#64748b'>포트 정보 없음</p>"; return; }
-  el.innerHTML = "<table class='data-table'><thead><tr><th>포트</th><th>상태</th><th>VLAN</th><th>속도</th><th>설명</th></tr></thead><tbody>" +
+  el.innerHTML = _searchBox("ports-tbody", "포트/상태/VLAN/설명 검색...") +
+    "<table class='data-table'><thead><tr><th>포트</th><th>상태</th><th>VLAN</th><th>속도</th><th>설명</th></tr></thead><tbody id='ports-tbody'>" +
     ports.map(function(p) {
       return "<tr><td>" + escHtml(p.name) + "</td><td><span class='status-badge status-badge--" +
         (p.status === "up" ? "ok" : "critical") + "'>" + escHtml(p.status || "-") + "</span></td><td>" +
@@ -122,7 +142,8 @@ function renderPortsTab(ports) {
 function renderMacsTab(macs) {
   var el = document.getElementById("dtab-macs");
   if (!macs.length) { el.innerHTML = "<p style='color:#64748b'>MAC 정보 없음</p>"; return; }
-  el.innerHTML = "<table class='data-table'><thead><tr><th>VLAN</th><th>MAC 주소</th><th>포트</th><th>타입</th></tr></thead><tbody>" +
+  el.innerHTML = _searchBox("macs-tbody", "VLAN/MAC/포트 검색...") +
+    "<table class='data-table'><thead><tr><th>VLAN</th><th>MAC 주소</th><th>포트</th><th>타입</th></tr></thead><tbody id='macs-tbody'>" +
     macs.map(function(m) {
       return "<tr><td>" + (m.vlan != null ? m.vlan : "-") + "</td><td><code>" + escHtml(m.mac) + "</code></td><td>" + escHtml(m.port) + "</td><td>" + escHtml(m.entry_type || "-") + "</td></tr>";
     }).join("") + "</tbody></table>";
@@ -131,7 +152,8 @@ function renderMacsTab(macs) {
 function renderArpsTab(arps) {
   var el = document.getElementById("dtab-arps");
   if (!arps.length) { el.innerHTML = "<p style='color:#64748b'>ARP 정보 없음</p>"; return; }
-  el.innerHTML = "<table class='data-table'><thead><tr><th>IP</th><th>MAC 주소</th><th>인터페이스</th></tr></thead><tbody>" +
+  el.innerHTML = _searchBox("arps-tbody", "IP/MAC/인터페이스 검색...") +
+    "<table class='data-table'><thead><tr><th>IP</th><th>MAC 주소</th><th>인터페이스</th></tr></thead><tbody id='arps-tbody'>" +
     arps.map(function(a) {
       return "<tr><td>" + escHtml(a.ip) + "</td><td><code>" + escHtml(a.mac) + "</code></td><td>" + escHtml(a.interface || "-") + "</td></tr>";
     }).join("") + "</tbody></table>";
@@ -159,7 +181,11 @@ function renderSwitchGrid(switches) {
   switches.forEach(function(sw) {
     var card = document.getElementById("swcard-" + sw.id);
     if (!card) return;
-    card.addEventListener("click", function() { openCredentialModal(sw); });
+    card.addEventListener("click", function(e) {
+      // 카드 안의 버튼(상세보기 등)은 이벤트 위임이 처리 → 수집 모달을 띄우지 않음
+      if (e.target.closest("[data-action]")) return;
+      openCredentialModal(sw);
+    });
   });
 }
 
@@ -433,7 +459,8 @@ function showFirewallDetail(fid) {
           }).join("") + "</tbody></table>"
         : "<p style='color:#64748b'>인터페이스 정보 없음</p>";
       var arpHtml = arp.length
-        ? "<table class='data-table'><thead><tr><th>IP</th><th>MAC</th><th>인터페이스</th></tr></thead><tbody>" +
+        ? _searchBox("fw-arp-tbody", "IP/MAC/인터페이스 검색...") +
+          "<table class='data-table'><thead><tr><th>IP</th><th>MAC</th><th>인터페이스</th></tr></thead><tbody id='fw-arp-tbody'>" +
           arp.map(function(a) {
             return "<tr><td>" + escHtml(a.ip) + "</td><td><code>" + escHtml(a.mac) + "</code></td><td>" +
               escHtml(a.interface || "-") + "</td></tr>";
