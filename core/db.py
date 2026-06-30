@@ -281,6 +281,7 @@ def init_schema(db_path):
                 ("hostname", "TEXT"),
                 ("location", "TEXT"),
                 ("alert", "TEXT DEFAULT 'none'"),
+                ("subnet", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")

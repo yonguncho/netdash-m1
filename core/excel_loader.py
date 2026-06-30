@@ -37,6 +37,8 @@ ALIASES = {
     # M7: 장부(ledger) 위치 — 호스트 블록에서 기대 연결 위치를 적재
     'ledger_switch': {'연결스위치', 'connectedswitch', 'ledgerswitch', 'uplinkswitch'},
     'ledger_port': {'연결포트', 'connectedport', 'ledgerport', 'uplinkport'},
+    # 장비 인벤토리 업로드용 서브넷
+    'subnet': {'subnet', 'ipsubnet', 'cidr', 'network', 'netmask', '서브넷', '대역', '네트워크'},
 }
 
 IP_REGEX = re.compile(
@@ -56,6 +58,53 @@ def _is_valid_ip(ip_str: Optional[Any]) -> bool:
     if not isinstance(ip_str, str):
         return False
     return bool(IP_REGEX.match(ip_str.strip()))
+
+
+def parse_switch_inventory(source) -> List[Dict[str, Any]]:
+    """IP/SUBNET/HOSTNAME 인벤토리 엑셀 → 스위치 등록 행 목록.
+
+    벤더 무관: IP가 있는 모든 행을 스위치로 본다(벤더는 'unknown', 이후 수정).
+    헤더에서 ip/hostname/name/subnet/location 컬럼을 자동 매핑.
+    Returns: [{name, ip, hostname, subnet, location, vendor='unknown'}]
+    """
+    wb = openpyxl_load(source, read_only=True, data_only=True)
+    wanted = ('ip', 'hostname', 'name', 'subnet', 'location')
+    field_alias = {f: ALIASES[f] for f in wanted if f in ALIASES}
+    out = []
+    seen = set()
+    for ws in wb.worksheets:
+        colmap = None
+        for row in ws.iter_rows(values_only=True):
+            if colmap is None:
+                m = {}
+                for ci, cell in enumerate(row):
+                    n = _norm(cell)
+                    for f, al in field_alias.items():
+                        if n in al:
+                            m[f] = ci
+                if 'ip' in m:  # ip 컬럼이 있는 행을 헤더로 인식
+                    colmap = m
+                continue
+
+            def _get(field):
+                ci = colmap.get(field)
+                if ci is None or ci >= len(row):
+                    return ""
+                v = row[ci]
+                return str(v).strip() if v is not None else ""
+
+            ip = _get('ip')
+            if not _is_valid_ip(ip) or ip in seen:
+                continue
+            seen.add(ip)
+            host = _get('hostname')
+            name = _get('name') or host or ip
+            out.append({
+                "name": name, "ip": ip, "hostname": host,
+                "subnet": _get('subnet'), "location": _get('location'),
+                "vendor": "unknown",
+            })
+    return out
 
 
 def _looks_like_header(row: List[Any]) -> bool:

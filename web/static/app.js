@@ -88,6 +88,29 @@ function _applyLocFilter(list, inputId) {
   });
 })();
 
+// ─── 장비 일괄 등록(IP/SUBNET/HOSTNAME 엑셀) ─────────────────────
+(function () {
+  var btn = document.getElementById("btn-import-inventory");
+  var inp = document.getElementById("inventory-file-input");
+  if (!btn || !inp) return;
+  btn.addEventListener("click", function () { inp.click(); });
+  inp.addEventListener("change", function () {
+    if (!inp.files.length) return;
+    var fd = new FormData();
+    fd.append("file", inp.files[0]);
+    fetch("/api/switches/import-inventory", {method: "POST", body: fd})
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          alert("장비 일괄 등록 완료: " + res.imported + "건 등록" +
+            (res.skipped ? " (허용 대역 밖 " + res.skipped + "건 제외)" : "") + " / 전체 " + res.total + "행");
+          pollState();
+        } else alert(res.error || "등록 실패");
+        inp.value = "";
+      }).catch(function (e) { console.error(e); alert("서버 오류"); inp.value = ""; });
+  });
+})();
+
 // 테이블 검색창 HTML 생성 헬퍼
 function _searchBox(targetId, placeholder) {
   return "<input class='tbl-search' data-target='" + targetId + "' placeholder='" +

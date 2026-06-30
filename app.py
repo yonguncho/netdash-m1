@@ -21,6 +21,7 @@ from core import flapping as flapping_mod
 from core.utils import log_event
 from core.collector import _sanitize_error_msg
 from core.excel_loader import load_workbook as load_excel_workbook
+from core.excel_loader import parse_switch_inventory
 
 logging.basicConfig(
     level=logging.INFO,
@@ -376,6 +377,38 @@ def create_app(demo_mode=None):
         except Exception as e:
             sanitized = collector._sanitize_error_msg(str(e))
             log_event("error", "import_excel_error", error=sanitized)
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/import-inventory", methods=["POST"])
+    @rate_limit("import_inventory", max_requests=5, window_seconds=60)
+    def import_switch_inventory():
+        """IP/SUBNET/HOSTNAME 인벤토리 엑셀 → 스위치 일괄 등록(벤더 unknown, 이후 수정)."""
+        log_event("info", "import_inventory_requested")
+        if "file" not in request.files:
+            return jsonify({"error": "file field required"}), 400
+        file = request.files["file"]
+        if not file or not file.filename:
+            return jsonify({"error": "file required"}), 400
+        if not file.filename.endswith(".xlsx"):
+            return jsonify({"error": ".xlsx file required"}), 400
+        try:
+            content = file.read()
+            if len(content) / (1024 * 1024) > 16:
+                return jsonify({"error": "file too large (16MB)"}), 413
+            rows = parse_switch_inventory(io.BytesIO(content))
+            allowed = config.collector.get("allowed_ip_ranges")
+            valid, skipped = [], 0
+            for r in rows:
+                try:
+                    r["ip"] = validate_ipv4(r["ip"], allowed)
+                    valid.append(r)
+                except ValueError:
+                    skipped += 1
+            imported = db.import_switches_bulk(db_path, valid) if valid else []
+            log_event("info", "inventory_imported", imported=len(imported), skipped=skipped, total=len(rows))
+            return jsonify({"ok": True, "imported": len(imported), "skipped": skipped, "total": len(rows)})
+        except Exception as e:
+            log_event("error", "import_inventory_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/upload", methods=["POST"])
