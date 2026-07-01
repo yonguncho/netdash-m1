@@ -42,6 +42,11 @@ _NETMIKO_VENDOR = {
     "cisco_nexus": "cisco_nxos",
     "arista": "arista_eos",
     "extreme": "extreme_exos",
+    "extremexos": "extreme_exos",
+    "extreme_xos": "extreme_exos",
+    "extreme-xos": "extreme_exos",
+    "exos": "extreme_exos",
+    "extremenetworks": "extreme_exos",
     "juniper": "juniper_junos",
     "paloalto": "paloalto_panos",
 }
@@ -421,10 +426,21 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                     except Exception as _e:
                         utils.log_event("warning", "vendor_detect_failed",
                                         switch=switch["name"], error=_sanitize_error_msg(str(_e)))
+                # 명령별 개별 예외 처리: 한 명령이 실패(미지원/타임아웃)해도 나머지는 수집.
+                # (예: EXOS의 특정 show 명령이 없어도 전체 수집이 실패하지 않도록)
+                cmd_errors = 0
                 for key, command in commands.items():
-                    output = conn.send_command(command, read_timeout=read_timeout)
-                    outputs[key] = output
-                    utils.log_event("debug", "command_executed", command=command)
+                    try:
+                        outputs[key] = conn.send_command(command, read_timeout=read_timeout)
+                        utils.log_event("debug", "command_executed", command=command)
+                    except Exception as _ce:
+                        outputs[key] = ""
+                        cmd_errors += 1
+                        utils.log_event("warning", "command_failed", switch=switch["name"],
+                                        command=command, error=_sanitize_error_msg(str(_ce)))
+                # 모든 명령이 실패(응답 전무)면 장비 무응답/명령셋 불일치 → 수집 실패 처리
+                if commands and cmd_errors == len(commands):
+                    raise RuntimeError("all collection commands failed")
                 # 포트채널 멤버 해석 명령(config에 없어도 벤더별로 항상 시도)
                 pc_cmd = _PORT_CHANNEL_CMD.get(eff_vendor)
                 if pc_cmd and "port_channel" not in outputs:

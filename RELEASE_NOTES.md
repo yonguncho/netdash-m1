@@ -1,5 +1,16 @@
 # NetDash 릴리스 노트
 
+## v3.24.1 (2026-07-01) — ExtremeXOS 수집 실패 수정(실제 명령/형식)
+
+- **ExtremeXOS 스위치 수집이 실패하던 문제 수정.** 원인은 `show ports`가 자동 갱신 화면이라
+  응답이 끝나지 않아 멈춘 것 + MAC/ARP 명령이 EXOS 문법과 달랐던 것.
+  - 포트 상태: `show ports no-refresh` (자동 갱신 방지) — 링크 상태 active/ready/disabled 인식.
+  - MAC 테이블: `show fdb`, ARP: `show iparp`, 로그: `show log messages memory-buffer`.
+  - 파서를 실제 EXOS 출력 형식(fdb/iparp/no-refresh)에 맞게 재작성.
+- **수집 견고성 개선**: 한 명령이 미지원/타임아웃이어도 나머지는 수집하고, 원본 출력을
+  저장하도록 명령별 개별 예외 처리(전부 실패 시에만 수집 실패 처리).
+- EXOS 벤더 별칭 확대(extremexos/exos/extreme_xos 등 → extreme_exos).
+
 ## v3.24.0 (2026-07-01) — 벤더 자동 학습(수집 시 show version)
 
 - **벤더가 '알 수 없음(unknown)'인 스위치를 수집하면 `show version`으로 실제 벤더를

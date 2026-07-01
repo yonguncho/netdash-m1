@@ -286,8 +286,9 @@ def _get_default_collector_config() -> dict:
                          "mac": "show mac address-table dynamic", "arp": "show arp"},
             "arista_eos": {"status": "show interfaces", "description": "show interfaces description",
                           "mac": "show mac address-table dynamic", "arp": "show ip arp"},
-            "extreme_exos": {"status": "show ports", "description": "show ports description",
-                            "mac": "show mac-address", "arp": "show arp"}
+            "extreme_exos": {"status": "show ports no-refresh", "description": "show ports description",
+                            "mac": "show fdb", "arp": "show iparp",
+                            "logging": "show log messages memory-buffer"}
         }
     }
 

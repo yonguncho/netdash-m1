@@ -40,11 +40,11 @@ collector:
       logging: "show logging last 100"
       errors: "show interfaces"
     extreme_exos:
-      status: "show ports"
+      status: "show ports no-refresh"
       description: "show ports description"
-      mac: "show mac-address"
-      arp: "show arp"
-      logging: "show log"
+      mac: "show fdb"
+      arp: "show iparp"
+      logging: "show log messages memory-buffer"
     cisco_nxos:
       status: "show interface brief"
       description: "show interface description"

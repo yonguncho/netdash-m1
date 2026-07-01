@@ -5,10 +5,11 @@ from . import utils
 logger = logging.getLogger(__name__)
 
 COMMANDS = {
-    "status": "show ports",
+    "status": "show ports no-refresh",
     "description": "show ports description",
-    "mac": "show mac-address",
-    "arp": "show arp"
+    "mac": "show fdb",
+    "arp": "show iparp",
+    "logging": "show log messages memory-buffer",
 }
 
 
@@ -60,16 +61,31 @@ def _parse_ports(status_output, desc_output, switch_id):
         # First token must be a port: slot:port ("1:1") or standalone ("5").
         if not re.match(r"^(?:\d+:)?\d+$", port_tok):
             continue
-        # Status is the EXACT "Up"/"Down" token, never a substring of another column.
-        line_status = None
+        # EXOS 'show ports no-refresh' Link State: active(=up) / ready(=down) / disabled.
+        # (구버전/타 출력의 up/down도 함께 인식). 정확 토큰 매칭.
+        status = None
         for tok in tokens[1:]:
-            if tok.lower() in ("up", "down"):
-                line_status = tok
-                break
-        if line_status is None:
+            tl = tok.lower()
+            if tl in ("active", "up"):
+                status = "up"; break
+            if tl in ("ready", "down", "notpresent"):
+                status = "down"; break
+            if tl in ("disabled", "disable"):
+                status = "disabled"; break
+        if status is None:
             continue
 
-        status = utils.parse_interface_status(line_status)
+        # 속도/듀플렉스 best-effort: 숫자 속도(10/100/1000/10000...) + FULL/HALF
+        spd = ""
+        for tok in tokens[1:]:
+            if re.match(r"^\d{2,6}$", tok):
+                spd = tok; break
+        dup = ""
+        for tok in tokens[1:]:
+            if tok.upper() in ("FULL", "HALF"):
+                dup = tok.upper(); break
+        speed = " · ".join([x for x in (spd, dup) if x]) or "unknown"
+
         port_name = utils.normalize_port(port_tok, vendor="extreme_exos")
 
         if port_name:
@@ -78,7 +94,7 @@ def _parse_ports(status_output, desc_output, switch_id):
                 "name": port_name,
                 "status": status,
                 "vlan": 1,
-                "speed": "unknown",
+                "speed": speed,
                 "description": descriptions.get(port_name, "")
             })
 
@@ -98,11 +114,13 @@ def _parse_macs(mac_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # Regex supports both colon-separated (xx:xx:xx:xx:xx:xx) and no-colon (xxxxxxxxxxxx) MAC formats
-        # M6: port column matches slot:port ("1:1") or standalone ("5")
-        match = re.match(r"^\s*(\d+)\s+([\da-f:]{12,17})\s+(\w+)\s+((?:\d+:)?\d+)$", line, re.IGNORECASE)
+        # EXOS 'show fdb' 형식: MAC  VLAN이름(태그)  Age  Flags  Port
+        #   00:04:96:52:e7:7e   Default(0001)   0000 d m   1:2
+        # → MAC(맨앞), VLAN 태그는 (숫자), Port는 맨 끝 토큰(slot:port 또는 standalone)
+        match = re.match(
+            r"^\s*([\da-f:]{12,17})\s+\S*\((\d+)\).*?((?:\d+:)?\d+)\s*$", line, re.IGNORECASE)
         if match:
-            vlan_str, mac_addr, mac_type, port_name = match.groups()
+            mac_addr, vlan_str, port_name = match.groups()
 
             vlan = utils.normalize_vlan(vlan_str)
             mac = utils.normalize_mac(mac_addr)
@@ -114,7 +132,7 @@ def _parse_macs(mac_output, switch_id):
                     "vlan": vlan,
                     "mac": mac,
                     "port": port_name,
-                    "type": mac_type.lower()
+                    "type": "dynamic"
                 })
 
     return utils.deduplicate_list(macs, lambda m: (m["vlan"], m["mac"], m["port"]))
@@ -133,11 +151,14 @@ def _parse_arps(arp_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # Simplified regex with explicit IP/MAC format
-        # M6: interface column matches slot:port ("1:1") or standalone ("5")
-        match = re.match(r"^\s*([\d.]+)\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+(\d+)\s+((?:\d+:)?\d+)$", line, re.IGNORECASE)
+        # EXOS 'show iparp' 형식: VR  Destination(IP)  MAC  Age  Static  VLAN  VID  Port
+        #   VR-Default  10.66.0.1  00:04:96:xx:xx:xx  0  NO  v10  10  1:15
+        # → IP·MAC은 어디서든, Port는 맨 끝 토큰(slot:port 또는 standalone)
+        match = re.search(
+            r"((?:\d{1,3}\.){3}\d{1,3})\s+([\da-f:]{12,17}).*?((?:\d+:)?\d+)\s*$",
+            line, re.IGNORECASE)
         if match:
-            ip, mac_addr, vlan_str, interface = match.groups()
+            ip, mac_addr, interface = match.groups()
 
             if utils.validate_ip(ip):
                 mac = utils.normalize_mac(mac_addr)
