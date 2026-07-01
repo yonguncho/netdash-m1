@@ -134,13 +134,26 @@ def test_choose_attachment_logical_only_not_direct():
     assert direct is False
 
 
-def test_choose_attachment_trunk_physical_not_direct():
-    """물리 포트라도 MAC 수가 많으면(트렁크) direct=False."""
+def test_choose_attachment_single_physical_is_direct_even_if_busy():
+    """물리 포트로 관측된 '유일한' 위치면 MAC이 많아도 직접(백본/서버 케이스).
+
+    백본 NX-OS에 직접 붙은 설비: 백본만 물리 포트로 관측(다른 스위치는 Po/Vl 업링크).
+    포트가 MAC을 많이 학습해도 물리 관측이 하나뿐이면 그곳이 직접 연결 지점.
+    """
     from core import facility
-    matches = [(1, "SW-A", "Te1/1/1")]
-    port_counts = {(1, "te1/1/1"): 150}  # 트렁크
+    matches = [(1, "BACKBONE-NXOS", "Ethernet1/5"), (2, "TPS11", "Po1")]
+    port_counts = {(1, "ethernet1/5"): 150, (2, "po1"): 300}
     sid, sname, port, direct, via = facility._choose_attachment(matches, port_counts)
-    assert port == "Te1/1/1" and direct is False
+    assert sname == "BACKBONE-NXOS" and port == "Ethernet1/5" and direct is True
+
+
+def test_choose_attachment_ambiguous_trunks_not_direct():
+    """여러 물리 포트 모두 MAC 많고 최소가 뚜렷이 적지 않으면 미확인."""
+    from core import facility
+    matches = [(1, "SW-A", "Te1/1/1"), (2, "SW-B", "Te2/1/1")]
+    port_counts = {(1, "te1/1/1"): 150, (2, "te2/1/1"): 160}
+    sid, sname, port, direct, via = facility._choose_attachment(matches, port_counts)
+    assert direct is False
 
 
 def test_get_port_mac_counts(temp_db):

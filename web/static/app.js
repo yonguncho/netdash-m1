@@ -4,6 +4,7 @@
 
 // ─── 전역 상태 ────────────────────────────────────────────────────
 let _switches = [];
+let _firewalls = [];
 let _currentSwitchId = null;
 let _pollTimer = null;
 
@@ -133,7 +134,7 @@ document.querySelectorAll(".tab-nav__btn").forEach(btn => {
     if (btn.dataset.tab === "reconcile") loadReconcile();
     if (btn.dataset.tab === "firewall") loadFirewalls();
     if (btn.dataset.tab === "facility") loadFacility();
-    if (btn.dataset.tab === "room") renderRoom(_switches);
+    if (btn.dataset.tab === "room") { loadFirewalls(); renderRoom(_switches); }
   });
 });
 
@@ -377,23 +378,40 @@ var _roomViewMode = "card";  // card | rack
 })();
 
 function renderRoom(switches) {
-  // 서버실 소속 = location이 "A09U27" 형식(room_rack 주입됨)
-  var room = (switches || []).filter(function (sw) { return sw.room_rack; });
-  if (_roomViewMode === "rack") renderRoomRackView(room);
-  else renderRoomGrid(room);
+  // 서버실 소속 = location이 "A09U27" 형식(room_rack 주입됨). 스위치 + 방화벽 모두.
+  var roomSw = (switches || _switches || []).filter(function (sw) { return sw.room_rack; });
+  var roomFw = (_firewalls || []).filter(function (f) { return f.room_rack; });
+  if (_roomViewMode === "rack") renderRoomRackView(roomSw, roomFw);
+  else renderRoomGrid(roomSw, roomFw);
 }
 
-function renderRoomGrid(switches) {
+var _ROOM_EMPTY = "서버실 위치(A09U27 형식)가 지정된 장비가 없습니다. 스위치/방화벽 수정 → 위치에 A09U27처럼 입력하세요.";
+
+function _fwRoomCardHTML(f) {
+  var sc = _fwStatusMeta[f.status] || "new";
+  return "<div class='sw-card sw-card--" + sc + "' style='cursor:pointer' " +
+    "data-action='detail-fw' data-id='" + f.id + "'>" +
+    "<div class='sw-card__name'>🛡 " + escHtml(f.name) + "</div>" +
+    "<div class='sw-card__meta'><span>" + escHtml(f.host) + "</span>" +
+    (f.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>" : "") +
+    "<span style='font-size:10px'>" + escHtml(f.vendor || "") + "</span></div>" +
+    "<div class='sw-card__status'><span class='dot dot--" + sc + "'></span>" +
+    "<span>방화벽 · " + escHtml(f.status || "new") + "</span></div></div>";
+}
+
+function renderRoomGrid(switches, firewalls) {
   switches = _applyLocFilter(switches, "loc-filter-room");
+  firewalls = _applyLocFilter(firewalls || [], "loc-filter-room");
   var grid = document.getElementById("room-grid");
   if (!grid) return;
-  if (!switches.length) {
-    grid.innerHTML = "<p class='placeholder'>서버실 위치(A09U27 형식)가 지정된 장비가 없습니다. 스위치 수정 → 위치에 A09U27처럼 입력하세요.</p>";
+  if (!switches.length && !firewalls.length) {
+    grid.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
-  // 랙 → 유닛 순으로 정렬
   switches = switches.slice().sort(_roomSort);
-  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, false); }).join("");
+  firewalls = firewalls.slice().sort(_roomSort);
+  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, false); }).join("") +
+                   firewalls.map(_fwRoomCardHTML).join("");
   switches.forEach(function (sw) {
     var card = document.getElementById("swcard-" + sw.id);
     if (!card) return;
@@ -409,24 +427,31 @@ function _roomSort(a, b) {
   return (b.room_unit || 0) - (a.room_unit || 0);  // 유닛 높은 번호가 위(실제 랙과 동일)
 }
 
-function renderRoomRackView(switches) {
+function renderRoomRackView(switches, firewalls) {
   var host = document.getElementById("room-rack-view");
   if (!host) return;
   switches = _applyLocFilter(switches, "loc-filter-room");
-  if (!switches.length) {
-    host.innerHTML = "<p class='placeholder'>서버실 위치(A09U27 형식)가 지정된 장비가 없습니다.</p>";
+  firewalls = _applyLocFilter(firewalls || [], "loc-filter-room");
+  if (!switches.length && !firewalls.length) {
+    host.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
-  // 랙(room_rack) → 유닛 목록
+  // 랙(room_rack) → 유닛 목록 (스위치 + 방화벽)
   var racks = {};
-  switches.forEach(function (sw) {
-    (racks[sw.room_rack] = racks[sw.room_rack] || []).push(sw);
-  });
+  switches.forEach(function (sw) { (racks[sw.room_rack] = racks[sw.room_rack] || []).push({ k: "sw", o: sw }); });
+  firewalls.forEach(function (f) { (racks[f.room_rack] = racks[f.room_rack] || []).push({ k: "fw", o: f }); });
   var rkeys = Object.keys(racks).sort();
   host.innerHTML = "<div class='rack-row'>" + rkeys.map(function (rk) {
-    var units = racks[rk].slice().sort(function (a, b) { return (b.room_unit || 0) - (a.room_unit || 0); });
-    var unitsHtml = units.map(function (sw) {
-      var cls = swStatusClass(sw);
+    var units = racks[rk].slice().sort(function (a, b) { return (b.o.room_unit || 0) - (a.o.room_unit || 0); });
+    var unitsHtml = units.map(function (u) {
+      if (u.k === "fw") {
+        var f = u.o, fsc = _fwStatusMeta[f.status] || "new";
+        return "<div class='rack-unit rack-unit--" + fsc + "' data-action='detail-fw' data-id='" + f.id + "'>" +
+          "<span class='rack-unit__u'>U" + escHtml(String(f.room_unit)) + "</span>" +
+          "<span class='rack-unit__name'>🛡 " + escHtml(f.name) + "</span>" +
+          "<span class='rack-unit__ip'>" + escHtml(f.host) + "</span></div>";
+      }
+      var sw = u.o, cls = swStatusClass(sw);
       return "<div class='rack-unit rack-unit--" + cls + "' " +
         "data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>" +
         "<span class='rack-unit__u'>U" + escHtml(String(sw.room_unit)) + "</span>" +
@@ -923,7 +948,11 @@ var _fwStatusMeta = {
 function loadFirewalls() {
   fetch("/api/firewalls")
     .then(function(r) { return r.json(); })
-    .then(function(data) { renderFirewalls(data.firewalls || []); })
+    .then(function(data) {
+      _firewalls = data.firewalls || [];
+      renderFirewalls(_firewalls);
+      renderRoom(_switches);  // 서버실 현황에 위치 지정된 방화벽 반영
+    })
     .catch(function(e) { console.error("firewalls load:", e); });
 }
 
@@ -931,15 +960,19 @@ function renderFirewalls(firewalls) {
   var tbody = document.getElementById("firewall-table-body");
   if (!tbody) return;
   if (!firewalls.length) {
-    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>";
+    tbody.innerHTML = "<tr><td colspan=8 style='color:#64748b'>등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>";
     return;
   }
   tbody.innerHTML = firewalls.map(function(f) {
     var sc = _fwStatusMeta[f.status] || "new";
     var fjson = encodeURIComponent(JSON.stringify(f));
+    var locCell = f.room_label
+      ? "<span style='color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
+      : escHtml(f.location || "-");
     return "<tr><td>" + escHtml(f.name) + "</td>" +
       "<td>" + escHtml(f.vendor) + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
+      "<td>" + locCell + "</td>" +
       "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(f.status || "new") + "</span></td>" +
       "<td>" + (f.interface_count != null ? f.interface_count : "-") + "</td>" +
       "<td>" + (f.arp_count != null ? f.arp_count : "-") + "</td>" +
@@ -964,6 +997,7 @@ function editFirewall(f) {
   document.getElementById("fw-vendor").value = f.vendor || "fortigate";
   document.getElementById("fw-host").value = f.host || "";
   document.getElementById("fw-port").value = f.port || "";
+  var locEl = document.getElementById("fw-location"); if (locEl) locEl.value = f.location || "";
   // 수정 시 자격증명은 변경하지 않음(비워두면 기존 유지) — 안내
   ["fw-add-token", "fw-add-username", "fw-add-password"].forEach(function(id) {
     var el = document.getElementById(id); if (el) el.value = "";
@@ -1047,7 +1081,7 @@ function openFwCollect(fw) {
 
 document.getElementById("btn-add-firewall").addEventListener("click", function() {
   _editFirewallId = null;  // 신규 추가 모드
-  ["fw-name", "fw-host", "fw-port", "fw-add-token", "fw-add-username", "fw-add-password"].forEach(function(id) {
+  ["fw-name", "fw-host", "fw-port", "fw-location", "fw-add-token", "fw-add-username", "fw-add-password"].forEach(function(id) {
     var el = document.getElementById(id); if (el) el.value = "";
   });
   document.getElementById("fw-vendor").value = "fortigate";
@@ -1063,6 +1097,8 @@ document.getElementById("btn-fw-add-confirm").addEventListener("click", function
     vendor: document.getElementById("fw-vendor").value,
     host: host,
     port: portVal ? parseInt(portVal, 10) : null,
+    location: (document.getElementById("fw-location") || {}).value ?
+              document.getElementById("fw-location").value.trim() : "",
   };
   var url, method;
   if (_editFirewallId) {
@@ -1483,4 +1519,5 @@ function loadNetInfo() {
 // ─── 초기화 ──────────────────────────────────────────────────────
 loadNetInfo();
 pollState();
+loadFirewalls();  // 서버실 현황에 방화벽을 표시하려면 시작 시 방화벽 목록도 로드
 _pollTimer = setInterval(pollState, 5000);

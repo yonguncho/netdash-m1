@@ -64,11 +64,20 @@ def _choose_attachment(matches, port_counts):
     def _cnt(m):
         return port_counts.get((m[0], (m[2] or "").lower()), 9999)
 
-    physical = [m for m in matches if _is_physical_port(m[2])]
+    physical = sorted([m for m in matches if _is_physical_port(m[2])], key=_cnt)
     if physical:
-        # MAC 수가 가장 적은 물리 포트 = 액세스(엣지) 포트
-        best = min(physical, key=_cnt)
-        direct = _cnt(best) <= _EDGE_MAC_MAX
+        best = physical[0]           # MAC 수가 가장 적은 물리 포트 = 액세스(엣지) 포트
+        best_cnt = _cnt(best)
+        if len(physical) == 1:
+            # 물리 포트로 관측된 '유일한' 위치 → 그 스위치에 직접 연결.
+            # (백본/서버처럼 포트가 MAC을 많이 학습해도, 다른 스위치는 Po/Vl 업링크로만
+            #  보이므로 물리 관측이 하나뿐이면 그곳이 직접 연결 지점이다 — 임계값 무관)
+            direct = True
+        elif best_cnt <= _EDGE_MAC_MAX:
+            direct = True            # 명확한 액세스 포트(소수 MAC)
+        else:
+            # 여러 물리 포트 모두 MAC 많음 → 최소가 나머지보다 뚜렷이 적으면 엣지로 확신
+            direct = best_cnt * 2 <= _cnt(physical[1])
     else:
         # 물리 포트 관측이 없음 → 업링크(Po/Vl) 경유로만 보임 → 직접연결 미확인
         best = matches[0]

@@ -147,7 +147,8 @@ CREATE TABLE IF NOT EXISTS firewalls (
     status TEXT DEFAULT 'new',
     last_collected TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    cred_blob TEXT
+    cred_blob TEXT,
+    location TEXT
 )
 """
 
@@ -341,6 +342,11 @@ def init_schema(db_path):
             # M11: firewalls 테이블 자격증명 blob(DPAPI 암호화) 컬럼 마이그레이션
             try:
                 cursor.execute("ALTER TABLE firewalls ADD COLUMN cred_blob TEXT")
+            except Exception:
+                pass
+            # 방화벽 위치(서버실 랙 A09U27 등) 컬럼 마이그레이션
+            try:
+                cursor.execute("ALTER TABLE firewalls ADD COLUMN location TEXT")
             except Exception:
                 pass
             # 설비 현황: 직접연결 여부(direct) + 업링크 경유 관측(via) 컬럼 마이그레이션
@@ -1176,9 +1182,12 @@ def update_switch(db_path, switch_id, name=None, ip=None, hostname=None, vendor=
             return True
 
 
-def update_firewall(db_path, firewall_id, name=None, vendor=None, host=None, port=None):
-    """방화벽 등록 정보 수정(제공된 필드만). 반환: 성공 여부."""
-    fields = {"name": name, "vendor": vendor, "host": host, "port": port}
+def update_firewall(db_path, firewall_id, name=None, vendor=None, host=None, port=None, location=None):
+    """방화벽 등록 정보 수정(제공된 필드만, 존재 컬럼만). 반환: 성공 여부.
+
+    location은 빈 문자열("")도 유효(위치 비우기). None이면 변경하지 않음.
+    """
+    fields = {"name": name, "vendor": vendor, "host": host, "port": port, "location": location}
     fields = {k: v for k, v in fields.items() if v is not None}
     with _db_lock:
         with get_db(db_path) as conn:
@@ -1186,6 +1195,8 @@ def update_firewall(db_path, firewall_id, name=None, vendor=None, host=None, por
             cur.execute("SELECT id FROM firewalls WHERE id=?", (firewall_id,))
             if not cur.fetchone():
                 return False
+            cols = {r[1] for r in cur.execute("PRAGMA table_info(firewalls)").fetchall()}
+            fields = {k: v for k, v in fields.items() if k in cols}
             if fields:
                 assignments = ", ".join(f"{k}=?" for k in fields)
                 cur.execute(f"UPDATE firewalls SET {assignments} WHERE id=?",
@@ -1276,25 +1287,39 @@ def delete_firewall(db_path, firewall_id):
 
 
 # ── M10: 방화벽 (Palo Alto / Fortinet) ────────────────────────────
-def save_firewall(db_path, name, vendor, host, port=None, auth_type="token"):
-    """방화벽 장비 등록 (host 기준 upsert). 반환: firewall id."""
+def save_firewall(db_path, name, vendor, host, port=None, auth_type="token", location=None):
+    """방화벽 장비 등록 (host 기준 upsert). 반환: firewall id.
+
+    location 컬럼이 없는 구버전 DB도 안전하도록 존재 컬럼만 동적 사용.
+    """
     with _db_lock:
         with get_db(db_path) as conn:
             cur = conn.cursor()
+            cols = {r[1] for r in cur.execute("PRAGMA table_info(firewalls)").fetchall()}
+            has_loc = "location" in cols
             # FIX: ON CONFLICT(host) 의존 제거. host 기준 수동 UPSERT.
             cur.execute("SELECT id FROM firewalls WHERE host=?", (host,))
             existing = cur.fetchone()
             if existing:
-                cur.execute(
-                    "UPDATE firewalls SET name=?, vendor=?, port=?, auth_type=? WHERE host=?",
-                    (name, vendor, port, auth_type, host),
-                )
+                if has_loc and location is not None:
+                    cur.execute(
+                        "UPDATE firewalls SET name=?, vendor=?, port=?, auth_type=?, location=? WHERE host=?",
+                        (name, vendor, port, auth_type, location, host))
+                else:
+                    cur.execute(
+                        "UPDATE firewalls SET name=?, vendor=?, port=?, auth_type=? WHERE host=?",
+                        (name, vendor, port, auth_type, host))
                 return existing[0]
-            cur.execute(
-                """INSERT INTO firewalls (name, vendor, host, port, auth_type)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (name, vendor, host, port, auth_type),
-            )
+            if has_loc:
+                cur.execute(
+                    """INSERT INTO firewalls (name, vendor, host, port, auth_type, location)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (name, vendor, host, port, auth_type, location))
+            else:
+                cur.execute(
+                    """INSERT INTO firewalls (name, vendor, host, port, auth_type)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (name, vendor, host, port, auth_type))
             return cur.lastrowid
 
 

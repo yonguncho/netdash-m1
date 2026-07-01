@@ -85,28 +85,74 @@ def get_arp_table(host, port=443, token="", username="", password="", verify_ssl
     return entries
 
 
+def _split_ip_mask(val):
+    """'10.0.0.1 255.255.255.0' / '10.0.0.1/24' / '10.0.0.1' → (ip, mask)."""
+    if not val:
+        return "", ""
+    val = str(val).strip()
+    if " " in val:
+        p = val.split()
+        return p[0], (p[1] if len(p) > 1 else "")
+    if "/" in val:
+        p = val.split("/")
+        return p[0], p[1]
+    return val, ""
+
+
+def _parse_monitor_interfaces(results):
+    """monitor/system/interface 결과(dict 또는 list) → 인터페이스 목록(실제 런타임 IP)."""
+    items = results.values() if isinstance(results, dict) else (results or [])
+    ifaces = []
+    for e in items:
+        if not isinstance(e, dict):
+            continue
+        ip, mask = _split_ip_mask(e.get("ip"))
+        if not mask and e.get("mask") not in (None, ""):
+            mask = str(e.get("mask"))
+        if ip and ip != "0.0.0.0":
+            ifaces.append({
+                "name": e.get("name", "") or e.get("interface_name", ""),
+                "ip": ip, "mask": mask,
+                "vdom_zone": e.get("vdom", "") or "root",
+                "type": e.get("type", ""),
+            })
+    return ifaces
+
+
 def get_interfaces(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
     """FortiGate 인터페이스 목록 및 IP 대역 수집.
 
+    실제 런타임 IP를 위해 monitor 엔드포인트를 우선 사용(DHCP/PPPoE 할당 IP 반영).
+    구버전/권한 문제로 monitor가 없으면 cmdb(설정값)로 폴백.
     Returns: [{"name", "ip", "mask", "vdom_zone", "type"}, ...]
     """
     s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
+
+    # 1) monitor: 실제 유효 IP
+    try:
+        r = s.get(f"{base}/api/v2/monitor/system/interface", timeout=15)
+        if r.status_code == 200:
+            ifaces = _parse_monitor_interfaces(r.json().get("results"))
+            if ifaces:
+                logger.info("fortigate_interfaces(monitor) host=%s count=%d", host, len(ifaces))
+                return ifaces
+    except Exception as e:
+        logger.warning("fortigate monitor interface failed host=%s err=%s", host, e)
+
+    # 2) cmdb: 설정값 폴백
     r = s.get(f"{base}/api/v2/cmdb/system/interface", timeout=15)
     r.raise_for_status()
-
     ifaces = []
     for e in r.json().get("results", []):
-        parts = (e.get("ip", "0.0.0.0 0.0.0.0")).split()
-        ip = parts[0] if parts else ""
-        mask = parts[1] if len(parts) > 1 else ""
+        ip, mask = _split_ip_mask(e.get("ip", "0.0.0.0 0.0.0.0"))
         if ip and ip != "0.0.0.0":
             ifaces.append({
                 "name": e.get("name", ""),
-                "ip": ip,
-                "mask": mask,
+                "ip": ip, "mask": mask,
                 "vdom_zone": e.get("vdom", "root"),
                 "type": e.get("type", ""),
             })
+    logger.info("fortigate_interfaces(cmdb) host=%s count=%d", host, len(ifaces))
     return ifaces
 
 

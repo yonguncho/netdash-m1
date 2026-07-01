@@ -20,6 +20,10 @@ _RE_PORT_HEADER = re.compile(r"^name\s+id\s+speed/duplex/state", re.IGNORECASE)
 _RE_PORT_SEP = re.compile(r"^[-\s]+$")
 _RE_PORT_LINE = re.compile(
     r"^(\S+)\s+(\d+)\s+(\S+)/(\S+)/(\S+)\s+([0-9A-Fa-f:]{17})\s*$", re.IGNORECASE)
+# show interface logical: name id vsys zone forwarding tag address(=IP/prefix or N/A)
+_RE_LOGICAL_HEADER = re.compile(r"^name\s+id\s+vsys\s+zone", re.IGNORECASE)
+_RE_LOGICAL_LINE = re.compile(
+    r"^(\S+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(\S+)\s*$")
 
 
 def parse_arp(output):
@@ -66,6 +70,39 @@ def parse_interfaces(output):
     return ifaces
 
 
+def parse_logical_interfaces(output):
+    """show interface logical → [{"name","ip","mask","vdom_zone"}].
+
+    논리 인터페이스 테이블의 address 컬럼에서 실제 IP/prefix를 추출한다.
+    address가 'N/A'면 IP 없음.
+    """
+    ifaces, seen, in_table = [], set(), False
+    for line in (output or "").split("\n")[:20000]:
+        s = line.strip()
+        if not s or len(s) > 500:
+            continue
+        if _RE_LOGICAL_HEADER.match(s):
+            in_table = True
+            continue
+        if not in_table or _RE_PORT_SEP.match(s):
+            continue
+        m = _RE_LOGICAL_LINE.match(s)
+        if not m:
+            continue
+        name, _id, _vsys, zone, _fwd, _tag, addr = m.groups()
+        if name in seen:
+            continue
+        ip, mask = "", ""
+        if addr and addr.upper() != "N/A":
+            if "/" in addr:
+                ip, mask = addr.split("/", 1)
+            else:
+                ip = addr
+        seen.add(name)
+        ifaces.append({"name": name, "ip": ip, "mask": mask, "vdom_zone": zone})
+    return ifaces
+
+
 def collect(host, username, password, port=22, timeout=30, source_ip=None):
     """netmiko SSH로 PAN-OS 방화벽 인터페이스/ARP 수집 (source_ip로 출발지 바인딩).
 
@@ -83,7 +120,11 @@ def collect(host, username, password, port=22, timeout=30, source_ip=None):
     with ConnectHandler(**device) as conn:
         arp_out = conn.send_command("show arp all")
         if_out = conn.send_command("show interface all")
-    result = {"interfaces": parse_interfaces(if_out), "arp": parse_arp(arp_out)}
+        logical_out = conn.send_command("show interface logical")
+    # 논리 인터페이스(IP 보유)를 우선 사용, 없으면 하드웨어 인터페이스(IP 없음)
+    logical = parse_logical_interfaces(logical_out)
+    interfaces = logical if logical else parse_interfaces(if_out)
+    result = {"interfaces": interfaces, "arp": parse_arp(arp_out)}
     logger.info("paloalto host=%s interfaces=%d arp=%d",
                 host, len(result["interfaces"]), len(result["arp"]))
     return result

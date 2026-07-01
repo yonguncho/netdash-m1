@@ -121,10 +121,10 @@
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th>이름</th><th>벤더</th><th>호스트</th><th>상태</th><th>인터페이스</th><th>ARP</th><th>작업</th></tr>
+            <tr><th>이름</th><th>벤더</th><th>호스트</th><th>위치</th><th>상태</th><th>인터페이스</th><th>ARP</th><th>작업</th></tr>
           </thead>
           <tbody id="firewall-table-body">
-            <tr><td colspan="7" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
+            <tr><td colspan="8" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
           </tbody>
         </table>
       </div>
@@ -327,6 +327,8 @@
         <input id="fw-host" type="text" placeholder="10.0.0.1">
         <label>포트 (선택)</label>
         <input id="fw-port" type="text" placeholder="FortiGate 443 / PaloAlto 22">
+        <label>위치 (선택) — 서버실은 A09U27 형식</label>
+        <input id="fw-location" type="text" placeholder="예: A09U27 (A09랙 U27) — 서버실 현황에 표시">
         <hr style="margin:12px 0;border:none;border-top:1px solid #e5e7eb">
         <p style="font-size:12px;color:#64748b">연동 자격증명 (저장 시 암호화) — 수집 때 재입력 불필요</p>
         <label>API 토큰 (FortiGate, 선택)</label>

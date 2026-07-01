@@ -874,12 +874,15 @@ def create_app(demo_mode=None):
             if port not in (None, "") and not (str(port).isdigit() and 1 <= int(port) <= 65535):
                 return jsonify({"error": "port must be 1-65535"}), 400
             try:
+                # location은 빈 문자열("")도 유효(위치 지우기) → 키 존재 시 그대로 전달
+                loc = data.get("location")
                 ok = db.update_firewall(
                     db_path, fid,
                     name=(data.get("name") or "").strip() or None,
                     vendor=vendor or None,
                     host=host or None,
                     port=int(port) if port not in (None, "") else None,
+                    location=(loc.strip() if isinstance(loc, str) else None),
                 )
             except sqlite3.IntegrityError:
                 return jsonify({"error": "이미 사용 중인 호스트입니다"}), 409
@@ -971,9 +974,17 @@ def create_app(demo_mode=None):
     # ── M10: 방화벽 (Palo Alto / Fortinet) ─────────────────────────
     @app.route("/api/firewalls", methods=["GET"])
     def list_firewalls_endpoint():
-        """방화벽 장비 목록 조회."""
+        """방화벽 장비 목록 조회. location "A09U27"이면 서버실 랙 정보 주입."""
         try:
-            return jsonify({"firewalls": db.list_firewalls(db_path)})
+            from core import serverroom
+            fws = db.list_firewalls(db_path)
+            for f in fws:
+                room = serverroom.parse_rack(f.get("location"))
+                if room:
+                    f["room_rack"] = room["rack"]
+                    f["room_unit"] = room["unit"]
+                    f["room_label"] = room["label"]
+            return jsonify({"firewalls": fws})
         except Exception as e:
             log_event("error", "firewalls_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
@@ -1008,8 +1019,9 @@ def create_app(demo_mode=None):
                     return jsonify({"error": "port must be an integer 1-65535"}), 400
                 if not (1 <= port <= 65535):
                     return jsonify({"error": "port must be an integer 1-65535"}), 400
+            location = (data.get("location") or "").strip()
             fid = db.save_firewall(db_path, name, vendor, host,
-                                   port, data.get("auth_type", "token"))
+                                   port, data.get("auth_type", "token"), location=location)
             # M11: 자격증명(토큰/계정)을 DPAPI 암호화하여 저장(입력된 경우만).
             # 저장되면 이후 수집 시 재입력 불필요. 암호화 불가(비Windows) 시 저장 생략.
             cred = {"token": data.get("token", ""), "username": data.get("username", ""),
