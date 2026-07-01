@@ -147,6 +147,59 @@ def test_choose_attachment_single_physical_is_direct_even_if_busy():
     assert sname == "BACKBONE-NXOS" and port == "Ethernet1/5" and direct is True
 
 
+def test_choose_attachment_resolves_port_channel_members():
+    """포트채널(Po)만 보여도 pc_map으로 물리 멤버 해석 → 직접 + 멤버포트 표시."""
+    from core import facility
+    matches = [(1, "BACKBONE", "Po10")]
+    pc_map = {(1, "po10"): ["Eth1/1", "Eth1/2"]}
+    sid, sname, port, direct, via = facility._choose_attachment(matches, {}, pc_map)
+    assert sname == "BACKBONE" and direct is True
+    assert "Eth1/1" in port and "Eth1/2" in port and "Po10" in port
+
+
+def test_choose_attachment_unresolved_po_not_direct():
+    """포트채널 멤버 정보 없으면 여전히 미확인."""
+    from core import facility
+    matches = [(1, "BACKBONE", "Po10")]
+    sid, sname, port, direct, via = facility._choose_attachment(matches, {}, {})
+    assert direct is False
+
+
+def test_port_channel_members_roundtrip(temp_db):
+    bb = db.save_switch(temp_db, "BB", "10.0.0.1", "cisco_nxos")
+    snap = db.save_snapshot(temp_db, bb)
+    db.save_port_channels(temp_db, snap, bb, [{"port_channel": "Po10", "members": ["Eth1/1", "Eth1/2"]}])
+    m = db.get_port_channel_members(temp_db)
+    assert m[(bb, "po10")] == ["Eth1/1", "Eth1/2"]
+
+
+def test_rematch_resolves_backbone_port_channel(temp_db):
+    """백본 NX-OS에 Po로 직결된 TPS가 rematch 후 물리 멤버포트로 직접 표시."""
+    from core import facility
+    bb = db.save_switch(temp_db, "BACKBONE", "10.0.0.1", "cisco_nxos")
+    snap = db.save_snapshot(temp_db, bb)
+    db.save_mac_entries(temp_db, snap, bb, [
+        {"switch_id": bb, "vlan": 100, "mac": "00:50:56:aa:bb:cc", "port": "Po10", "type": "dynamic"}])
+    db.save_port_channels(temp_db, snap, bb, [{"port_channel": "Po10", "members": ["Eth1/1", "Eth1/2"]}])
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.0.0.0/24", "ip": "10.0.0.50", "mac": "00:50:56:aa:bb:cc", "online": 1, "direct": 0}])
+    facility.rematch(temp_db)
+    h = db.get_facility_hosts(temp_db)[0]
+    assert h["direct"] == 1 and h["switch_name"] == "BACKBONE" and "Eth1/1" in h["port"]
+
+
+def test_nxos_parse_port_channels():
+    from core.parsers import cisco_nxos
+    out = ("Group Port-       Type     Protocol  Member Ports\n"
+           "--------------------------------------------------\n"
+           "10    Po10(SU)    Eth      LACP      Eth1/1(P)    Eth1/2(P)\n"
+           "1     Po1(SU)     Eth      NONE      Eth1/5(P)\n")
+    pcs = cisco_nxos._parse_port_channels(out, 1)
+    by = {p["port_channel"]: p["members"] for p in pcs}
+    assert by["Po10"] == ["Eth1/1", "Eth1/2"]
+    assert by["Po1"] == ["Eth1/5"]
+
+
 def test_choose_attachment_ambiguous_trunks_not_direct():
     """여러 물리 포트 모두 MAC 많고 최소가 뚜렷이 적지 않으면 미확인."""
     from core import facility

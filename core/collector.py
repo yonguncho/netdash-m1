@@ -67,6 +67,12 @@ _PAGING_CMD = {
     "juniper_junos": "set cli screen-length 0",
 }
 
+# 포트채널 멤버 해석용 추가 명령(config 무관 항상 시도). 설비/TPS 직결이
+# MAC 테이블에 Po로 보일 때 실제 물리 멤버포트를 알아내기 위함.
+_PORT_CHANNEL_CMD = {
+    "cisco_nxos": "show port-channel summary",
+}
+
 
 def init_collector():
     global _worker_queue, _worker_threads
@@ -215,6 +221,8 @@ def _worker_loop():
             db.save_ports(db_path, snapshot_id, switch_id, parsed_data.get("ports", []))
             db.save_mac_entries(db_path, snapshot_id, switch_id, parsed_data.get("macs", []))
             db.save_arp_entries(db_path, snapshot_id, switch_id, parsed_data.get("arps", []))
+            # NX-OS 포트채널 멤버(Po → 물리 멤버포트) 저장 — 설비 대조 해석용
+            db.save_port_channels(db_path, snapshot_id, switch_id, parsed_data.get("port_channels", []))
             # VLAN 이름(show vlan brief)은 스냅샷 무관 최신값으로 교체 저장
             if parsed_data.get("vlans"):
                 db.save_vlan_names(db_path, switch_id, parsed_data.get("vlans", []))
@@ -340,6 +348,13 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                     output = conn.send_command(command, read_timeout=read_timeout)
                     outputs[key] = output
                     utils.log_event("debug", "command_executed", command=command)
+                # 포트채널 멤버 해석 명령(config에 없어도 벤더별로 항상 시도)
+                pc_cmd = _PORT_CHANNEL_CMD.get(vendor)
+                if pc_cmd and "port_channel" not in outputs:
+                    try:
+                        outputs["port_channel"] = conn.send_command(pc_cmd, read_timeout=read_timeout)
+                    except Exception:
+                        pass
             return outputs
         except Exception as e:
             # Sanitize SSH error messages to prevent credential/host info exposure (security fix)

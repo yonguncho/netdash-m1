@@ -52,6 +52,7 @@ collector:
       arp: "show ip arp"
       vlan: "show vlan brief"
       logging: "show logging last 100"
+      port_channel: "show port-channel summary"
 
 correlator:
   uplink_mac_threshold: 4

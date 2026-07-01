@@ -205,6 +205,18 @@ CREATE TABLE IF NOT EXISTS switch_logs (
 )
 """
 
+# NX-OS 포트채널 멤버(설비/TPS 직결이 Po로 보일 때 실제 물리포트 해석용)
+CREATE_PORT_CHANNELS_TABLE = """
+CREATE TABLE IF NOT EXISTS port_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER,
+    switch_id INTEGER,
+    port_channel TEXT,
+    members TEXT
+)
+"""
+
+
 # 설비 현황: 대역 ping sweep + ARP + MAC 대조 결과
 CREATE_FACILITY_HOSTS_TABLE = """
 CREATE TABLE IF NOT EXISTS facility_hosts (
@@ -309,6 +321,7 @@ def init_schema(db_path):
                 CREATE_VLAN_NAMES_TABLE,
                 CREATE_SWITCH_LOGS_TABLE,
                 CREATE_FACILITY_HOSTS_TABLE,
+                CREATE_PORT_CHANNELS_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -577,6 +590,48 @@ def get_port_mac_counts(db_path):
         except Exception:
             pass
     return counts
+
+
+def save_port_channels(db_path, snapshot_id, switch_id, port_channels):
+    """포트채널 멤버 저장(스냅샷 단위). port_channels=[{port_channel, members:[...]}]."""
+    if not port_channels:
+        return
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            for pc in port_channels:
+                try:
+                    cur.execute(
+                        "INSERT INTO port_channels (snapshot_id, switch_id, port_channel, members) "
+                        "VALUES (?, ?, ?, ?)",
+                        (snapshot_id, switch_id, pc.get("port_channel"),
+                         ",".join(pc.get("members") or [])))
+                except Exception as e:
+                    log_event("warning", "save_port_channel_skipped", error=str(e))
+
+
+def get_port_channel_members(db_path):
+    """전체 스위치 최신 스냅샷의 포트채널 멤버 매핑.
+
+    Returns: {(switch_id, port_channel소문자): [member_port, ...]}
+    설비 대조: MAC이 Po로 보일 때 실제 물리 멤버포트로 해석하는 데 사용.
+    """
+    mapping = {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT switch_id, port_channel, members FROM port_channels "
+                "WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id)")
+            for r in cur.fetchall():
+                pc = (r["port_channel"] or "").lower()
+                if not pc:
+                    continue
+                members = [m for m in (r["members"] or "").split(",") if m]
+                mapping[(r["switch_id"], pc)] = members
+        except Exception:
+            pass
+    return mapping
 
 
 def save_facility_hosts(db_path, hosts):

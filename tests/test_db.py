@@ -34,6 +34,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "switch_logs",
         # 설비 현황
         "facility_hosts",
+        # NX-OS 포트채널 멤버
+        "port_channels",
     }
     assert expected == tables
 

@@ -48,43 +48,60 @@ def _is_physical_port(port):
     return not p.startswith(_LOGICAL_PREFIXES)
 
 
-def _choose_attachment(matches, port_counts):
+def _choose_attachment(matches, port_counts, pc_map=None):
     """여러 스위치 MAC 테이블 매치 중 설비가 '직접' 붙은 스위치/포트를 선택.
 
     matches: [(switch_id, switch_name, port), ...]
     port_counts: {(switch_id, port소문자): 해당 포트 MAC 수}
+    pc_map: {(switch_id, po소문자): [member_port, ...]}  # NX-OS 포트채널 → 물리 멤버
     반환: (switch_id, switch_name, port, direct(bool), via(list[str]))
-      - direct=True : 물리 액세스 포트(소수 MAC)에서 관측 → 직접 연결로 확신
-      - direct=False: 논리 포트(Po/Vl)뿐이거나 트렁크(다수 MAC)만 → 업링크 경유, 직접연결 불확실
-      - via: 선택된 곳을 제외한 나머지 관측 위치("SW:port") 목록(진단용)
+      - 물리 액세스 포트(소수 MAC) → 직접
+      - 포트채널(Po)이 멤버로 해석되면 실제 물리 멤버포트로 표시하고 직접으로 승격
+        (TPS가 백본에 Po로 직결된 경우: Po10 → "Eth1/1, Eth1/2 (Po10)")
+      - 해석 불가 논리포트뿐이면 미확인
     """
     if not matches:
         return None, None, None, False, []
+    pc_map = pc_map or {}
 
-    def _cnt(m):
-        return port_counts.get((m[0], (m[2] or "").lower()), 9999)
+    def _cnt(sid, port):
+        return port_counts.get((sid, (port or "").lower()), 9999)
 
-    physical = sorted([m for m in matches if _is_physical_port(m[2])], key=_cnt)
-    if physical:
-        best = physical[0]           # MAC 수가 가장 적은 물리 포트 = 액세스(엣지) 포트
-        best_cnt = _cnt(best)
-        if len(physical) == 1:
-            # 물리 포트로 관측된 '유일한' 위치 → 그 스위치에 직접 연결.
-            # (백본/서버처럼 포트가 MAC을 많이 학습해도, 다른 스위치는 Po/Vl 업링크로만
-            #  보이므로 물리 관측이 하나뿐이면 그곳이 직접 연결 지점이다 — 임계값 무관)
-            direct = True
-        elif best_cnt <= _EDGE_MAC_MAX:
-            direct = True            # 명확한 액세스 포트(소수 MAC)
+    physical, pchan, logical = [], [], []
+    for orig in matches:                       # orig = (sid, name, port)
+        sid, name, port = orig
+        if _is_physical_port(port):
+            physical.append(orig)
         else:
-            # 여러 물리 포트 모두 MAC 많음 → 최소가 나머지보다 뚜렷이 적으면 엣지로 확신
-            direct = best_cnt * 2 <= _cnt(physical[1])
+            members = pc_map.get((sid, (port or "").lower()))
+            if members:                        # 포트채널 → 물리 멤버로 해석(직결 승격)
+                disp = "%s (%s)" % (", ".join(members), port)
+                pchan.append((orig, disp))
+            else:
+                logical.append(orig)
+
+    physical.sort(key=lambda m: _cnt(m[0], m[2]))
+    if physical:
+        best = physical[0]                     # MAC 수가 가장 적은 물리 포트 = 액세스 포트
+        disp_port = best[2]
+        best_cnt = _cnt(best[0], best[2])
+        if len(physical) == 1:
+            direct = True                      # 물리 관측이 유일 → 그곳이 직접 연결
+        elif best_cnt <= _EDGE_MAC_MAX:
+            direct = True                      # 명확한 액세스 포트(소수 MAC)
+        else:
+            direct = best_cnt * 2 <= _cnt(physical[1][0], physical[1][2])
+        chosen = best
+    elif pchan:
+        chosen, disp_port = pchan[0]           # 물리 직결 없지만 포트채널이 멤버로 해석됨
+        direct = True
     else:
-        # 물리 포트 관측이 없음 → 업링크(Po/Vl) 경유로만 보임 → 직접연결 미확인
-        best = matches[0]
+        chosen = logical[0] if logical else matches[0]
+        disp_port = chosen[2]
         direct = False
 
-    via = ["%s:%s" % (m[1], m[2]) for m in matches if m is not best]
-    return best[0], best[1], best[2], direct, via
+    via = ["%s:%s" % (m[1], m[2]) for m in matches if m is not chosen]
+    return chosen[0], chosen[1], disp_port, direct, via
 
 
 def _parse_connected_subnets(route_out, iface_out):
@@ -206,6 +223,7 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     arp = cisco_ios._parse_arps(arp_out, switch_id)  # [{ip, mac, interface}]
     mac_map = db.get_mac_to_switchport(db_path)       # {mac: [(sid, sname, port)]}
     port_counts = db.get_port_mac_counts(db_path)     # {(sid, port_lower): MAC수}
+    pc_map = db.get_port_channel_members(db_path)     # {(sid, po_lower): [members]}
 
     # IP별 1행: 같은 MAC이 여러 스위치/포트에 보일 때 "직접 연결된 스위치"를 가려낸다.
     #  - Po(포트채널)·Vl(VLAN/SVI) 등 논리 인터페이스는 업링크 경유 → 직접 연결 아님
@@ -214,7 +232,7 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     for a in arp:
         mac = (a.get("mac") or "").lower()
         matches = mac_map.get(mac, [])
-        sid, sname, port, direct, via = _choose_attachment(matches, port_counts)
+        sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map)
         by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
                           "switch_id": sid, "switch_name": sname, "port": port,
                           "online": 1, "direct": 1 if direct else 0,
@@ -286,11 +304,12 @@ def rematch(db_path):
         return 0
     mac_map = db.get_mac_to_switchport(db_path)
     port_counts = db.get_port_mac_counts(db_path)
+    pc_map = db.get_port_channel_members(db_path)
     updated = []
     for h in hosts:
         mac = (h.get("mac") or "").lower()
         matches = mac_map.get(mac, [])
-        sid, sname, port, direct, via = _choose_attachment(matches, port_counts)
+        sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map)
         updated.append({
             "subnet": h.get("subnet"), "ip": h.get("ip"), "mac": h.get("mac"),
             "switch_id": sid, "switch_name": sname, "port": port,
