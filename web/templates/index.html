@@ -31,9 +31,8 @@
     <button class="tab-nav__btn" data-tab="room">서버실 현황</button>
     <button class="tab-nav__btn" data-tab="facility">설비 현황</button>
     <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
-    <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
+    <button class="tab-nav__btn" data-tab="switch">스위치 리스트</button>
     <button class="tab-nav__btn" data-tab="vlan">VLAN</button>
-    <button class="tab-nav__btn" data-tab="reconcile">장부 대조</button>
   </nav>
 
   <!-- 탭 컨텐츠 -->
@@ -93,6 +92,8 @@
           <input id="fac-subnet" type="text" placeholder="10.92.174.0/23" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:150px">
           <button id="btn-fac-collect" class="btn btn--primary">대역 수집(ping)</button>
           <button id="btn-fac-refresh" class="btn btn--secondary" title="ping 없이 최신 MAC 테이블 기준으로 연결 스위치/포트 재대조">↻ 새로고침(재매칭)</button>
+          <button id="btn-fac-export-xlsx" class="btn btn--secondary" title="설비 현황 전체를 엑셀로 저장">엑셀 추출</button>
+          <button id="btn-fac-export-txt" class="btn btn--secondary" title="설비 현황 전체를 TXT로 저장">TXT 추출</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer"><input type="checkbox" id="fac-only-direct"> 직접 연결만</label>
         </div>
       </div>
@@ -134,7 +135,7 @@
     <!-- 스위치 현황 탭 -->
     <div id="tab-switch" class="tab-pane">
       <div class="pane-toolbar">
-        <span class="pane-toolbar__title">스위치 현황 상세</span>
+        <span class="pane-toolbar__title">스위치 리스트</span>
         <div class="pane-toolbar__actions">
           <button id="btn-sw-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
           <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
@@ -164,29 +165,6 @@
       </div>
       <p style="margin:4px 0 10px;font-size:12px;color:#64748b">VLAN을 클릭하면 해당 VLAN이 있는 스위치(호스트네임·IP·MAC 수)를 펼쳐 볼 수 있습니다.</p>
       <div id="vlan-accordion"></div>
-    </div>
-
-    <!-- 장부 대조 탭 (M8) -->
-    <div id="tab-reconcile" class="tab-pane">
-      <div class="pane-toolbar">
-        <span class="pane-toolbar__title">장부 대조 (Reconcile)</span>
-        <div class="pane-toolbar__actions">
-          <button id="btn-reconcile-refresh" class="btn btn--secondary">새로고침</button>
-        </div>
-      </div>
-      <div id="reconcile-summary" class="reconcile-summary"></div>
-      <div id="reconcile-table-wrap" class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>IP</th><th>호스트명</th><th>판정</th>
-              <th>장부 스위치</th><th>장부 포트</th>
-              <th>실측 스위치</th><th>실측 포트</th>
-            </tr>
-          </thead>
-          <tbody id="reconcile-table-body"></tbody>
-        </table>
-      </div>
     </div>
   </main>
 

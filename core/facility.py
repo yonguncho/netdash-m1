@@ -229,6 +229,51 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     return {"subnet": subnet, "pinged": len(ips), "arp": len(arp), "saved": len(saved_hosts)}
 
 
+_EXPORT_COLS = ["대역", "IP", "MAC", "연결 스위치", "포트", "직접연결", "그 외 관측", "상태"]
+
+
+def _export_rows(db_path):
+    """설비 현황을 추출용 행 목록(dict)으로 변환."""
+    rows = []
+    for h in db.get_facility_hosts(db_path):
+        direct = h.get("direct", 1) and h.get("switch_name")
+        rows.append({
+            "대역": h.get("subnet") or "",
+            "IP": h.get("ip") or "",
+            "MAC": h.get("mac") or "",
+            "연결 스위치": (h.get("switch_name") or "") if direct else "직접 연결 미확인",
+            "포트": (h.get("port") or "") if direct else "",
+            "직접연결": "직접" if direct else "미확인",
+            "그 외 관측": h.get("via") or "",
+            "상태": "온라인" if h.get("online") else "오프라인",
+        })
+    return rows
+
+
+def export_xlsx(db_path):
+    """설비 현황 전체를 엑셀(xlsx) 바이트로 반환."""
+    from io import BytesIO
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "설비 현황"
+    ws.append(_EXPORT_COLS)
+    for r in _export_rows(db_path):
+        ws.append([r[c] for c in _EXPORT_COLS])
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def export_txt(db_path):
+    """설비 현황 전체를 탭 구분 TXT 바이트로 반환(UTF-8 BOM — 엑셀 한글 정상)."""
+    lines = ["\t".join(_EXPORT_COLS)]
+    for r in _export_rows(db_path):
+        lines.append("\t".join(
+            str(r[c]).replace("\t", " ").replace("\n", " ") for c in _EXPORT_COLS))
+    return ("﻿" + "\r\n".join(lines)).encode("utf-8")
+
+
 def rematch(db_path):
     """기존 설비(facility_hosts)의 MAC을 '최신' MAC 스냅샷 기준으로 재대조.
 

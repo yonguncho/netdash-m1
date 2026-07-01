@@ -77,7 +77,7 @@ def test_firewall_location_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'id="fw-location"' in html
     js = APP_JS.read_text(encoding="utf-8")
-    assert "_fwRoomCardHTML" in js
+    assert "_fwCardHTML" in js
     assert "renderRoomRackView" in js
     # 방화벽도 서버실 랙 뷰에 포함(detail-fw 유닛)
     assert "data-action='detail-fw'" in js

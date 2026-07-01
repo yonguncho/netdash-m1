@@ -54,6 +54,24 @@ def test_search_by_mac(temp_db):
     assert any(r["source"] == "MAC 테이블" for r in res)
 
 
+def test_search_mac_format_agnostic(temp_db):
+    """저장은 콜론 형식이지만 점/대시/무구분 형식으로 검색해도 찾음."""
+    sid = db.save_switch(temp_db, "SW12", "10.0.0.12", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sid)
+    db.save_mac_entries(temp_db, snap, sid, [
+        {"switch_id": sid, "vlan": 100, "mac": "00:50:56:a1:b2:c3", "port": "Gi1/0/10", "type": "dynamic"}])
+    # 점 형식(Cisco/NX-OS 표기), 무구분, 대시 형식 모두 매칭
+    for q in ("0050.56a1.b2c3", "005056a1b2c3", "0050-56a1-b2c3", "5056a1"):
+        res = db.search_everywhere(temp_db, q)
+        assert any(r["source"] == "MAC 테이블" for r in res), "실패한 질의: %s" % q
+
+
+def test_search_firewall_by_location(temp_db):
+    db.save_firewall(temp_db, "SRV-FW", "fortigate", "10.0.0.30", 443, "token", location="A09U27")
+    res = db.search_everywhere(temp_db, "A09U27")
+    assert any(r["source"] == "등록 방화벽" and r["ip"] == "10.0.0.30" for r in res)
+
+
 def test_api_search_returns_results(client):
     client.post("/api/switches/manual", json={"ip": "10.2.2.2", "name": "SW-X", "vendor": "cisco"})
     r = client.get("/api/search?ip=10.2.2.2")

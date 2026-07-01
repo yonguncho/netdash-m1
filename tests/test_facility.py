@@ -205,6 +205,34 @@ def test_facility_rematch_endpoint(client):
     assert r.status_code == 200 and r.get_json()["ok"] is True
 
 
+def test_export_xlsx(temp_db):
+    from core import facility
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.1.0.0/24", "ip": "10.1.0.5", "mac": "aa", "switch_id": 1,
+         "switch_name": "SW", "port": "Gi1/0/1", "online": 1, "direct": 1}])
+    data = facility.export_xlsx(temp_db)
+    assert data[:2] == b"PK" and len(data) > 100  # xlsx = zip
+
+
+def test_export_txt(temp_db):
+    from core import facility
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.1.0.0/24", "ip": "10.1.0.5", "mac": "aa:bb", "switch_id": 1,
+         "switch_name": "SW", "port": "Gi1/0/1", "online": 1, "direct": 1},
+        {"subnet": "10.1.0.0/24", "ip": "10.1.0.6", "mac": "cc:dd", "online": 1, "direct": 0, "via": "X:Po1"}])
+    data = facility.export_txt(temp_db)
+    assert data[:3] == b"\xef\xbb\xbf"  # UTF-8 BOM (엑셀 한글)
+    text = data.decode("utf-8")
+    assert "10.1.0.5" in text and "직접" in text and "미확인" in text
+
+
+def test_facility_export_endpoint(client):
+    assert client.get("/api/facility/export?format=xlsx").status_code == 200
+    r = client.get("/api/facility/export?format=txt")
+    assert r.status_code == 200
+    assert r.data[:3] == b"\xef\xbb\xbf"
+
+
 def test_facility_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'data-tab="facility"' in html
@@ -218,3 +246,5 @@ def test_facility_ui_present():
     assert "/api/facility/detect-subnets" in js
     assert "/api/facility/rematch" in js
     assert "_renderFacilityRows" in js
+    assert 'id="btn-fac-export-xlsx"' in html
+    assert "/api/facility/export?format=txt" in js

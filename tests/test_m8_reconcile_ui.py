@@ -18,54 +18,21 @@ STYLE_CSS = Path(__file__).parent.parent / "web" / "static" / "style.css"
 
 # ── HTML/정적 파일 검증 ────────────────────────────────────────────
 
-# 1. 인덱스에 reconcile 탭 버튼
-def test_index_has_reconcile_tab(client):
+# 1. 장부 대조 탭 UI 제거됨(사용자 요청으로 기능 숨김)
+def test_index_reconcile_tab_removed(client):
     r = client.get("/")
     assert r.status_code == 200
-    assert b'data-tab="reconcile"' in r.data
-    assert "장부 대조".encode("utf-8") in r.data
+    assert b'data-tab="reconcile"' not in r.data
+    assert 'id="tab-reconcile"' not in r.data.decode("utf-8")
 
 
-# 2. reconcile tab-pane 및 컨테이너 요소
-def test_index_has_reconcile_pane(client):
-    r = client.get("/")
-    body = r.data.decode("utf-8")
-    assert 'id="tab-reconcile"' in body
-    assert 'id="reconcile-summary"' in body
-    assert 'id="reconcile-table-body"' in body
-
-
-# 3. app.js에 reconcile 함수 정의
-def test_appjs_has_loadReconcile():
+# 2. 탭 전환 핸들러에서 reconcile 분기 제거됨
+def test_appjs_reconcile_tab_unwired():
     src = APP_JS.read_text(encoding="utf-8")
-    assert "function loadReconcile" in src
-    assert "function renderReconcile" in src
-    assert "function verdictBadgeClass" in src
+    assert 'btn.dataset.tab === "reconcile"' not in src
 
 
-# 4. renderReconcile이 escHtml로 XSS 방지
-def test_appjs_reconcile_uses_eschtml():
-    src = APP_JS.read_text(encoding="utf-8")
-    start = src.index("function renderReconcile")
-    end = src.index("function ", start + 1)
-    body = src[start:end]
-    assert "escHtml(" in body
-
-
-# 5. 탭 전환 핸들러가 reconcile 분기 호출
-def test_appjs_tab_wires_reconcile():
-    src = APP_JS.read_text(encoding="utf-8")
-    assert 'btn.dataset.tab === "reconcile"' in src
-    assert "loadReconcile()" in src
-
-
-# 6. style.css에 info 배지
-def test_css_has_info_badge():
-    src = STYLE_CSS.read_text(encoding="utf-8")
-    assert ".status-badge--info" in src
-
-
-# ── API 통합 ───────────────────────────────────────────────────────
+# ── API 통합 (백엔드는 유지 — UI만 제거) ────────────────────────────
 
 # 7. /api/reconcile 응답 구조
 def test_api_reconcile_endpoint_shape(client):

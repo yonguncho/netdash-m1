@@ -450,6 +450,18 @@ def search_everywhere(db_path, query):
     if not q:
         return []
     like = "%" + q + "%"
+    # MAC은 구분자(:.- )가 형식마다 달라, 질의·저장값 모두 16진수만 남겨 비교(형식 무관 검색).
+    import re as _re
+    qhex = _re.sub(r"[^0-9a-f]", "", q.lower())
+    use_mac = len(qhex) >= 4
+    machex = "%" + qhex + "%"
+
+    def _mac_clause(col):
+        """MAC 컬럼을 구분자 제거 후 비교하는 조건 조각. (sql조각, 파라미터리스트)"""
+        if not use_mac:
+            return "", []
+        return (" OR REPLACE(REPLACE(REPLACE(LOWER(%s),':',''),'.',''),'-','') LIKE ?" % col), [machex]
+
     results = []
     with get_db(db_path) as conn:
         cur = conn.cursor()
@@ -461,44 +473,50 @@ def search_everywhere(db_path, query):
             except Exception:
                 pass  # 구버전 DB에 테이블/컬럼이 없을 수 있음
 
-        # 1) 등록 스위치 (장비 자체)
+        # 1) 등록 스위치 (IP/이름/호스트네임)
         _try("SELECT name, ip, hostname FROM switches "
              "WHERE ip LIKE ? OR name LIKE ? OR IFNULL(hostname,'') LIKE ? LIMIT 50",
              (like, like, like),
              lambda r: {"source": "등록 스위치", "ip": r["ip"], "label": r["name"],
                         "detail": "hostname: " + (r["hostname"] or "-")})
-        # 2) 등록 방화벽 (장비 자체)
-        _try("SELECT name, host, vendor FROM firewalls WHERE host LIKE ? OR name LIKE ? LIMIT 50",
-             (like, like),
+        # 2) 등록 방화벽 (IP/이름/위치)
+        _try("SELECT name, host, vendor, IFNULL(location,'') AS location FROM firewalls "
+             "WHERE host LIKE ? OR name LIKE ? OR IFNULL(location,'') LIKE ? LIMIT 50",
+             (like, like, like),
              lambda r: {"source": "등록 방화벽", "ip": r["host"], "label": r["name"],
-                        "detail": "vendor: " + (r["vendor"] or "-")})
-        # 3) 스위치 수집 ARP (어느 스위치에서 IP/MAC이 보이는지)
+                        "detail": "vendor: " + (r["vendor"] or "-") +
+                                  (" · 위치 " + r["location"] if r["location"] else "")})
+        # 3) 스위치 수집 ARP (IP/MAC — 형식 무관)
+        mc, mp = _mac_clause("a.mac")
         _try("SELECT a.ip, a.mac, a.interface, s.name AS sw FROM arp_entries a "
              "JOIN switches s ON a.switch_id = s.id "
-             "WHERE a.ip LIKE ? OR IFNULL(a.mac,'') LIKE ? LIMIT 100",
-             (like, like),
+             "WHERE a.ip LIKE ? OR IFNULL(a.mac,'') LIKE ?" + mc + " LIMIT 100",
+             [like, like] + mp,
              lambda r: {"source": "스위치 ARP", "ip": r["ip"], "label": r["sw"],
                         "detail": "MAC " + (r["mac"] or "-") + " · 포트 " + (r["interface"] or "-")})
         # 4) 방화벽 수집 ARP
+        mc, mp = _mac_clause("fa.mac")
         _try("SELECT fa.ip, fa.mac, fa.interface, f.name AS fw FROM firewall_arp fa "
              "JOIN firewalls f ON fa.firewall_id = f.id "
-             "WHERE fa.ip LIKE ? OR IFNULL(fa.mac,'') LIKE ? LIMIT 100",
-             (like, like),
+             "WHERE fa.ip LIKE ? OR IFNULL(fa.mac,'') LIKE ?" + mc + " LIMIT 100",
+             [like, like] + mp,
              lambda r: {"source": "방화벽 ARP", "ip": r["ip"], "label": r["fw"],
                         "detail": "MAC " + (r["mac"] or "-") + " · " + (r["interface"] or "-")})
-        # 5) 스위치 MAC 테이블 (MAC이 어느 스위치 어느 포트에 있는지 — 최신 스냅샷)
+        # 5) 스위치 MAC 테이블 (MAC — 형식 무관, 최신 스냅샷)
+        mc, mp = _mac_clause("m.mac")
         _try("SELECT DISTINCT m.mac, m.port, m.vlan, s.name AS sw FROM mac_entries m "
              "JOIN switches s ON m.switch_id = s.id "
              "WHERE m.snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id) "
-             "AND m.mac LIKE ? LIMIT 100",
-             (like,),
+             "AND (m.mac LIKE ?" + mc + ") LIMIT 100",
+             [like] + mp,
              lambda r: {"source": "MAC 테이블", "ip": "-", "label": r["sw"],
                         "detail": "MAC " + (r["mac"] or "-") + " · 포트 " + (r["port"] or "-") +
                                   " · VLAN " + str(r["vlan"] if r["vlan"] is not None else "-")})
-        # 6) 설비 현황(facility_hosts) — IP/MAC 모두
+        # 6) 설비 현황(facility_hosts) — IP/MAC(형식 무관)
+        mc, mp = _mac_clause("mac")
         _try("SELECT ip, mac, switch_name, port, subnet FROM facility_hosts "
-             "WHERE ip LIKE ? OR IFNULL(mac,'') LIKE ? LIMIT 100",
-             (like, like),
+             "WHERE ip LIKE ? OR IFNULL(mac,'') LIKE ?" + mc + " LIMIT 100",
+             [like, like] + mp,
              lambda r: {"source": "설비 현황", "ip": r["ip"], "label": r["switch_name"] or "-",
                         "detail": "MAC " + (r["mac"] or "-") + " · 포트 " + (r["port"] or "-") +
                                   " · 대역 " + (r["subnet"] or "-")})

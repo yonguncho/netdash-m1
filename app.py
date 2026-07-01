@@ -620,6 +620,24 @@ def create_app(demo_mode=None):
             log_event("error", "facility_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/facility/export", methods=["GET"])
+    def facility_export():
+        """설비 현황 전체를 엑셀(xlsx) 또는 TXT로 내려받기. ?format=xlsx|txt"""
+        fmt = (request.args.get("format") or "xlsx").lower()
+        try:
+            if fmt == "txt":
+                data = facility_mod.export_txt(db_path)
+                return Response(data, mimetype="text/plain; charset=utf-8",
+                                headers={"Content-Disposition": "attachment; filename=facility.txt"})
+            data = facility_mod.export_xlsx(db_path)
+            return Response(
+                data,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": "attachment; filename=facility.xlsx"})
+        except Exception as e:
+            log_event("error", "facility_export_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/facility/rematch", methods=["POST"])
     @rate_limit("facility_rematch", max_requests=30, window_seconds=60)
     def facility_rematch():
