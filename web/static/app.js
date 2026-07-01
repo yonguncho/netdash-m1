@@ -304,6 +304,7 @@ function renderEventsTab(events) {
 
 // ─── 스위치 카드 렌더링 ──────────────────────────────────────────
 var _viewMode = "card";  // card | rack
+var _bulkSel = {};        // 일괄 수집 선택 집합 {switch_id: true} — 재렌더에도 유지
 
 (function () {
   var bc = document.getElementById("btn-view-card");
@@ -392,7 +393,7 @@ function renderRoomGrid(switches) {
   }
   // 랙 → 유닛 순으로 정렬
   switches = switches.slice().sort(_roomSort);
-  grid.innerHTML = switches.map(swCardHTML).join("");
+  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, false); }).join("");
   switches.forEach(function (sw) {
     var card = document.getElementById("swcard-" + sw.id);
     if (!card) return;
@@ -444,19 +445,25 @@ function renderSwitchGrid(switches) {
     grid.innerHTML = "<p class='placeholder'>표시할 스위치가 없습니다. (위치 필터를 확인하거나 스위치를 추가하세요)</p>";
     return;
   }
-  grid.innerHTML = switches.map(swCardHTML).join("");
+  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, true); }).join("");
   switches.forEach(function(sw) {
     var card = document.getElementById("swcard-" + sw.id);
     if (!card) return;
     card.addEventListener("click", function(e) {
-      // 카드 안의 버튼(상세보기 등)은 이벤트 위임이 처리 → 수집 모달을 띄우지 않음
-      if (e.target.closest("[data-action]")) return;
+      // 카드 안의 버튼(상세보기 등) + 수집 선택 체크박스는 개별 수집 모달을 띄우지 않음
+      if (e.target.closest("[data-action]") || e.target.classList.contains("sw-collect-check")) return;
       openCredentialModal(sw);
     });
   });
+  _updateBulkCollectBtn();
 }
 
-function swCardHTML(sw) {
+function swCardHTML(sw, withCheck) {
+  var checkbox = withCheck
+    ? "<input type='checkbox' class='sw-collect-check' value='" + sw.id + "'" +
+      (_bulkSel[sw.id] ? " checked" : "") + " title='수집 대상 선택' " +
+      "style='position:absolute;top:8px;left:8px;width:16px;height:16px;z-index:3;cursor:pointer'>"
+    : "";
   var alertClass = sw.alert === "critical" ? "sw-card--critical"
     : sw.alert === "warning" ? "sw-card--warning"
     : sw.status === "done" ? "sw-card--ok"
@@ -482,6 +489,7 @@ function swCardHTML(sw) {
 
   return "<div id='swcard-" + sw.id + "' class='sw-card " + alertClass + "' title='" +
     escHtml(sw.ip) + (sw.hostname ? "\n" + escHtml(sw.hostname) : "") + "'>" +
+    checkbox +
     alertBadge +
     "<div class='sw-card__icon'><div class='sw-icon'><div class='sw-icon__ports'>" +
     renderMiniPorts(sw) +
@@ -1134,6 +1142,83 @@ function collectSwitch(switchId, username, password, persist) {
     pollState();
   }).catch(function(e) { console.error("collect error:", e); });
 }
+
+// ─── 일괄 정보 수집 (공통 계정) ──────────────────────────────────
+function _updateBulkCollectBtn() {
+  var btn = document.getElementById("btn-bulk-collect");
+  if (!btn) return;
+  var n = Object.keys(_bulkSel).length;
+  btn.textContent = "정보 수집 (" + n + ")";
+  btn.disabled = n === 0;
+}
+
+// 수집 선택 체크박스 변경(위임)
+document.addEventListener("change", function (e) {
+  var t = e.target;
+  if (!t || !t.classList || !t.classList.contains("sw-collect-check")) return;
+  var id = parseInt(t.value, 10);
+  if (t.checked) _bulkSel[id] = true; else delete _bulkSel[id];
+  _updateBulkCollectBtn();
+});
+
+(function () {
+  // 전체 선택(현재 현황판 카드에 한함)
+  var all = document.getElementById("dash-check-all");
+  if (all) all.addEventListener("change", function () {
+    document.querySelectorAll("#switch-grid .sw-collect-check").forEach(function (c) {
+      c.checked = all.checked;
+      var id = parseInt(c.value, 10);
+      if (all.checked) _bulkSel[id] = true; else delete _bulkSel[id];
+    });
+    _updateBulkCollectBtn();
+  });
+
+  // "정보 수집(N)" → 계정 입력 팝업
+  var open = document.getElementById("btn-bulk-collect");
+  if (open) open.addEventListener("click", function () {
+    var ids = Object.keys(_bulkSel);
+    if (!ids.length) { alert("먼저 수집할 스위치를 선택하세요."); return; }
+    var names = ids.map(function (id) {
+      var s = (_switches || []).find(function (x) { return String(x.id) === String(id); });
+      return s ? (s.name + " (" + s.ip + ")") : ("#" + id);
+    });
+    document.getElementById("bulk-cred-info").innerHTML =
+      "<strong>" + ids.length + "대</strong> 선택됨<br>" +
+      "<span style='font-size:12px;color:#475569'>" + names.map(escHtml).join(", ") + "</span>";
+    document.getElementById("bulk-username").value = "";
+    document.getElementById("bulk-password").value = "";
+    var bp = document.getElementById("bulk-persist"); if (bp) bp.checked = false;
+    openModal("modal-bulk-collect");
+  });
+
+  // "수집 시작" → 일괄 수집 요청
+  var start = document.getElementById("btn-bulk-start");
+  if (start) start.addEventListener("click", function () {
+    var ids = Object.keys(_bulkSel).map(function (x) { return parseInt(x, 10); });
+    if (!ids.length) { closeModal("modal-bulk-collect"); return; }
+    var username = document.getElementById("bulk-username").value.trim();
+    var password = document.getElementById("bulk-password").value;
+    if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
+    var persist = document.getElementById("bulk-persist");
+    fetch("/api/switches/bulk-collect", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ids: ids, username: username, password: password,
+                            persist: persist && persist.checked}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      closeModal("modal-bulk-collect");
+      if (res.ok) {
+        _bulkSel = {};
+        var allc = document.getElementById("dash-check-all"); if (allc) allc.checked = false;
+        var msg = res.queued_count + "대 수집을 시작했습니다(백그라운드).";
+        if (res.skipped_count) msg += "\n제외 " + res.skipped_count + "대(이미 수집 중이거나 IP 거부).";
+        alert(msg);
+        pollState();
+      } else {
+        alert(res.error || "일괄 수집 실패");
+      }
+    }).catch(function (e) { console.error("bulk collect:", e); alert("일괄 수집 오류"); });
+  });
+})();
 
 // ─── 수동 추가 모달 ──────────────────────────────────────────────
 document.getElementById("btn-add-manual").addEventListener("click", function() {

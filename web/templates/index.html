@@ -46,6 +46,8 @@
         <div class="pane-toolbar__actions">
           <button id="btn-view-card" class="btn btn--primary" style="font-size:12px">카드 뷰</button>
           <button id="btn-view-rack" class="btn btn--secondary" style="font-size:12px">랙 뷰</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer"><input type="checkbox" id="dash-check-all"> 전체선택</label>
+          <button id="btn-bulk-collect" class="btn btn--primary" style="font-size:12px" disabled>정보 수집 (0)</button>
           <input id="loc-filter-dash" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
           <button id="btn-add-manual" class="btn btn--secondary">+ 수동 추가</button>
           <button id="btn-import-excel" class="btn btn--primary">엑셀 가져오기</button>
@@ -236,6 +238,33 @@
         <button id="btn-test-switch" class="btn btn--secondary">연결 테스트</button>
         <button id="btn-collect" class="btn btn--primary">정보 수집</button>
         <button class="btn btn--ghost" data-close="modal-credential">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 일괄 정보 수집 모달 (공통 계정) -->
+  <div id="modal-bulk-collect" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box">
+      <div class="modal__header">
+        <span>일괄 정보 수집 (공통 계정)</span>
+        <button class="modal__close" data-close="modal-bulk-collect">&times;</button>
+      </div>
+      <div class="modal__body">
+        <div class="switch-info-box" id="bulk-cred-info"></div>
+        <label>아이디</label>
+        <input id="bulk-username" type="text" placeholder="admin" autocomplete="off">
+        <label>패스워드</label>
+        <input id="bulk-password" type="password" placeholder="••••••••" autocomplete="new-password">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;cursor:pointer">
+          <input id="bulk-persist" type="checkbox">
+          이 계정을 저장해 자동 수집에 사용 (암호화 저장, 화면 비노출)
+        </label>
+        <p style="margin-top:8px;font-size:12px;color:#64748b">선택한 장비를 동시에(백그라운드) 수집합니다. 진행 상태는 카드 색상으로 표시됩니다.</p>
+      </div>
+      <div class="modal__footer">
+        <button id="btn-bulk-start" class="btn btn--primary">수집 시작</button>
+        <button class="btn btn--ghost" data-close="modal-bulk-collect">취소</button>
       </div>
     </div>
   </div>

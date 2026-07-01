@@ -1114,6 +1114,68 @@ def create_app(demo_mode=None):
             log_event("error", "get_events_error", switch_id=switch_id, error=sanitized)
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/switches/bulk-collect", methods=["POST"])
+    @rate_limit("bulk_collect", max_requests=10, window_seconds=60)
+    def bulk_collect_endpoint():
+        """공통 계정으로 선택된 스위치들을 일괄(비동기 동시) 수집.
+
+        body: {ids:[...], username, password, persist?}
+        각 스위치를 워커 큐에 넣어 동시 수집한다. 계정은 세션 저장소 경유(평문 큐 비노출).
+        """
+        try:
+            data = request.get_json() or {}
+            ids = data.get("ids", [])
+            if not isinstance(ids, list) or not ids:
+                return jsonify({"error": "ids required"}), 400
+            if len(ids) > 500:
+                return jsonify({"error": "too many ids"}), 400
+            try:
+                username = validate_credential(data.get("username"))
+                password = validate_credential(data.get("password"))
+            except ValueError as ve:
+                return jsonify({"error": str(ve)}), 400
+            if not config.app.get("demo_mode") and (not username or not password):
+                return jsonify({"error": "username and password required"}), 400
+
+            persist = data.get("persist", False)
+            queued, skipped = [], []
+            allowed = config.collector.get("allowed_ip_ranges")
+            for raw in ids:
+                try:
+                    sid = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                sw = db.get_switch(db_path, sid)
+                if not sw:
+                    skipped.append({"id": sid, "reason": "not found"})
+                    continue
+                # SSRF 방어: DB에 저장된 IP도 수집 직전 재검증
+                ip = sw.get("ip") if isinstance(sw, dict) else getattr(sw, "ip", None)
+                if ip:
+                    try:
+                        validate_ipv4(ip, allowed)
+                    except ValueError as e:
+                        skipped.append({"id": sid, "reason": "ip rejected: %s" % e})
+                        continue
+                result = collector.collect_switch(db_path, sid, username, password)
+                if result.get("status") == "queued":
+                    queued.append(sid)
+                    if persist:
+                        cred_blob = credentials.encrypt_credential(username, password)
+                        if cred_blob:
+                            try:
+                                db.update_cred_blob(db_path, sid, cred_blob)
+                            except Exception:
+                                pass
+                else:
+                    skipped.append({"id": sid, "reason": result.get("message", "enqueue failed")})
+            log_event("info", "bulk_collect", queued=len(queued), skipped=len(skipped))
+            return jsonify({"ok": True, "queued": queued, "skipped": skipped,
+                            "queued_count": len(queued), "skipped_count": len(skipped)}), 202
+        except Exception as e:
+            log_event("error", "bulk_collect_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/switches/<int:switch_id>/collect", methods=["POST"])
     def collect_switch_endpoint(switch_id):
         log_event("info", "collect_requested", switch_id=switch_id)
