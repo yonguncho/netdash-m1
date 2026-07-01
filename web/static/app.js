@@ -733,34 +733,82 @@ function renderFacilityProgress(st) {
   }
 }
 
+var _facHosts = [];
+
+// 직접 연결로 확신할 수 있는가(물리 액세스 포트에서 관측 + 연결 스위치 있음)
+function _facIsDirect(h) {
+  var d = (h.direct === undefined || h.direct === null) ? 1 : h.direct;
+  return d === 1 && !!h.switch_name;
+}
+
 function renderFacilityTable(hosts) {
+  _facHosts = hosts || [];
+  _renderFacilityRows();
+}
+
+function _renderFacilityRows() {
   var tbody = document.getElementById("facility-table-body");
   if (!tbody) return;
-  if (!hosts.length) {
-    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>수집된 설비가 없습니다.</td></tr>";
+  var all = _facHosts;
+  var directCount = all.filter(_facIsDirect).length;
+
+  var sum = document.getElementById("fac-summary");
+  if (sum) {
+    sum.innerHTML = all.length
+      ? ("전체 <b>" + all.length + "</b>건 · 직접 연결 <b style='color:#15803d'>" + directCount +
+         "</b>건 · 미확인 <b style='color:#b45309'>" + (all.length - directCount) + "</b>건" +
+         "  <span style='color:#94a3b8'>(미확인 = 업링크 Po/Vl 경유로만 관측 — 직접 연결된 액세스 스위치 미수집일 수 있음)</span>")
+      : "";
+  }
+
+  var onlyDirect = document.getElementById("fac-only-direct");
+  var rows = (onlyDirect && onlyDirect.checked) ? all.filter(_facIsDirect) : all;
+  if (!rows.length) {
+    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>" +
+      (all.length ? "직접 연결로 확인된 설비가 없습니다. ('직접 연결만' 해제 시 전체 표시)"
+                  : "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.") +
+      "</td></tr>";
     return;
   }
-  tbody.innerHTML = hosts.map(function (h) {
-    // direct=1 직접연결(물리 액세스 포트), 0 업링크 경유(Po/Vl·트렁크 — 직접연결 불확실)
-    var direct = (h.direct === undefined || h.direct === null) ? 1 : h.direct;
-    var sw, badge = "";
-    if (!h.switch_name) {
-      sw = "<span style='color:#b45309'>미상</span>";
-    } else if (direct) {
-      sw = escHtml(h.switch_name);
-      badge = " <span class='status-badge status-badge--ok'>직접</span>";
+  tbody.innerHTML = rows.map(function (h) {
+    var swCell, portCell;
+    if (_facIsDirect(h)) {
+      swCell = "<span style='font-weight:600'>" + escHtml(h.switch_name) +
+        "</span> <span class='status-badge status-badge--ok'>직접</span>";
+      portCell = "<code>" + escHtml(h.port || "-") + "</code>";
     } else {
-      sw = escHtml(h.switch_name);
-      badge = " <span class='status-badge status-badge--new' title='업링크/트렁크(Po·Vl·트렁크) 경유로만 관측 — 직접 연결 스위치가 아닐 수 있음'>간접·업링크</span>";
+      // Po/Vl 등 업링크 경유 상세는 툴팁으로만(표는 깔끔하게)
+      var tip = h.via ? " title='업링크 경유 관측: " + escHtml(h.via) + "'" : "";
+      swCell = "<span style='color:#b45309;cursor:help'" + tip + ">직접 연결 미확인 ⓘ</span>";
+      portCell = "<span style='color:#94a3b8'>—</span>";
     }
-    var via = h.via ? "<div style='color:#94a3b8;font-size:11px'>그 외 관측: " + escHtml(h.via) + "</div>" : "";
     var on = h.online ? "<span class='status-badge status-badge--ok'>온라인</span>"
                       : "<span class='status-badge status-badge--new'>오프라인</span>";
     return "<tr><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
-      "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + sw + badge + via + "</td><td>" +
-      escHtml(h.port || "-") + "</td><td>" + on + "</td></tr>";
+      "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
+      portCell + "</td><td>" + on + "</td></tr>";
   }).join("");
 }
+
+// "직접 연결만" 토글 + "새로고침(재매칭)" 버튼
+(function () {
+  var only = document.getElementById("fac-only-direct");
+  if (only) only.addEventListener("change", _renderFacilityRows);
+  var rf = document.getElementById("btn-fac-refresh");
+  if (rf) rf.addEventListener("click", function () {
+    rf.disabled = true;
+    var prog = document.getElementById("fac-progress");
+    if (prog) prog.textContent = "최신 MAC 테이블 기준으로 재대조 중...";
+    fetch("/api/facility/rematch", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (prog) prog.textContent = res.ok ? ("재매칭 완료 (" + res.updated + "건 갱신)") : (res.error || "재매칭 실패");
+        loadFacility();
+      })
+      .catch(function (e) { console.error(e); if (prog) prog.textContent = "재매칭 오류"; })
+      .then(function () { rf.disabled = false; });
+  });
+})();
 
 (function () {
   var dbtn = document.getElementById("btn-fac-detect");

@@ -165,12 +165,43 @@ def test_save_facility_direct_via_roundtrip(temp_db):
     assert h["via"] == "CORE-SW:Po1"
 
 
+def test_rematch_updates_to_latest_mac(temp_db):
+    """새로고침(재매칭): ping 없이 최신 MAC 스냅샷 기준으로 스위치/포트/직접여부 갱신."""
+    from core import facility
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.9.0.0/24", "ip": "10.9.0.5", "mac": "00:11:22:33:44:55",
+         "online": 1, "direct": 0, "switch_id": None, "switch_name": None, "port": None}])
+    # 이제 어떤 액세스 스위치가 이 MAC을 물리 포트에서 학습(최신 스냅샷)
+    sid = db.save_switch(temp_db, "ACC", "10.0.0.9", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sid)
+    db.save_mac_entries(temp_db, snap, sid, [
+        {"switch_id": sid, "vlan": 10, "mac": "00:11:22:33:44:55", "port": "Gi1/0/3", "type": "dynamic"}])
+    n = facility.rematch(temp_db)
+    assert n == 1
+    h = db.get_facility_hosts(temp_db)[0]
+    assert h["switch_name"] == "ACC" and h["port"] == "Gi1/0/3" and h["direct"] == 1
+
+
+def test_rematch_empty_ok(temp_db):
+    from core import facility
+    assert facility.rematch(temp_db) == 0
+
+
+def test_facility_rematch_endpoint(client):
+    r = client.post("/api/facility/rematch", json={})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+
+
 def test_facility_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'data-tab="facility"' in html
     assert 'id="facility-table-body"' in html
     assert 'id="btn-fac-detect"' in html
+    assert 'id="btn-fac-refresh"' in html
+    assert 'id="fac-only-direct"' in html
     js = APP_JS.read_text(encoding="utf-8")
     assert "function loadFacility" in js
     assert "/api/facility/collect" in js
     assert "/api/facility/detect-subnets" in js
+    assert "/api/facility/rematch" in js
+    assert "_renderFacilityRows" in js

@@ -620,6 +620,17 @@ def create_app(demo_mode=None):
             log_event("error", "facility_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/facility/rematch", methods=["POST"])
+    @rate_limit("facility_rematch", max_requests=30, window_seconds=60)
+    def facility_rematch():
+        """설비 현황 새로고침: ping 없이 최신 MAC 스냅샷 기준으로 재대조."""
+        try:
+            n = facility_mod.rematch(db_path)
+            return jsonify({"ok": True, "updated": n})
+        except Exception as e:
+            log_event("error", "facility_rematch_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/facility/detect-subnets", methods=["POST"])
     @rate_limit("facility_detect", max_requests=20, window_seconds=60)
     def facility_detect_subnets():

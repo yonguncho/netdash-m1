@@ -92,9 +92,12 @@
           <button id="btn-fac-detect" class="btn btn--secondary">대역 자동 찾기</button>
           <input id="fac-subnet" type="text" placeholder="10.92.174.0/23" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:150px">
           <button id="btn-fac-collect" class="btn btn--primary">대역 수집(ping)</button>
+          <button id="btn-fac-refresh" class="btn btn--secondary" title="ping 없이 최신 MAC 테이블 기준으로 연결 스위치/포트 재대조">↻ 새로고침(재매칭)</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer"><input type="checkbox" id="fac-only-direct"> 직접 연결만</label>
         </div>
       </div>
       <div id="fac-progress" style="margin:8px 0;font-size:13px;color:#475569"></div>
+      <div id="fac-summary" style="margin:4px 0 8px;font-size:12px;color:#64748b"></div>
       <div class="table-wrap">
         <table class="data-table">
           <thead>

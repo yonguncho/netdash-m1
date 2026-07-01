@@ -220,6 +220,33 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     return {"subnet": subnet, "pinged": len(ips), "arp": len(arp), "saved": len(saved_hosts)}
 
 
+def rematch(db_path):
+    """기존 설비(facility_hosts)의 MAC을 '최신' MAC 스냅샷 기준으로 재대조.
+
+    ping/ARP 재수집 없이(빠름) 연결 스위치·포트·직접여부만 최신화한다.
+    TPS 스위치를 다시 일반 수집한 뒤 설비 현황 '새로고침'에 사용.
+    반환: 갱신된 설비 개수.
+    """
+    hosts = db.get_facility_hosts(db_path)
+    if not hosts:
+        return 0
+    mac_map = db.get_mac_to_switchport(db_path)
+    port_counts = db.get_port_mac_counts(db_path)
+    updated = []
+    for h in hosts:
+        mac = (h.get("mac") or "").lower()
+        matches = mac_map.get(mac, [])
+        sid, sname, port, direct, via = _choose_attachment(matches, port_counts)
+        updated.append({
+            "subnet": h.get("subnet"), "ip": h.get("ip"), "mac": h.get("mac"),
+            "switch_id": sid, "switch_name": sname, "port": port,
+            "online": h.get("online", 1), "direct": 1 if direct else 0,
+            "via": "; ".join(via) if via else None})
+    db.save_facility_hosts(db_path, updated)  # subnet+ip UNIQUE → 제자리 갱신
+    utils.log_event("info", "facility_rematched", count=len(updated))
+    return len(updated)
+
+
 def start_collect_band(db_path, switch_id, subnet, username, password, source_ip=None):
     """백그라운드 스레드로 대역 수집 시작. 이미 실행 중이면 거부.
 
