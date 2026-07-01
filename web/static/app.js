@@ -29,6 +29,7 @@ document.addEventListener("click", function (e) {
     case "detail-fw": showFirewallDetail(nid); break;
     case "edit-fw": editFirewall(obj); break;
     case "delete-fw": deleteFirewall(nid); break;
+    case "vlan-toggle": toggleVlanGroup(btn); break;
   }
 });
 
@@ -38,6 +39,7 @@ document.addEventListener("input", function (e) {
   if (!inp.classList) return;
   // 위치 필터(현황판/스위치 현황) → 카드/표 재렌더
   if (inp.classList.contains("loc-filter")) {
+    if (inp.id === "loc-filter-room") { renderRoom(_switches); return; }
     renderSwitchGrid(_switches);
     renderSwitchTable(_switches);
     if (_viewMode === "rack") renderRackView(_switches);
@@ -131,6 +133,7 @@ document.querySelectorAll(".tab-nav__btn").forEach(btn => {
     if (btn.dataset.tab === "reconcile") loadReconcile();
     if (btn.dataset.tab === "firewall") loadFirewalls();
     if (btn.dataset.tab === "facility") loadFacility();
+    if (btn.dataset.tab === "room") renderRoom(_switches);
   });
 });
 
@@ -352,6 +355,88 @@ function renderRackView(switches) {
   }).join("");
 }
 
+// ─── 서버실 현황 (location "A09U27" 랙/유닛) ─────────────────────
+var _roomViewMode = "card";  // card | rack
+
+(function () {
+  var bc = document.getElementById("btn-room-card");
+  var br = document.getElementById("btn-room-rack");
+  if (!bc || !br) return;
+  function setMode(m) {
+    _roomViewMode = m;
+    document.getElementById("room-grid").style.display = (m === "card") ? "" : "none";
+    document.getElementById("room-rack-view").style.display = (m === "rack") ? "" : "none";
+    bc.className = "btn " + (m === "card" ? "btn--primary" : "btn--secondary");
+    br.className = "btn " + (m === "rack" ? "btn--primary" : "btn--secondary");
+    bc.style.fontSize = br.style.fontSize = "12px";
+    renderRoom(_switches);
+  }
+  bc.addEventListener("click", function () { setMode("card"); });
+  br.addEventListener("click", function () { setMode("rack"); });
+})();
+
+function renderRoom(switches) {
+  // 서버실 소속 = location이 "A09U27" 형식(room_rack 주입됨)
+  var room = (switches || []).filter(function (sw) { return sw.room_rack; });
+  if (_roomViewMode === "rack") renderRoomRackView(room);
+  else renderRoomGrid(room);
+}
+
+function renderRoomGrid(switches) {
+  switches = _applyLocFilter(switches, "loc-filter-room");
+  var grid = document.getElementById("room-grid");
+  if (!grid) return;
+  if (!switches.length) {
+    grid.innerHTML = "<p class='placeholder'>서버실 위치(A09U27 형식)가 지정된 장비가 없습니다. 스위치 수정 → 위치에 A09U27처럼 입력하세요.</p>";
+    return;
+  }
+  // 랙 → 유닛 순으로 정렬
+  switches = switches.slice().sort(_roomSort);
+  grid.innerHTML = switches.map(swCardHTML).join("");
+  switches.forEach(function (sw) {
+    var card = document.getElementById("swcard-" + sw.id);
+    if (!card) return;
+    card.addEventListener("click", function (e) {
+      if (e.target.closest("[data-action]")) return;
+      openCredentialModal(sw);
+    });
+  });
+}
+
+function _roomSort(a, b) {
+  if (a.room_rack !== b.room_rack) return a.room_rack < b.room_rack ? -1 : 1;
+  return (b.room_unit || 0) - (a.room_unit || 0);  // 유닛 높은 번호가 위(실제 랙과 동일)
+}
+
+function renderRoomRackView(switches) {
+  var host = document.getElementById("room-rack-view");
+  if (!host) return;
+  switches = _applyLocFilter(switches, "loc-filter-room");
+  if (!switches.length) {
+    host.innerHTML = "<p class='placeholder'>서버실 위치(A09U27 형식)가 지정된 장비가 없습니다.</p>";
+    return;
+  }
+  // 랙(room_rack) → 유닛 목록
+  var racks = {};
+  switches.forEach(function (sw) {
+    (racks[sw.room_rack] = racks[sw.room_rack] || []).push(sw);
+  });
+  var rkeys = Object.keys(racks).sort();
+  host.innerHTML = "<div class='rack-row'>" + rkeys.map(function (rk) {
+    var units = racks[rk].slice().sort(function (a, b) { return (b.room_unit || 0) - (a.room_unit || 0); });
+    var unitsHtml = units.map(function (sw) {
+      var cls = swStatusClass(sw);
+      return "<div class='rack-unit rack-unit--" + cls + "' " +
+        "data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>" +
+        "<span class='rack-unit__u'>U" + escHtml(String(sw.room_unit)) + "</span>" +
+        "<span class='rack-unit__name'>" + escHtml(sw.name) + "</span>" +
+        "<span class='rack-unit__ip'>" + escHtml(sw.ip) + "</span></div>";
+    }).join("");
+    return "<div class='rack'><div class='rack__label'>🗄 " + escHtml(rk) + " 랙</div>" +
+      "<div class='rack__units'>" + unitsHtml + "</div></div>";
+  }).join("") + "</div>";
+}
+
 function renderSwitchGrid(switches) {
   switches = _applyLocFilter(switches, "loc-filter-dash");
   var grid = document.getElementById("switch-grid");
@@ -442,7 +527,9 @@ function renderSwitchTable(switches) {
       ? "<span style='color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" +
         (sw.location ? "<br><span style='font-size:11px;color:#64748b'>" + escHtml(sw.location) + "</span>" : "")
       : escHtml(sw.location || "-");
-    return "<tr><td>" + escHtml(sw.name) + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
+    return "<tr>" +
+      "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'></td>" +
+      "<td>" + escHtml(sw.name) + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(sw.vendor || "-") + "</td><td>" +
       locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span></td><td>" +
@@ -454,7 +541,52 @@ function renderSwitchTable(switches) {
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
       "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button></td></tr>";
   }).join("");
+  var allChk = document.getElementById("sw-check-all");
+  if (allChk) allChk.checked = false;
+  _updateBulkDeleteBtn();
 }
+
+// 선택 삭제 버튼 상태(개수) 갱신
+function _updateBulkDeleteBtn() {
+  var btn = document.getElementById("btn-sw-bulk-delete");
+  if (!btn) return;
+  var n = document.querySelectorAll("#switch-table-body .sw-check:checked").length;
+  btn.textContent = "선택 삭제 (" + n + ")";
+  btn.disabled = n === 0;
+}
+
+(function () {
+  // 전체 선택 체크박스
+  var allChk = document.getElementById("sw-check-all");
+  if (allChk) allChk.addEventListener("change", function () {
+    document.querySelectorAll("#switch-table-body .sw-check").forEach(function (c) {
+      // 검색 필터로 숨겨진 행은 선택 제외
+      if (c.closest("tr").style.display !== "none") c.checked = allChk.checked;
+    });
+    _updateBulkDeleteBtn();
+  });
+  // 개별 체크박스 변경 위임
+  var tbody = document.getElementById("switch-table-body");
+  if (tbody) tbody.addEventListener("change", function (e) {
+    if (e.target && e.target.classList.contains("sw-check")) _updateBulkDeleteBtn();
+  });
+  // 선택 삭제
+  var del = document.getElementById("btn-sw-bulk-delete");
+  if (del) del.addEventListener("click", function () {
+    var ids = Array.prototype.map.call(
+      document.querySelectorAll("#switch-table-body .sw-check:checked"),
+      function (c) { return parseInt(c.value, 10); });
+    if (!ids.length) return;
+    if (!confirm(ids.length + "대의 스위치를 삭제하시겠습니까? (관련 수집 데이터도 함께 삭제됩니다)")) return;
+    fetch("/api/switches/bulk-delete", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ids: ids}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) { alert(res.deleted + "대 삭제 완료"); pollState(); }
+      else alert(res.error || "삭제 실패");
+    }).catch(function (e) { console.error(e); alert("삭제 오류"); });
+  });
+})();
 
 var _editSwitchId = null;
 
@@ -485,22 +617,74 @@ function swStatusClass(sw) {
   return "new";
 }
 
-// ─── VLAN 탭 ─────────────────────────────────────────────────────
+// ─── VLAN 탭 (VLAN 기준 그룹 + 드롭다운) ─────────────────────────
 function loadVlans() {
   fetch("/api/vlans").then(function(r) { return r.json(); }).then(function(data) {
-    var tbody = document.getElementById("vlan-table-body");
-    var vlans = data.vlans || [];
-    if (!vlans.length) {
-      tbody.innerHTML = "<tr><td colspan=5 style='color:#64748b'>VLAN 정보 없음</td></tr>";
-      return;
-    }
-    tbody.innerHTML = vlans.map(function(v) {
-      return "<tr><td><strong>VLAN " + v.vlan + "</strong></td><td>" + escHtml(v.vlan_name || "-") +
-        "</td><td>" + escHtml(v.switch_name) + "</td><td><code>" + escHtml(v.switch_ip) +
-        "</code></td><td>" + v.mac_count + "</td></tr>";
-    }).join("");
+    renderVlanAccordion(data.vlans || []);
   }).catch(function(e) { console.error("vlan load:", e); });
 }
+
+function renderVlanAccordion(rows) {
+  var host = document.getElementById("vlan-accordion");
+  if (!host) return;
+  if (!rows.length) {
+    host.innerHTML = "<p class='placeholder'>VLAN 정보 없음 (스위치를 수집하면 표시됩니다)</p>";
+    return;
+  }
+  // VLAN 번호 기준 그룹핑
+  var groups = {};
+  rows.forEach(function(v) {
+    var k = v.vlan;
+    if (!groups[k]) groups[k] = { vlan: k, name: "", switches: [], mac: 0 };
+    if (v.vlan_name && !groups[k].name) groups[k].name = v.vlan_name;
+    groups[k].switches.push(v);
+    groups[k].mac += (v.mac_count || 0);
+  });
+  var keys = Object.keys(groups).sort(function(a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
+  host.innerHTML = keys.map(function(k) {
+    var g = groups[k];
+    var rowsHtml = g.switches.map(function(v) {
+      return "<tr><td>" + escHtml(v.switch_name || "-") + "</td><td>" +
+        escHtml(v.switch_hostname || "-") + "</td><td><code>" + escHtml(v.switch_ip || "-") +
+        "</code></td><td style='text-align:right'>" + (v.mac_count || 0) + "</td></tr>";
+    }).join("");
+    var nameLabel = g.name ? " · " + escHtml(g.name) : "";
+    return "<div class='vlan-item' data-vlan='" + escHtml(String(g.vlan)) + "' data-name='" + escHtml((g.name || "").toLowerCase()) + "'>" +
+      "<div class='vlan-head' data-action='vlan-toggle'>" +
+        "<span class='vlan-caret'>▶</span> " +
+        "<strong>VLAN " + escHtml(String(g.vlan)) + "</strong>" + nameLabel +
+        "<span class='vlan-meta'>스위치 " + g.switches.length + "대 · MAC " + g.mac + "</span>" +
+      "</div>" +
+      "<div class='vlan-body' style='display:none'>" +
+        "<table class='data-table'><thead><tr><th>스위치(구분)</th><th>호스트네임</th><th>IP</th><th style='text-align:right'>MAC 수</th></tr></thead>" +
+        "<tbody>" + rowsHtml + "</tbody></table>" +
+      "</div></div>";
+  }).join("");
+}
+
+function toggleVlanGroup(headEl) {
+  var item = headEl.closest(".vlan-item");
+  if (!item) return;
+  var body = item.querySelector(".vlan-body");
+  var caret = item.querySelector(".vlan-caret");
+  var open = body.style.display !== "none";
+  body.style.display = open ? "none" : "";
+  if (caret) caret.textContent = open ? "▶" : "▼";
+}
+
+// VLAN 검색(번호/이름) — 아코디언 항목 표시/숨김
+(function () {
+  var inp = document.getElementById("vlan-search");
+  if (!inp) return;
+  inp.addEventListener("input", function () {
+    var q = inp.value.trim().toLowerCase();
+    document.querySelectorAll("#vlan-accordion .vlan-item").forEach(function (it) {
+      var vlan = (it.getAttribute("data-vlan") || "").toLowerCase();
+      var name = it.getAttribute("data-name") || "";
+      it.style.display = (!q || vlan.indexOf(q) >= 0 || name.indexOf(q) >= 0) ? "" : "none";
+    });
+  });
+})();
 
 // ─── 설비 현황 (대역 ping sweep + ARP + MAC 대조) ────────────────
 var _facPollTimer = null;
@@ -1061,6 +1245,7 @@ function pollState() {
       renderSwitchGrid(_switches);
       renderSwitchTable(_switches);
       if (_viewMode === "rack") renderRackView(_switches);
+      renderRoom(_switches);
 
       if (_currentSwitchId) {
         var sw = _switches.find(function(s) { return s.id === _currentSwitchId; });

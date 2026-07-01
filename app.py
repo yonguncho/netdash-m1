@@ -221,7 +221,7 @@ def create_app(demo_mode=None):
             snapshots = db.get_snapshots(db_path)
 
             # hostname → TPS 물리 위치 라벨 + 랙 그룹핑 키 주입(포맷 일치 시)
-            from core import tps_location
+            from core import tps_location, serverroom
             for sw in switches:
                 info = tps_location.parse(sw.get("hostname"))
                 if info:
@@ -229,6 +229,12 @@ def create_app(demo_mode=None):
                     sw["tps_group"] = "%d공장 · %s(%s) · %d층" % (
                         info["phase"], info["building_name"], info["building_code"], info["floor"])
                     sw["tps_num"] = "TPS" + info["tps"]
+                # location "A09U27" → 서버실 랙/유닛 (서버실 현황 탭용)
+                room = serverroom.parse_rack(sw.get("location"))
+                if room:
+                    sw["room_rack"] = room["rack"]
+                    sw["room_unit"] = room["unit"]
+                    sw["room_label"] = room["label"]
 
             return jsonify({
                 "switches": switches,
@@ -818,6 +824,24 @@ def create_app(demo_mode=None):
             return jsonify({"ok": True})
         except Exception as e:
             log_event("error", "delete_switch_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/bulk-delete", methods=["POST"])
+    @rate_limit("bulk_delete_switch", max_requests=20, window_seconds=60)
+    def bulk_delete_switches_endpoint():
+        """스위치 여러 대 일괄/선택 삭제. body: {ids:[...]}"""
+        try:
+            data = request.get_json() or {}
+            ids = data.get("ids", [])
+            if not isinstance(ids, list) or not ids:
+                return jsonify({"error": "ids required"}), 400
+            if len(ids) > 1000:
+                return jsonify({"error": "too many ids"}), 400
+            deleted = db.delete_switches_bulk(db_path, ids)
+            log_event("info", "switches_bulk_deleted", count=deleted)
+            return jsonify({"ok": True, "deleted": deleted})
+        except Exception as e:
+            log_event("error", "bulk_delete_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/firewalls/<int:fid>", methods=["PUT"])

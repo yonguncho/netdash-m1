@@ -351,6 +351,22 @@ body {
 .rack-unit--new { border-left-color: #94a3b8; }
 .rack-unit__name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rack-unit__ip { color: #94a3b8; font-size: 11px; }
+.rack-unit__u {
+  min-width: 34px; text-align: center; font-size: 11px; font-weight: 700;
+  color: #cbd5e1; background: #334155; border-radius: 3px; padding: 2px 4px;
+}
+
+/* ─── VLAN 아코디언 ───────────────────────────── */
+.vlan-item { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; overflow: hidden; background: var(--surface); }
+.vlan-head {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 10px 14px; font-size: 14px; background: #f8fafc; user-select: none;
+}
+.vlan-head:hover { background: #f1f5f9; }
+.vlan-caret { color: #64748b; font-size: 11px; width: 14px; display: inline-block; }
+.vlan-meta { margin-left: auto; color: #64748b; font-size: 12px; font-weight: 500; }
+.vlan-body { padding: 4px 14px 12px; }
+.vlan-body .data-table th { background: #fff; }
 
 /* ─── 기타 ───────────────────────────────────── */
 .coming-soon {

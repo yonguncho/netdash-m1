@@ -28,6 +28,7 @@
   <!-- 탭 네비게이션 -->
   <nav class="tab-nav">
     <button class="tab-nav__btn active" data-tab="dashboard">현황판</button>
+    <button class="tab-nav__btn" data-tab="room">서버실 현황</button>
     <button class="tab-nav__btn" data-tab="facility">설비 현황</button>
     <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
     <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
@@ -60,6 +61,23 @@
         <p class="placeholder">스위치를 추가하거나 엑셀 파일을 가져오세요.</p>
       </div>
       <div id="rack-view" class="rack-view" style="display:none"></div>
+    </div>
+
+    <!-- 서버실 현황 탭 (location "A09U27" 랙/유닛) -->
+    <div id="tab-room" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">서버실 현황</span>
+        <div class="pane-toolbar__actions">
+          <button id="btn-room-card" class="btn btn--primary" style="font-size:12px">카드 뷰</button>
+          <button id="btn-room-rack" class="btn btn--secondary" style="font-size:12px">랙 뷰</button>
+          <input id="loc-filter-room" class="loc-filter" type="text" placeholder="랙/이름으로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+        </div>
+      </div>
+      <p style="margin:4px 0 10px;font-size:12px;color:#64748b">스위치 <b>위치(location)</b>를 <code>A09U27</code> 형식으로 기재하면 서버실 <b>A09 랙 U27</b>에 표시됩니다. (수정 → 위치 입력)</p>
+      <div id="room-grid" class="switch-grid">
+        <p class="placeholder">서버실 위치(A09U27 형식)가 지정된 장비가 없습니다.</p>
+      </div>
+      <div id="room-rack-view" class="rack-view" style="display:none"></div>
     </div>
 
     <!-- 설비 현황 탭 (대역 ping sweep + ARP + MAC 대조) -->
@@ -113,6 +131,7 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">스위치 현황 상세</span>
         <div class="pane-toolbar__actions">
+          <button id="btn-sw-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
           <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
         </div>
       </div>
@@ -120,7 +139,8 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th>이름</th><th>IP</th><th>호스트네임</th><th>벤더</th>
+              <th style="width:34px;text-align:center"><input type="checkbox" id="sw-check-all" title="전체 선택"></th>
+              <th>구분</th><th>IP</th><th>호스트네임</th><th>벤더</th>
               <th>위치</th><th>상태</th><th>경보</th><th>마지막 수집</th><th>작업</th>
             </tr>
           </thead>
@@ -129,19 +149,16 @@
       </div>
     </div>
 
-    <!-- VLAN 탭 -->
+    <!-- VLAN 탭 (VLAN 기준 그룹 + 드롭다운) -->
     <div id="tab-vlan" class="tab-pane">
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">VLAN 현황</span>
+        <div class="pane-toolbar__actions">
+          <input id="vlan-search" placeholder="VLAN 번호/이름 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+        </div>
       </div>
-      <div id="vlan-table-wrap" class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr><th>VLAN</th><th>이름</th><th>스위치</th><th>스위치 IP</th><th>MAC 수</th></tr>
-          </thead>
-          <tbody id="vlan-table-body"></tbody>
-        </table>
-      </div>
+      <p style="margin:4px 0 10px;font-size:12px;color:#64748b">VLAN을 클릭하면 해당 VLAN이 있는 스위치(호스트네임·IP·MAC 수)를 펼쳐 볼 수 있습니다.</p>
+      <div id="vlan-accordion"></div>
     </div>
 
     <!-- 장부 대조 탭 (M8) -->

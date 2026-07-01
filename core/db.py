@@ -650,6 +650,7 @@ def get_vlan_summary(db_path):
         cursor = conn.cursor()
         cursor.execute(
             """SELECT v.vlan AS vlan, s.name AS switch_name, s.ip AS switch_ip,
+                      IFNULL(s.hostname, '') AS switch_hostname,
                       v.name AS vlan_name, v.status AS vlan_status,
                       (SELECT COUNT(*) FROM mac_entries m
                        WHERE m.switch_id = v.switch_id AND m.vlan = v.vlan) AS mac_count
@@ -657,6 +658,7 @@ def get_vlan_summary(db_path):
                JOIN switches s ON v.switch_id = s.id
                UNION
                SELECT m.vlan AS vlan, s.name AS switch_name, s.ip AS switch_ip,
+                      IFNULL(s.hostname, '') AS switch_hostname,
                       (SELECT vn.name FROM vlan_names vn
                        WHERE vn.switch_id = m.switch_id AND vn.vlan = m.vlan) AS vlan_name,
                       (SELECT vn.status FROM vlan_names vn
@@ -1215,6 +1217,41 @@ def delete_switch(db_path, switch_id):
                 except Exception:
                     pass
             return True
+
+
+def delete_switches_bulk(db_path, switch_ids):
+    """스위치 여러 대 일괄 삭제 + 관련 수집 데이터 정리. 반환: 실제 삭제된 개수."""
+    ids = []
+    for sid in (switch_ids or []):
+        try:
+            ids.append(int(sid))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return 0
+    deleted = 0
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            for sid in ids:
+                cur.execute("SELECT id FROM switches WHERE id=?", (sid,))
+                if not cur.fetchone():
+                    continue
+                for sql, params in [
+                    ("DELETE FROM ports WHERE switch_id=?", (sid,)),
+                    ("DELETE FROM mac_entries WHERE switch_id=?", (sid,)),
+                    ("DELETE FROM arp_entries WHERE switch_id=?", (sid,)),
+                    ("DELETE FROM snapshots WHERE switch_id=?", (sid,)),
+                    ("DELETE FROM port_events WHERE switch_id=?", (sid,)),
+                    ("UPDATE hosts SET switch_id=NULL, located=0 WHERE switch_id=?", (sid,)),
+                    ("DELETE FROM switches WHERE id=?", (sid,)),
+                ]:
+                    try:
+                        cur.execute(sql, params)
+                    except Exception:
+                        pass
+                deleted += 1
+    return deleted
 
 
 def delete_firewall(db_path, firewall_id):
