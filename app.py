@@ -539,11 +539,24 @@ def create_app(demo_mode=None):
                         f"Host IP rejected (SSRF): {ip} — {e}"
                     )
 
-            # Import switches (upsert by IP)
+            # 호스트네임/이름으로 방화벽(FW)·스위치(SW) 구분.
+            # 사용자 명명 규칙: 방화벽은 hostname에 'FW', 스위치는 'SW'.
+            # 'fw'가 들어있으면 방화벽, 아니면 스위치로 등록.
+            sw_rows, fw_rows = [], []
+            for sw in valid_switches:
+                text = ((sw.get("hostname") or "") + " " + (sw.get("name") or "")).lower()
+                (fw_rows if "fw" in text else sw_rows).append(sw)
+
+            # Import switches (upsert by name/IP)
             imported_switch_ids = []
-            if valid_switches:
-                imported_switch_ids = db.import_switches_bulk(db_path, valid_switches)
+            if sw_rows:
+                imported_switch_ids = db.import_switches_bulk(db_path, sw_rows)
                 log_event("info", "upload_switches_imported", count=len(imported_switch_ids))
+            # Import firewalls (host 기준 upsert, vendor=unknown → 이후 수정)
+            imported_firewall_ids = []
+            if fw_rows:
+                imported_firewall_ids = db.import_firewalls_bulk(db_path, fw_rows)
+                log_event("info", "upload_firewalls_imported", count=len(imported_firewall_ids))
 
             # Import hosts (upsert by IP)
             # M7: Excel hosts are the operator's LEDGER (expected inventory), not
@@ -566,12 +579,14 @@ def create_app(demo_mode=None):
             # WARNING 3 fix: diagnostics imported count를 실제 DB import count로 덮어씀
             diagnostics = result["diagnostics"]
             diagnostics["imported_switches"] = len(imported_switch_ids)
+            diagnostics["imported_firewalls"] = len(imported_firewall_ids)
             diagnostics["imported_hosts"] = len(imported_host_ids)
 
             return jsonify({
                 "ok": True,
                 "diagnostics": diagnostics,
                 "imported_switch_ids": imported_switch_ids,
+                "imported_firewall_ids": imported_firewall_ids,
                 "imported_host_ids": imported_host_ids,
             }), 201
 

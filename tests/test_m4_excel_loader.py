@@ -140,7 +140,7 @@ class TestBlockProcessing:
         assert records[0]["vendor"] == "cisco"
 
     def test_block_to_records_host(self):
-        """호스트 블록 (vendor 없음)"""
+        """호스트 블록 (ip+mac, 스위치 식별 컬럼 없음)"""
         block = [
             ["ip", "mac"],
             ["192.168.1.100", "00:11:22:33:44:55"],
@@ -148,6 +148,31 @@ class TestBlockProcessing:
         ]
         block_type, records = _block_to_records(block)
         assert block_type == "host"
+        assert len(records) == 2
+
+    def test_block_to_records_switch_without_vendor(self):
+        """회귀: vendor 열이 없어도 name/hostname/location 있으면 스위치.
+
+        (예전엔 vendor 없으면 전부 host로 분류돼 현황판에 안 나왔음.)
+        """
+        block = [
+            ["name", "ip", "hostname", "location"],
+            ["SW-A", "10.0.1.1", "sw-a.local", "A09U27"],
+            ["SW-B", "10.0.1.2", "sw-b.local", "A09U28"],
+        ]
+        block_type, records = _block_to_records(block)
+        assert block_type == "switch"
+        assert len(records) == 2
+
+    def test_block_to_records_ip_only_is_switch(self):
+        """IP만 있는 목록도 스위치로 등록(현황판 표시)."""
+        block = [
+            ["ip"],
+            ["10.0.1.5"],
+            ["10.0.1.6"],
+        ]
+        block_type, records = _block_to_records(block)
+        assert block_type == "switch"
         assert len(records) == 2
 
     def test_block_to_records_filter_invalid_ip(self):

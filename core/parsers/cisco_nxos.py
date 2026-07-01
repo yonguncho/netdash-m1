@@ -42,12 +42,12 @@ def _parse_port_channels(pc_output, switch_id):
     """show port-channel summary → 포트채널별 멤버 물리포트.
 
     형식(예):
-      Group Port-       Type     Protocol  Member Ports
-            Channel
-      ------------------------------------------------------------
-      10    Po10(SU)    Eth      LACP      Eth1/1(P)    Eth1/2(P)
-      1     Po1(SU)     Eth      NONE      Eth1/5(P)
+      Group Port-Channel Type Protocol Member Ports
+      ----- ------------ ---- -------- -------------------------------
+      10    Po10         Eth  LACP     Eth1/1(P)   Eth1/2(P)
+      1     Po1(SU)      Eth  NONE     Eth1/5(P)
 
+    플래그 표기(Po10(SU))가 있든 없든(Po10) 모두 지원한다.
     포트채널 MAC이 어느 물리포트에 실제 연결됐는지 해석하는 데 쓴다.
     Returns: [{switch_id, port_channel, members:[...]}]
     """
@@ -58,7 +58,8 @@ def _parse_port_channels(pc_output, switch_id):
     for i, line in enumerate(pc_output.split("\n")):
         if i > 5000 or len(line) > 1000:
             continue
-        head = re.match(r"^\s*\d+\s+(Po\d+)\(", line)
+        # 그룹번호 + Po<N> (선택적 (플래그)). "Po10", "Po10(SU)" 모두 매칭.
+        head = re.match(r"^\s*\d+\s+(Po\d+)\b", line)
         if head:
             cur = utils.normalize_port(head.group(1))
             members = re.findall(r"(Eth\d+(?:/\d+)+)", line)

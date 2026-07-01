@@ -190,6 +190,7 @@ def test_rematch_resolves_backbone_port_channel(temp_db):
 
 def test_nxos_parse_port_channels():
     from core.parsers import cisco_nxos
+    # 플래그 있는 포맷 Po10(SU)
     out = ("Group Port-       Type     Protocol  Member Ports\n"
            "--------------------------------------------------\n"
            "10    Po10(SU)    Eth      LACP      Eth1/1(P)    Eth1/2(P)\n"
@@ -198,6 +199,17 @@ def test_nxos_parse_port_channels():
     by = {p["port_channel"]: p["members"] for p in pcs}
     assert by["Po10"] == ["Eth1/1", "Eth1/2"]
     assert by["Po1"] == ["Eth1/5"]
+
+
+def test_nxos_parse_port_channels_no_flags():
+    """실장비 포맷: 플래그 없는 'Po10' (괄호 없음)."""
+    from core.parsers import cisco_nxos
+    out = ("Group Port-Channel Type Protocol Member Ports\n"
+           "----- ----------- ---- -------- ------------------------------\n"
+           "10    Po10        Eth  LACP     Eth1/1(P)   Eth1/2(P)\n")
+    pcs = cisco_nxos._parse_port_channels(out, 1)
+    by = {p["port_channel"]: p["members"] for p in pcs}
+    assert by["Po10"] == ["Eth1/1", "Eth1/2"]
 
 
 def test_choose_attachment_ambiguous_trunks_not_direct():

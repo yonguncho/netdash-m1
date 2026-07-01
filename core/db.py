@@ -438,6 +438,28 @@ def import_switches_bulk(db_path, rows):
     return results
 
 
+def import_firewalls_bulk(db_path, rows):
+    """엑셀 장비 목록 중 방화벽 행을 일괄 등록(host 기준 upsert).
+
+    vendor는 엑셀에서 알 수 없어 'unknown'으로 저장(사용자가 이후 수정·수집).
+    rows: [{ip/host, name, hostname, location}]
+    """
+    results = []
+    for row in rows:
+        host = (row.get("ip") or row.get("host") or "").strip()
+        if not host:
+            continue
+        name = row.get("name") or row.get("hostname") or host
+        loc = row.get("location", "") or ""
+        try:
+            fid = save_firewall(db_path, name, "unknown", host, None, "token", location=loc)
+            results.append(fid)
+        except Exception as e:
+            utils.log_event("warning", "import_firewall_skipped", error=str(e))
+    utils.log_event("info", "import_firewalls_bulk", count=len(results))
+    return results
+
+
 def search_host_by_ip(db_path, ip):
     """IP로 호스트 위치(어느 스위치·포트)를 조회."""
     with get_db(db_path) as conn:

@@ -199,8 +199,9 @@ def _block_to_records(block: List[List[Any]]) -> Tuple[Optional[str], List[Dict[
       2. 데이터 행만 필터링
       3. IP 정규식 매칭된 행만 추출
       4. IP 매칭 = 0 → 폐기 (None)
-      5. 'vendor' 있음 → 'switch'
-      6. 'vendor' 없음 → 'host'
+      5. 장비 식별 컬럼(vendor/name/hostname/subnet/location) 있음 → 'switch'
+      6. 장부 전용 컬럼(mac/연결스위치/연결포트)만 있음 → 'host'
+      7. IP만 있음 → 'switch' (현황판에 등록. 장부 대조 기능 제거됨)
     """
     if not block or len(block) < 1:
         return None, []
@@ -229,7 +230,22 @@ def _block_to_records(block: List[List[Any]]) -> Tuple[Optional[str], List[Dict[
     if not records:
         return None, []
 
-    block_type = 'switch' if 'vendor' in header_map else 'host'
+    # 분류(우선순위):
+    #  1) 장부 전용 컬럼(연결스위치/연결포트) → host
+    #  2) 장비 식별 컬럼(vendor/name/subnet/location) → switch
+    #  3) mac만 있는 엔드포인트 목록 → host
+    #  4) 그 외(ip/hostname만) → switch  ← 현황판에 등록(장부 대조 기능 제거됨)
+    # (예전엔 'vendor'가 있어야만 스위치라, vendor 열 없는 장비 목록이 전부 host로 분류돼
+    #  현황판에 안 나오던 문제 수정. hostname은 장부(사용서버명)와 공용이라 스위치 신호에서 제외.)
+    hdr = set(header_map)
+    if hdr & {'ledger_switch', 'ledger_port'}:
+        block_type = 'host'
+    elif hdr & {'vendor', 'name', 'subnet', 'location'}:
+        block_type = 'switch'
+    elif 'mac' in hdr:
+        block_type = 'host'
+    else:
+        block_type = 'switch'
 
     return block_type, records
 

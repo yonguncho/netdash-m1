@@ -1394,12 +1394,14 @@ document.getElementById("excel-file-input").addEventListener("change", function(
         if (data.diagnostics) {
           showDiagnostics(data.diagnostics);
         }
-        var totalImported = (data.imported_switch_ids ? data.imported_switch_ids.length : 0) +
-                           (data.imported_host_ids ? data.imported_host_ids.length : 0);
-        alert(totalImported + "개 항목 임포트 완료 (스위치: " +
-              (data.imported_switch_ids ? data.imported_switch_ids.length : 0) + ", " +
-              "호스트: " + (data.imported_host_ids ? data.imported_host_ids.length : 0) + ")");
+        var nSw = data.imported_switch_ids ? data.imported_switch_ids.length : 0;
+        var nFw = data.imported_firewall_ids ? data.imported_firewall_ids.length : 0;
+        var nHost = data.imported_host_ids ? data.imported_host_ids.length : 0;
+        alert((nSw + nFw + nHost) + "개 항목 임포트 완료 (스위치: " + nSw +
+              ", 방화벽: " + nFw + ", 호스트: " + nHost + ")" +
+              (nFw ? "\n방화벽은 벤더 미지정으로 등록됐습니다 — 방화벽 현황에서 벤더/계정을 설정하세요." : ""));
         pollState();
+        loadFirewalls();
       }
       else alert(data.error || "가져오기 실패");
     })
