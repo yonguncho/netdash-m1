@@ -49,6 +49,10 @@ _NETMIKO_VENDOR = {
     "extremenetworks": "extreme_exos",
     "juniper": "juniper_junos",
     "paloalto": "paloalto_panos",
+    "alteon": "alteon",
+    "radware": "alteon",
+    "radware_alteon": "alteon",
+    "nortel_alteon": "alteon",
 }
 
 
@@ -247,10 +251,15 @@ def _worker_loop():
                 password = cred.get("password")
                 # M12: 설정된 출발지 IP로 바인딩(장비 ACL 통과). 미설정이면 OS 기본 라우팅.
                 source_ip = db.get_setting(db_path, "source_ip") or None
-                # 벤더 미지정이면 접속 후 show version으로 실제 벤더 학습
-                outputs, eff_vendor = _ssh_collect(
-                    switch, username, password, vendor,
-                    source_ip=source_ip, detect_vendor=is_unknown)
+                if vendor == "alteon":
+                    # Alteon은 메뉴형 CLI(netmiko 미지원) → 전용 paramiko 수집
+                    outputs = _alteon_collect(switch, username, password, source_ip=source_ip)
+                    eff_vendor = "alteon"
+                else:
+                    # 벤더 미지정이면 접속 후 show version으로 실제 벤더 학습
+                    outputs, eff_vendor = _ssh_collect(
+                        switch, username, password, vendor,
+                        source_ip=source_ip, detect_vendor=is_unknown)
                 # 학습 성공 시 DB 벤더 갱신 + 이번 파싱도 학습된 벤더로
                 if is_unknown and eff_vendor and eff_vendor != raw_vendor:
                     try:
@@ -471,6 +480,78 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 conn_device.clear()
             username = None
             password = None
+
+
+def _alteon_read(shell, timeout=25, idle=0.6):
+    """Alteon 대화형 셸에서 프롬프트/유휴까지 읽기. 'more' 페이징은 스페이스로 넘긴다."""
+    import time as _t
+    buf = ""
+    deadline = _t.monotonic() + timeout
+    last_data = _t.monotonic()
+    while _t.monotonic() < deadline:
+        if shell.recv_ready():
+            buf += shell.recv(65535).decode("utf-8", "replace")
+            last_data = _t.monotonic()
+            tail = buf[-120:].lower()
+            if "more" in tail or "continue" in tail or "q to quit" in tail:
+                try:
+                    shell.send(" ")
+                except Exception:
+                    pass
+        else:
+            if _t.monotonic() - last_data > idle:
+                s = buf.rstrip()
+                if (not s) or s.endswith("#") or s.endswith(">") or s.endswith("$"):
+                    break
+                if _t.monotonic() - last_data > idle * 4:
+                    break
+            _t.sleep(0.15)
+    return buf
+
+
+def _alteon_collect(switch, username, password, source_ip=None):
+    """Alteon 메뉴형 CLI 수집(netmiko 미지원 → paramiko 대화형 셸).
+
+    각 명령은 루트('/')에서 전체 경로(/info/...)로 실행. 페이징은 스페이스로 넘김.
+    한 명령이 실패해도 나머지는 계속(원본 저장으로 진단 가능). 반환: outputs dict.
+    """
+    import paramiko
+    import time as _t
+    from . import ssh_compat
+    ssh_compat.enable_legacy_algorithms()  # 구형 장비 SSH 호환
+    from .parsers import alteon as _alt
+
+    host = switch["ip"]
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sock = None
+    if source_ip:
+        from . import netbind
+        sock = netbind.bind_socket(host, 22, source_ip, 30)
+    outputs = {}
+    try:
+        client.connect(host, port=22, username=username, password=password,
+                       timeout=30, allow_agent=False, look_for_keys=False, sock=sock)
+        shell = client.invoke_shell(width=250, height=1000)
+        _t.sleep(1.0)
+        _alteon_read(shell, timeout=5)        # 로그인 배너/프롬프트 비우기
+        for key, cmd in _alt.COMMANDS.items():
+            try:
+                shell.send("/\n")             # 루트 메뉴로 이동
+                _alteon_read(shell, timeout=4)
+                shell.send(cmd + "\n")
+                outputs[key] = _alteon_read(shell, timeout=30)
+            except Exception as _ce:
+                outputs[key] = ""
+                utils.log_event("warning", "alteon_command_failed",
+                                switch=switch["name"], command=cmd,
+                                error=_sanitize_error_msg(str(_ce)))
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+    return outputs
 
 
 def _save_raw_outputs(db_path, switch_id, switch_name, outputs):

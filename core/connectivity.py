@@ -58,6 +58,22 @@ def test_switch(ip, vendor, username, password, port=22, timeout=8, source_ip=No
     if not (username and password):
         # 포트는 열렸으나 인증 정보 없음 → reachable까지만 확인
         return {"ok": True, "stage": "reachable", "detail": f"TCP {port} 연결 가능 (인증 미검증)"}
+    # Alteon(메뉴형 CLI)은 netmiko 미지원 → paramiko로 인증만 확인
+    if (vendor or "").lower() in ("alteon", "radware", "radware_alteon", "nortel_alteon"):
+        try:
+            import paramiko
+            from . import netbind, ssh_compat
+            ssh_compat.enable_legacy_algorithms()
+            sock = netbind.bind_socket(ip, port, source_ip, timeout) if source_ip else None
+            cli = paramiko.SSHClient()
+            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            cli.connect(ip, port=port, username=username, password=password, timeout=timeout,
+                        allow_agent=False, look_for_keys=False, sock=sock)
+            cli.close()
+            return {"ok": True, "stage": "auth", "detail": "연결 및 인증 성공 (Alteon)"}
+        except Exception as e:
+            return {"ok": False, "stage": "auth",
+                    "detail": _friendly_ssh_error(collector._sanitize_error_msg(str(e)))}
     device_type = _NETMIKO_TYPE.get((vendor or "").lower(), vendor or "cisco_ios")
     try:
         from netmiko import ConnectHandler

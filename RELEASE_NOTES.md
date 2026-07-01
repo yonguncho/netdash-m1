@@ -1,5 +1,17 @@
 # NetDash 릴리스 노트
 
+## v3.25.0 (2026-07-01) — Radware/Nortel Alteon(L4) 수집 지원
+
+- **Alteon Application Switch(메뉴형 CLI) 수집 지원 추가.** netmiko가 지원하지 않는
+  Alteon을 위해 **전용 paramiko 대화형 수집 경로**를 새로 만들었습니다.
+  - 명령: `/info/l2/fdb/dump`(MAC), `/info/l3/arp/dump`(ARP), `/info/link`(포트), `/info/sys/general`(버전)
+  - 페이징('more') 자동 처리 + 명령별 타임아웃(멈춤 방지).
+  - 표준 Alteon OS 출력 형식 파서(MAC/ARP/포트) — 유연 매칭.
+  - 연결 테스트도 Alteon은 paramiko 인증으로 확인.
+  - 벤더 드롭다운에 "Radware Alteon (L4)" 추가. 등록 시 벤더를 **alteon(또는 radware)** 로 지정하세요.
+  - ※ 실장비 출력 형식이 버전마다 다를 수 있어, 값이 비어 보이면 원본 출력을 공유해 주시면
+    파서를 맞추겠습니다(수집은 원본을 저장하므로 진단 가능).
+
 ## v3.24.1 (2026-07-01) — ExtremeXOS 수집 실패 수정(실제 명령/형식)
 
 - **ExtremeXOS 스위치 수집이 실패하던 문제 수정.** 원인은 `show ports`가 자동 갱신 화면이라
