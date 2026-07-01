@@ -224,8 +224,18 @@ def _worker_loop():
         username = None
         password = None
         cred = None
+        prev_status = None
+        prev_alert = None
+        sw_name = str(switch_id)
         try:
             utils.log_event("info", "collect_start", switch_id=switch_id)
+            # 이전 상태/경보를 먼저 확보(전이 감지용) 후 collecting 표시
+            _sw0 = db.get_switch(db_path, switch_id)
+            if not _sw0:
+                raise ValueError(f"Switch {switch_id} not found")
+            prev_status = _sw0.get("status")
+            prev_alert = _sw0.get("alert")
+            sw_name = _sw0.get("name") or sw_name
             db.set_switch_status(db_path, switch_id, "collecting")
 
             switch = db.get_switch(db_path, switch_id)
@@ -308,11 +318,21 @@ def _worker_loop():
                         utils.log_event("warning", "log_anomaly_detected",
                                         switch_id=switch_id, alert=la["alert"],
                                         events=len(la["events"]))
+                        # 경보 전이 시에만 알람 이벤트(매 수집 스팸 방지)
+                        if la["alert"] != prev_alert:
+                            _kind = "looping" if la["alert"] == "critical" else "flapping"
+                            db.save_device_event(db_path, _kind, la["alert"], switch_id=switch_id,
+                                                 label=sw_name,
+                                                 message="%s 감지: %s" % (_kind, sw_name))
                 except Exception as e:
                     utils.log_event("warning", "log_analyze_skipped",
                                     error=_sanitize_error_msg(str(e)))
 
             db.set_switch_status(db_path, switch_id, "done")
+            # 이전에 실패였다가 이번에 성공 → 복구 알람
+            if prev_status == "failed":
+                db.save_device_event(db_path, "switch_recovered", "info", switch_id=switch_id,
+                                     label=sw_name, message="스위치 복구: " + sw_name)
             utils.log_event("info", "collect_done", switch_id=switch_id, snapshot_id=snapshot_id)
 
         except Exception as e:
@@ -320,6 +340,14 @@ def _worker_loop():
             sanitized_error = _sanitize_error_msg(str(e))
             utils.log_event("error", "collect_error", switch_id=switch_id, error_type=type(e).__name__, error=sanitized_error)
             db.set_switch_status(db_path, switch_id, "failed", error=sanitized_error)
+            # 직전에 실패 상태가 아니었으면(정상→실패, 신규→실패) 연결 실패 알람
+            if prev_status != "failed":
+                try:
+                    db.save_device_event(db_path, "switch_unreachable", "warning",
+                                         switch_id=switch_id, label=sw_name,
+                                         message="스위치 연결 실패: " + sw_name)
+                except Exception:
+                    pass
         finally:
             # CWE-522 fix: Explicitly clear credentials from memory to prevent plaintext exposure
             # M5 (W2): cred is a defensive copy from load_credential; emptying the

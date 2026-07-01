@@ -635,6 +635,30 @@ def create_app(demo_mode=None):
             log_event("error", "facility_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/alerts", methods=["GET"])
+    def list_alerts():
+        """장비 변경/알람 이벤트 목록 + 미확인 개수."""
+        try:
+            only = request.args.get("unack") == "1"
+            return jsonify({"events": db.list_device_events(db_path, limit=200, only_unack=only),
+                            "unacked": db.count_unacked_events(db_path)})
+        except Exception as e:
+            log_event("error", "alerts_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/alerts/ack", methods=["POST"])
+    @rate_limit("alerts_ack", max_requests=60, window_seconds=60)
+    def ack_alerts():
+        """알람 확인 처리. body {ids:[...]} 없으면 전체 확인."""
+        try:
+            data = request.get_json(silent=True) or {}
+            ids = data.get("ids")
+            n = db.ack_device_events(db_path, ids if isinstance(ids, list) and ids else None)
+            return jsonify({"ok": True, "acked": n})
+        except Exception as e:
+            log_event("error", "alerts_ack_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/facility/export", methods=["GET"])
     def facility_export():
         """설비 현황 전체를 엑셀(xlsx) 또는 TXT로 내려받기. ?format=xlsx|txt"""

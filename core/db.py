@@ -205,6 +205,24 @@ CREATE TABLE IF NOT EXISTS switch_logs (
 )
 """
 
+# 장비 변경/알람 이벤트(새 설비·오프라인·스위치 연결실패·flapping/looping)
+CREATE_DEVICE_EVENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS device_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT DEFAULT (datetime('now')),
+    kind TEXT,
+    severity TEXT DEFAULT 'info',
+    subnet TEXT,
+    ip TEXT,
+    mac TEXT,
+    switch_id INTEGER,
+    label TEXT,
+    message TEXT,
+    ack INTEGER DEFAULT 0
+)
+"""
+
+
 # NX-OS 포트채널 멤버(설비/TPS 직결이 Po로 보일 때 실제 물리포트 해석용)
 CREATE_PORT_CHANNELS_TABLE = """
 CREATE TABLE IF NOT EXISTS port_channels (
@@ -322,6 +340,7 @@ def init_schema(db_path):
                 CREATE_SWITCH_LOGS_TABLE,
                 CREATE_FACILITY_HOSTS_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
+                CREATE_DEVICE_EVENTS_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -630,6 +649,65 @@ def save_port_channels(db_path, snapshot_id, switch_id, port_channels):
                          ",".join(pc.get("members") or [])))
                 except Exception as e:
                     log_event("warning", "save_port_channel_skipped", error=str(e))
+
+
+def save_device_event(db_path, kind, severity="info", subnet=None, ip=None,
+                      mac=None, switch_id=None, label=None, message=None):
+    """장비 변경/알람 이벤트 1건 기록."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute(
+                    """INSERT INTO device_events
+                       (kind, severity, subnet, ip, mac, switch_id, label, message)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (kind, severity, subnet, ip, mac, switch_id, label, message))
+            except Exception as e:
+                log_event("warning", "save_device_event_skipped", error=str(e))
+
+
+def list_device_events(db_path, limit=200, only_unack=False):
+    """최근 이벤트 목록(최신순). only_unack=True면 미확인만."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            sql = "SELECT * FROM device_events"
+            if only_unack:
+                sql += " WHERE ack=0"
+            sql += " ORDER BY id DESC LIMIT ?"
+            cur.execute(sql, (int(limit),))
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def count_unacked_events(db_path):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT COUNT(*) FROM device_events WHERE ack=0")
+            return cur.fetchone()[0]
+        except Exception:
+            return 0
+
+
+def ack_device_events(db_path, ids=None):
+    """이벤트 확인 처리. ids=None이면 전체 확인. 반환: 처리 개수."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            try:
+                if ids:
+                    ints = [int(i) for i in ids if str(i).strip().lstrip("-").isdigit()]
+                    if not ints:
+                        return 0
+                    qs = ",".join("?" for _ in ints)
+                    cur.execute("UPDATE device_events SET ack=1 WHERE id IN (%s)" % qs, ints)
+                else:
+                    cur.execute("UPDATE device_events SET ack=1 WHERE ack=0")
+                return cur.rowcount
+            except Exception:
+                return 0
 
 
 def get_port_channel_members(db_path):

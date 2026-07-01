@@ -368,6 +368,28 @@ body {
 .vlan-body { padding: 4px 14px 12px; }
 .vlan-body .data-table th { background: #fff; }
 
+/* ─── 알람 벨 ───────────────────────────────────── */
+.alert-bell {
+  position: relative; background: none; border: none; cursor: pointer;
+  font-size: 18px; line-height: 1; padding: 4px 6px;
+}
+.alert-badge {
+  position: absolute; top: -2px; right: -2px; min-width: 16px; height: 16px;
+  padding: 0 4px; border-radius: 8px; background: #ef4444; color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+}
+.alert-badge.hidden { display: none; }
+.alert-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 4px;
+  border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.alert-row:last-child { border-bottom: none; }
+.alert-row__time { color: #94a3b8; font-size: 11px; white-space: nowrap; }
+.alert-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; flex: 0 0 auto; }
+.alert-dot--critical { background: #ef4444; }
+.alert-dot--warning { background: #f59e0b; }
+.alert-dot--info { background: #22c55e; }
+
 /* ─── 기타 ───────────────────────────────────── */
 .coming-soon {
   display: flex; align-items: center; justify-content: center;

@@ -835,8 +835,9 @@ function _renderFacilityRows() {
       portCell = "<span style='color:#94a3b8'>—</span>";
     }
     var on = h.online ? "<span class='status-badge status-badge--ok'>온라인</span>"
-                      : "<span class='status-badge status-badge--new'>오프라인</span>";
-    return "<tr><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
+                      : "<span class='status-badge status-badge--critical'>연결 실패</span>";
+    var trStyle = h.online ? "" : " style='background:#fef2f2'";
+    return "<tr" + trStyle + "><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
       "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
       portCell + "</td><td>" + on + "</td></tr>";
   }).join("");
@@ -1440,6 +1441,64 @@ function doSearch() {
     .catch(function(e) { console.error(e); alert("검색 오류"); });
 }
 
+// ─── 알람(변경 이벤트) ───────────────────────────────────────────
+var _ALERT_KIND = {
+  new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
+  switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
+  flapping: "포트 flapping", looping: "포트 looping",
+};
+
+function loadAlerts(renderList) {
+  fetch("/api/alerts").then(function (r) { return r.json(); }).then(function (data) {
+    var badge = document.getElementById("alert-badge");
+    var n = data.unacked || 0;
+    if (badge) {
+      badge.textContent = n > 99 ? "99+" : String(n);
+      badge.classList.toggle("hidden", n === 0);
+    }
+    if (renderList) _renderAlerts(data.events || []);
+  }).catch(function (e) { console.error("alerts:", e); });
+}
+
+function _renderAlerts(events) {
+  var body = document.getElementById("alerts-body");
+  if (!body) return;
+  if (!events.length) {
+    body.innerHTML = "<p style='color:#64748b'>알람이 없습니다.</p>";
+    return;
+  }
+  body.innerHTML = events.map(function (ev) {
+    var sev = ev.severity || "info";
+    var kind = _ALERT_KIND[ev.kind] || ev.kind || "-";
+    var where = [ev.label, ev.ip, ev.subnet].filter(Boolean).map(escHtml).join(" · ");
+    var unread = ev.ack ? "" : " style='background:#fffbeb'";
+    return "<div class='alert-row'" + unread + ">" +
+      "<span class='alert-dot alert-dot--" + sev + "'></span>" +
+      "<div style='flex:1'>" +
+        "<div><strong>" + escHtml(kind) + "</strong>" + (where ? " — " + where : "") + "</div>" +
+        (ev.message ? "<div style='color:#475569;font-size:12px'>" + escHtml(ev.message) + "</div>" : "") +
+      "</div>" +
+      "<span class='alert-row__time'>" + escHtml((ev.ts || "").replace("T", " ")) + "</span>" +
+      "</div>";
+  }).join("");
+}
+
+(function () {
+  var bell = document.getElementById("btn-alerts");
+  if (bell) bell.addEventListener("click", function () {
+    openModal("modal-alerts");
+    loadAlerts(true);
+  });
+  var ack = document.getElementById("btn-alerts-ack");
+  if (ack) ack.addEventListener("click", function () {
+    fetch("/api/alerts/ack", { method: "POST", headers: {"Content-Type": "application/json"},
+                               body: "{}" })
+      .then(function (r) { return r.json(); })
+      .then(function () { loadAlerts(true); })
+      .catch(function (e) { console.error(e); });
+  });
+})();
+
 // ─── 폴링 ────────────────────────────────────────────────────────
 function pollState() {
   fetch("/api/state")
@@ -1460,6 +1519,7 @@ function pollState() {
         }
       }
       document.getElementById("last-updated").textContent = "갱신: " + new Date().toLocaleTimeString("ko-KR");
+      loadAlerts(false);  // 알람 배지 갱신(준실시간)
     })
     .catch(function(e) { console.error("poll error:", e); });
 }

@@ -238,13 +238,53 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
                           "online": 1, "direct": 1 if direct else 0,
                           "via": "; ".join(via) if via else None}
 
-    saved_hosts = list(by_ip.values())
-    db.clear_facility_subnet(db_path, subnet)  # 재수집 시 기존 대역 결과 비우기
-    db.save_facility_hosts(db_path, saved_hosts)
-    utils.log_event("info", "facility_collected", subnet=subnet,
-                    pinged=len(ips), arp=len(arp), saved=len(saved_hosts))
-    _set(running=False, message="완료(%d개 설비)" % len(saved_hosts))
-    return {"subnet": subnet, "pinged": len(ips), "arp": len(arp), "saved": len(saved_hosts)}
+    saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip)
+    utils.log_event("info", "facility_collected", subnet=subnet, pinged=len(ips),
+                    arp=len(arp), saved=saved, new=new_cnt, offline=off_cnt)
+    _set(running=False, message="완료(설비 %d · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt))
+    return {"subnet": subnet, "pinged": len(ips), "arp": len(arp),
+            "saved": saved, "new": new_cnt, "offline": off_cnt}
+
+
+_KEEP_COLS = ("subnet", "ip", "mac", "switch_id", "switch_name", "port", "direct", "via")
+
+
+def _apply_scan(db_path, subnet, by_ip):
+    """대역 스캔 결과(by_ip: {ip: host})를 이전 상태와 비교해 저장 + 변경 이벤트 기록.
+
+    - 새 IP → new_device 이벤트
+    - 이전 online인데 이번에 없음 → device_offline 이벤트 + online=0으로 '유지'(삭제 안 함)
+    - 이전 offline인데 이번에 응답 → device_online(복구) 이벤트
+    반환: (저장 개수, 새 설비 수, 오프라인 전환 수)
+    """
+    existing = {h["ip"]: h for h in db.get_facility_hosts(db_path) if h.get("subnet") == subnet}
+    merged = list(by_ip.values())   # 이번에 응답한 설비(online=1)
+    new_cnt = off_cnt = 0
+    for ip, host in by_ip.items():
+        ex = existing.get(ip)
+        if ex is None:
+            db.save_device_event(db_path, "new_device", "warning", subnet=subnet, ip=ip,
+                                 mac=host.get("mac"), switch_id=host.get("switch_id"),
+                                 label=host.get("switch_name"), message="새 설비 감지: " + ip)
+            new_cnt += 1
+        elif not ex.get("online"):
+            db.save_device_event(db_path, "device_online", "info", subnet=subnet, ip=ip,
+                                 mac=host.get("mac"), message="설비 복구(온라인): " + ip)
+    for ip, ex in existing.items():
+        if ip in by_ip:
+            continue
+        off = {k: ex.get(k) for k in _KEEP_COLS}
+        off["online"] = 0
+        merged.append(off)                       # 삭제하지 않고 오프라인으로 유지
+        if ex.get("online"):                     # 온라인→사라짐 = 연결 끊김(신규 이벤트)
+            db.save_device_event(db_path, "device_offline", "warning", subnet=subnet, ip=ip,
+                                 mac=ex.get("mac"), switch_id=ex.get("switch_id"),
+                                 label=ex.get("switch_name"), message="설비 연결 끊김: " + ip)
+            off_cnt += 1
+
+    db.clear_facility_subnet(db_path, subnet)
+    db.save_facility_hosts(db_path, merged)
+    return len(merged), new_cnt, off_cnt
 
 
 _EXPORT_COLS = ["대역", "IP", "MAC", "연결 스위치", "포트", "직접연결", "그 외 관측", "상태"]
