@@ -10,6 +10,7 @@ from . import db
 from . import fixtures
 from . import utils
 from . import credentials
+from . import ssh_compat  # 구형 장비 SSH 레거시 알고리즘 호환(import 시 적용)
 from config import get_config
 
 logger = logging.getLogger(__name__)

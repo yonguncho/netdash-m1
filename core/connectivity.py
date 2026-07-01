@@ -24,6 +24,20 @@ _NETMIKO_TYPE = {
 }
 
 
+def _friendly_ssh_error(msg):
+    """알기 어려운 SSH 오류를 실행 가능한 한국어 안내로 변환(원문 병기)."""
+    low = (msg or "").lower()
+    if "incompatible ssh peer" in low or "no acceptable" in low or \
+       "kex" in low or "key exchange" in low or "negotiat" in low:
+        return "SSH 알고리즘 협상 실패(구형 장비). 레거시 알고리즘 호환이 적용되어 있으니 " \
+               "다시 시도해 주세요. 계속 실패하면 장비에서 최신 KEX/암호를 활성화해야 합니다. [%s]" % msg
+    if "authentication" in low or "auth failed" in low or "bad auth" in low:
+        return "인증 실패 — 아이디/비밀번호를 확인하세요. [%s]" % msg
+    if "timed out" in low or "timeout" in low:
+        return "응답 시간 초과 — 방화벽/출발지 IP/네트워크 경로를 확인하세요. [%s]" % msg
+    return msg
+
+
 def test_tcp(host, port, timeout=3, source_ip=None):
     """TCP 포트 reachability (source_ip 지정 시 그 출발지로 바인딩)."""
     try:
@@ -56,7 +70,8 @@ def test_switch(ip, vendor, username, password, port=22, timeout=8, source_ip=No
             pass
         return {"ok": True, "stage": "auth", "detail": "연결 및 인증 성공"}
     except Exception as e:
-        return {"ok": False, "stage": "auth", "detail": collector._sanitize_error_msg(str(e))}
+        return {"ok": False, "stage": "auth",
+                "detail": _friendly_ssh_error(collector._sanitize_error_msg(str(e)))}
 
 
 def test_firewall(vendor, host, port=None, token="", username="", password="",

@@ -1,6 +1,10 @@
 # CRITICAL FIX (CWE-1035): Pin exact versions to prevent breaking changes and security patches
 flask==2.3.5
 netmiko==4.3.0
+# paramiko 4.0+/5.0은 구형 장비 SSH 알고리즘(SHA1 KEX, ssh-rsa 호스트키)을 구현에서 제거해
+# 'incompatible ssh peer' 오류를 유발한다. 레거시 구현이 남은 마지막 3.x로 고정.
+# (core/ssh_compat.py가 이 알고리즘을 폴백 선호목록에 재추가)
+paramiko==3.5.1
 pyyaml==6.0.1
 openpyxl==3.1.2
 requests==2.31.0
