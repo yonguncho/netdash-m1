@@ -58,6 +58,44 @@ def _norm_vendor(vendor):
     return _NETMIKO_VENDOR.get(v, v)
 
 
+def _is_unknown_vendor(vendor):
+    return (vendor or "").strip().lower() in ("", "unknown")
+
+
+def _detect_vendor_from_version(text):
+    """show version 출력에서 실제 벤더(device_type) 학습. 못 찾으면 None.
+
+    순서 중요: NX-OS는 'Cisco Nexus...NX-OS'라 Cisco보다 먼저 판별한다.
+    """
+    t = (text or "").lower()
+    if not t:
+        return None
+    if "nx-os" in t or "nexus" in t:
+        return "cisco_nxos"
+    if "arista" in t:
+        return "arista_eos"
+    if "extremexos" in t or "exos" in t or "extreme networks" in t:
+        return "extreme_exos"
+    if "junos" in t or "juniper" in t:
+        return "juniper_junos"
+    if "ios-xe" in t or "ios xe" in t or "cisco ios" in t or "ios software" in t or "cisco" in t:
+        return "cisco_ios"
+    return None
+
+
+def _commands_for(vendor):
+    """벤더의 수집 명령 집합. config에 없으면 파서 모듈 COMMANDS로 폴백."""
+    cmds = get_config().get_commands(vendor)
+    if cmds:
+        return cmds
+    try:
+        from . import parsers
+        parser = parsers.get_parser(vendor)
+        return dict(getattr(parser, "COMMANDS", {}) or {})
+    except Exception:
+        return {}
+
+
 # 벤더별 페이징 비활성화 명령(긴 출력 잘림 방지). EXOS는 'terminal length 0'이 아니라
 # 'disable clpaging'. 미정의 벤더는 페이징 명령을 생략한다.
 _PAGING_CMD = {
@@ -186,7 +224,9 @@ def _worker_loop():
                 raise ValueError(f"Switch {switch_id} not found")
 
             # 벤더 정규화(cisco→cisco_ios 등): device_type/commands/parser 일관 사용
-            vendor = _norm_vendor(switch["vendor"])
+            raw_vendor = switch["vendor"]
+            is_unknown = _is_unknown_vendor(raw_vendor)
+            vendor = _norm_vendor(raw_vendor)
             config = get_config()
 
             if config.app.get("demo_mode"):
@@ -202,7 +242,20 @@ def _worker_loop():
                 password = cred.get("password")
                 # M12: 설정된 출발지 IP로 바인딩(장비 ACL 통과). 미설정이면 OS 기본 라우팅.
                 source_ip = db.get_setting(db_path, "source_ip") or None
-                outputs = _ssh_collect(switch, username, password, vendor, source_ip=source_ip)
+                # 벤더 미지정이면 접속 후 show version으로 실제 벤더 학습
+                outputs, eff_vendor = _ssh_collect(
+                    switch, username, password, vendor,
+                    source_ip=source_ip, detect_vendor=is_unknown)
+                # 학습 성공 시 DB 벤더 갱신 + 이번 파싱도 학습된 벤더로
+                if is_unknown and eff_vendor and eff_vendor != raw_vendor:
+                    try:
+                        db.update_switch(db_path, switch_id, vendor=eff_vendor)
+                        utils.log_event("info", "vendor_learned",
+                                        switch_id=switch_id, vendor=eff_vendor)
+                    except Exception as _e:
+                        utils.log_event("warning", "vendor_update_failed",
+                                        switch_id=switch_id, error=_sanitize_error_msg(str(_e)))
+                    vendor = eff_vendor
 
             raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
             utils.log_event("info", "raw_outputs_saved", path=str(raw_outputs_path))
@@ -275,19 +328,21 @@ def _worker_loop():
                 pass
 
 
-def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=None):
+def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=None,
+                 detect_vendor=False):
     """Collect outputs from network device via SSH with exponential backoff retry logic.
 
     Args:
         switch: Switch dict with 'name' and 'ip'
         username: SSH username
         password: SSH password
-        vendor: Device vendor/type
+        vendor: Device vendor/type (연결/명령 기본값)
         max_retries: Max retry attempts (default: 3) - handles transient network failures
         source_ip: M12 — bind outbound SSH to this local IP (pass device ACL). None = OS default.
+        detect_vendor: True면 접속 후 show version으로 실제 벤더를 학습해 명령/파서를 그에 맞춘다.
 
     Returns:
-        dict: Command outputs keyed by command name
+        (outputs: dict, effective_vendor: str)  # 학습된 실제 벤더(미학습 시 입력 vendor)
 
     Raises:
         ImportError: If netmiko not installed
@@ -300,6 +355,7 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
 
     config = get_config()
     commands = config.get_commands(vendor)
+    eff_vendor = vendor
     ssh_timeout = config.collector.get("ssh_timeout", 30)
     read_timeout = config.collector.get("read_timeout", 60)
 
@@ -338,24 +394,45 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                     utils.log_event("warning", "enable_failed",
                                     switch=switch["name"], error=_sanitize_error_msg(str(_e)))
                 # 벤더별 페이징 비활성화(미정의 벤더는 생략). 실패해도 수집은 계속.
-                paging = _PAGING_CMD.get(vendor)
+                paging = _PAGING_CMD.get(eff_vendor)
                 if paging:
                     try:
                         conn.send_command(paging, read_timeout=read_timeout)
                     except Exception:
                         pass
+                # 벤더 미지정이면 show version으로 실제 벤더 학습 → 명령/파서 그에 맞춤
+                if detect_vendor:
+                    try:
+                        ver = conn.send_command("show version", read_timeout=read_timeout)
+                        outputs["version"] = ver
+                        detected = _detect_vendor_from_version(ver)
+                        if detected and detected != eff_vendor:
+                            eff_vendor = detected
+                            commands = _commands_for(eff_vendor) or commands
+                            utils.log_event("info", "vendor_detected",
+                                            switch=switch["name"], vendor=eff_vendor)
+                            # 학습된 벤더의 페이징도 한 번 더 적용(EXOS 등)
+                            p2 = _PAGING_CMD.get(eff_vendor)
+                            if p2 and p2 != paging:
+                                try:
+                                    conn.send_command(p2, read_timeout=read_timeout)
+                                except Exception:
+                                    pass
+                    except Exception as _e:
+                        utils.log_event("warning", "vendor_detect_failed",
+                                        switch=switch["name"], error=_sanitize_error_msg(str(_e)))
                 for key, command in commands.items():
                     output = conn.send_command(command, read_timeout=read_timeout)
                     outputs[key] = output
                     utils.log_event("debug", "command_executed", command=command)
                 # 포트채널 멤버 해석 명령(config에 없어도 벤더별로 항상 시도)
-                pc_cmd = _PORT_CHANNEL_CMD.get(vendor)
+                pc_cmd = _PORT_CHANNEL_CMD.get(eff_vendor)
                 if pc_cmd and "port_channel" not in outputs:
                     try:
                         outputs["port_channel"] = conn.send_command(pc_cmd, read_timeout=read_timeout)
                     except Exception:
                         pass
-            return outputs
+            return outputs, eff_vendor
         except Exception as e:
             # Sanitize SSH error messages to prevent credential/host info exposure (security fix)
             sanitized_error = _sanitize_error_msg(str(e))
