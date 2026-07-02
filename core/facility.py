@@ -267,9 +267,23 @@ def _apply_scan(db_path, subnet, by_ip):
                                  mac=host.get("mac"), switch_id=host.get("switch_id"),
                                  label=host.get("switch_name"), message="새 설비 감지: " + ip)
             new_cnt += 1
-        elif not ex.get("online"):
-            db.save_device_event(db_path, "device_online", "info", subnet=subnet, ip=ip,
-                                 mac=host.get("mac"), message="설비 복구(온라인): " + ip)
+        else:
+            if not ex.get("online"):
+                db.save_device_event(db_path, "device_online", "info", subnet=subnet, ip=ip,
+                                     mac=host.get("mac"), message="설비 복구(온라인): " + ip)
+            # 설비 이동 감지: 같은 MAC이 다른 스위치/포트(직접 관측)로 옮겨짐 → 무단 이설 의심
+            _mac_same = (ex.get("mac") or "").lower() == (host.get("mac") or "").lower()
+            if (_mac_same and ex.get("switch_name") and host.get("switch_name")
+                    and ex.get("direct") and host.get("direct")
+                    and (ex.get("switch_name"), ex.get("port")) !=
+                        (host.get("switch_name"), host.get("port"))):
+                db.save_device_event(
+                    db_path, "device_moved", "warning", subnet=subnet, ip=ip,
+                    mac=host.get("mac"), switch_id=host.get("switch_id"),
+                    label=host.get("switch_name"),
+                    message="설비 이동 감지: %s (%s:%s → %s:%s)" % (
+                        ip, ex.get("switch_name"), ex.get("port"),
+                        host.get("switch_name"), host.get("port")))
     for ip, ex in existing.items():
         if ip in by_ip:
             continue
@@ -366,6 +380,75 @@ def rematch(db_path):
     db.save_facility_hosts(db_path, updated)  # subnet+ip UNIQUE → 제자리 갱신
     utils.log_event("info", "facility_rematched", count=len(updated))
     return len(updated)
+
+
+def remember_band(db_path, subnet, switch_id):
+    """자동 스캔용: 대역→수집 스위치 매핑 기억(마지막 수동 수집 기준)."""
+    import json
+    try:
+        m = json.loads(db.get_setting(db_path, "facility_subnet_map", "{}") or "{}")
+    except (ValueError, TypeError):
+        m = {}
+    m[str(subnet)] = int(switch_id)
+    db.set_setting(db_path, "facility_subnet_map", json.dumps(m))
+
+
+def get_band_map(db_path):
+    """{subnet: switch_id} — 자동 스캔 대상 목록."""
+    import json
+    try:
+        m = json.loads(db.get_setting(db_path, "facility_subnet_map", "{}") or "{}")
+        return {str(k): int(v) for k, v in m.items()}
+    except (ValueError, TypeError):
+        return {}
+
+
+def run_auto_scan(db_path):
+    """기억된 모든 대역을 '순차'로 자동 스캔(부하 분산 — 동시에 1개 대역만).
+
+    각 대역의 스위치에 저장된 계정(DPAPI)이 있어야 한다. 없으면 그 대역은 건너뜀.
+    스케줄러 스레드에서 동기 호출된다. 반환: {"scanned": n, "skipped": n}
+    """
+    from . import credentials
+    band_map = get_band_map(db_path)
+    scanned = skipped = 0
+    src = db.get_setting(db_path, "source_ip") or None
+    for subnet, switch_id in band_map.items():
+        if _status.get("running"):
+            # 수동 수집과 겹치면 대기(최대 30분) 후 재확인
+            for _ in range(180):
+                import time as _t
+                _t.sleep(10)
+                if not _status.get("running"):
+                    break
+        blob = db.get_switch_credential(db_path, switch_id)
+        if not blob:
+            utils.log_event("warning", "facility_auto_skip_no_cred",
+                            subnet=subnet, switch_id=switch_id)
+            skipped += 1
+            continue
+        dec = credentials.decrypt_credential(blob)   # "username|password"
+        if not dec or "|" not in dec:
+            skipped += 1
+            continue
+        username, password = dec.split("|", 1)
+        try:
+            with _lock:
+                if _status["running"]:
+                    skipped += 1
+                    continue
+                _status["running"] = True
+                _status["message"] = "자동 스캔: " + subnet
+            collect_band(db_path, switch_id, subnet, username, password, src)
+            scanned += 1
+        except Exception as e:
+            _set(running=False, message="자동 스캔 실패: " + subnet)
+            utils.log_event("error", "facility_auto_scan_error", subnet=subnet,
+                            error=_collector._sanitize_error_msg(str(e)))
+        finally:
+            dec = username = password = None
+    utils.log_event("info", "facility_auto_scan_done", scanned=scanned, skipped=skipped)
+    return {"scanned": scanned, "skipped": skipped}
 
 
 def start_collect_band(db_path, switch_id, subnet, username, password, source_ip=None):

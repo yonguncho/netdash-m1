@@ -205,6 +205,18 @@ CREATE TABLE IF NOT EXISTS switch_logs (
 )
 """
 
+# 스위치 설정(running-config) 백업 — 변경 diff 알람용
+CREATE_CONFIG_BACKUPS_TABLE = """
+CREATE TABLE IF NOT EXISTS config_backups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    switch_id INTEGER,
+    ts TEXT DEFAULT (datetime('now')),
+    hash TEXT,
+    content TEXT
+)
+"""
+
+
 # 장비 변경/알람 이벤트(새 설비·오프라인·스위치 연결실패·flapping/looping)
 CREATE_DEVICE_EVENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS device_events (
@@ -341,6 +353,7 @@ def init_schema(db_path):
                 CREATE_FACILITY_HOSTS_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
                 CREATE_DEVICE_EVENTS_TABLE,
+                CREATE_CONFIG_BACKUPS_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -666,19 +679,121 @@ def save_device_event(db_path, kind, severity="info", subnet=None, ip=None,
                 log_event("warning", "save_device_event_skipped", error=str(e))
 
 
-def list_device_events(db_path, limit=200, only_unack=False):
-    """최근 이벤트 목록(최신순). only_unack=True면 미확인만."""
+def list_device_events(db_path, limit=200, only_unack=False, kind=None, days=None):
+    """최근 이벤트 목록(최신순). only_unack=미확인만, kind=종류 필터, days=최근 N일."""
     with get_db(db_path) as conn:
         cur = conn.cursor()
         try:
-            sql = "SELECT * FROM device_events"
+            conds, params = [], []
             if only_unack:
-                sql += " WHERE ack=0"
+                conds.append("ack=0")
+            if kind:
+                conds.append("kind=?")
+                params.append(str(kind))
+            if days:
+                conds.append("ts >= datetime('now', ?)")
+                params.append("-%d days" % int(days))
+            sql = "SELECT * FROM device_events"
+            if conds:
+                sql += " WHERE " + " AND ".join(conds)
             sql += " ORDER BY id DESC LIMIT ?"
-            cur.execute(sql, (int(limit),))
+            params.append(int(limit))
+            cur.execute(sql, params)
             return [dict(r) for r in cur.fetchall()]
         except Exception:
             return []
+
+
+def purge_device_events(db_path, retention_days=90):
+    """보존 기간이 지난 알람 이벤트 자동 정리. 반환: 삭제 건수."""
+    try:
+        days = max(1, int(retention_days))
+    except (TypeError, ValueError):
+        days = 90
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                cur = conn.execute(
+                    "DELETE FROM device_events WHERE ts < datetime('now', ?)",
+                    ("-%d days" % days,))
+                return cur.rowcount
+            except Exception:
+                return 0
+
+
+# 실제 설정 변경이 아닌데 매 수집마다 바뀌는 휘발성 라인(오탐 방지용 제거 대상)
+_VOLATILE_CFG_PREFIXES = (
+    "current configuration", "! last configuration change", "! nvram config last",
+    "ntp clock-period", "! time:", "!time:", "building configuration",
+    "# time:", "/* configuration dump taken",
+)
+
+
+def _normalize_config(text):
+    lines = []
+    for line in (text or "").splitlines():
+        low = line.strip().lower()
+        if any(low.startswith(p) for p in _VOLATILE_CFG_PREFIXES):
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
+
+
+def save_config_backup(db_path, switch_id, content):
+    """running-config 백업 저장. 직전 백업과 다를 때만 저장.
+
+    휘발성 라인(수집 시각 등)은 제거 후 비교해 오탐 방지.
+    반환: (changed: bool, first: bool) — changed=True면 새 백업 저장됨.
+    """
+    import hashlib
+    text = _normalize_config(content)
+    if not text:
+        return False, False
+    h = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT hash FROM config_backups WHERE switch_id=? "
+                            "ORDER BY id DESC LIMIT 1", (switch_id,))
+                row = cur.fetchone()
+                first = row is None
+                if row and row["hash"] == h:
+                    return False, False          # 변경 없음 → 저장 생략
+                cur.execute("INSERT INTO config_backups (switch_id, hash, content) "
+                            "VALUES (?, ?, ?)", (switch_id, h, text))
+                # 스위치당 최근 20개만 보관(무한 증가 방지)
+                cur.execute(
+                    "DELETE FROM config_backups WHERE switch_id=? AND id NOT IN "
+                    "(SELECT id FROM config_backups WHERE switch_id=? ORDER BY id DESC LIMIT 20)",
+                    (switch_id, switch_id))
+                return True, first
+            except Exception as e:
+                log_event("warning", "save_config_backup_skipped", error=str(e))
+                return False, False
+
+
+def get_config_backups(db_path, switch_id, limit=20):
+    """스위치의 설정 백업 목록(내용 제외, 최신순)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, ts, hash FROM config_backups WHERE switch_id=? "
+                        "ORDER BY id DESC LIMIT ?", (switch_id, int(limit)))
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def get_config_backup_content(db_path, backup_id):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT * FROM config_backups WHERE id=?", (int(backup_id),))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        except Exception:
+            return None
 
 
 def count_unacked_events(db_path):

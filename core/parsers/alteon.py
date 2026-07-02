@@ -22,6 +22,7 @@ COMMANDS = {
     "mac": "/info/l2/fdb/dump",
     "arp": "/info/l3/arp/dump",
     "status": "/info/link",
+    "config": "/cfg/dump",
 }
 
 

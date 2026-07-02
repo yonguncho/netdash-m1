@@ -120,6 +120,14 @@ _PORT_CHANNEL_CMD = {
     "cisco_nxos": "show port-channel summary",
 }
 
+# 설정(running-config) 백업 명령 — 변경 diff 알람용. 설정으로 끌 수 있음.
+_CONFIG_CMD = {
+    "cisco_ios": "show running-config",
+    "cisco_nxos": "show running-config",
+    "arista_eos": "show running-config",
+    "extreme_exos": "show configuration",
+}
+
 
 def init_collector():
     global _worker_queue, _worker_threads
@@ -328,6 +336,19 @@ def _worker_loop():
                     utils.log_event("warning", "log_analyze_skipped",
                                     error=_sanitize_error_msg(str(e)))
 
+            # 설정(running-config) 백업 + 변경 diff 알람
+            cfg_out = outputs.get("config", "")
+            if cfg_out and db.get_setting(db_path, "config_backup_enabled", "1") != "0":
+                try:
+                    changed, first = db.save_config_backup(db_path, switch_id, cfg_out)
+                    if changed and not first:
+                        db.save_device_event(db_path, "config_changed", "warning",
+                                             switch_id=switch_id, label=sw_name,
+                                             message="설정 변경 감지: " + sw_name)
+                except Exception as _e:
+                    utils.log_event("warning", "config_backup_skipped",
+                                    error=_sanitize_error_msg(str(_e)))
+
             db.set_switch_status(db_path, switch_id, "done")
             # 이전에 실패였다가 이번에 성공 → 복구 알람
             if prev_status == "failed":
@@ -483,6 +504,13 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 if pc_cmd and "port_channel" not in outputs:
                     try:
                         outputs["port_channel"] = conn.send_command(pc_cmd, read_timeout=read_timeout)
+                    except Exception:
+                        pass
+                # 설정 백업(running-config) — 변경 diff 알람용. 실패해도 수집 계속.
+                cfg_cmd = _CONFIG_CMD.get(eff_vendor)
+                if cfg_cmd and "config" not in outputs:
+                    try:
+                        outputs["config"] = conn.send_command(cfg_cmd, read_timeout=max(read_timeout, 90))
                     except Exception:
                         pass
             return outputs, eff_vendor

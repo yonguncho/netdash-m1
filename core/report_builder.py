@@ -37,6 +37,7 @@ _STATUS_KO = {"done": "정상", "failed": "수집 실패", "collecting": "수집
 _ALERT_KO = {"none": "", "warning": "⚠ FLAP", "critical": "⚠ LOOP"}
 _EVENT_KO = {
     "new_device": "새 설비", "device_offline": "설비 연결 끊김", "device_online": "설비 복구",
+    "device_moved": "설비 이동", "config_changed": "설정 변경",
     "switch_unreachable": "스위치 연결 실패", "switch_recovered": "스위치 복구",
     "flapping": "포트 flapping", "looping": "포트 looping",
 }
@@ -103,11 +104,22 @@ def _build_summary_sheet(wb, db_path, switches, fac_hosts):
 
     ws.append(["항목", "값"])
     _style_header_row(ws, ws.max_row)
+    # 전체 포트 사용률(증설 계획 참고)
+    total_up = total_ports = 0
+    for s in switches:
+        snap_id = _db.latest_snapshot_id(db_path, s["id"])
+        ports = _db.get_ports(db_path, snap_id) if snap_id else []
+        total_up += sum(1 for p in ports if p.get("status") == "up")
+        total_ports += len(ports)
+    usage = ("%d%% (%d/%d포트 사용)" % (round(total_up * 100 / total_ports), total_up, total_ports)
+             if total_ports else "수집 전")
+
     rows = [
         ("등록 스위치", "%d대 (정상 %d · 수집실패 %d · 기타 %d)" % (
             len(switches), done, failed, len(switches) - done - failed)),
         ("등록 방화벽", "%d대" % len(firewalls)),
         ("설비(대역 스캔)", "%d대 (온라인 %d · 연결실패 %d)" % (len(fac_hosts), fac_on, fac_off)),
+        ("전체 포트 사용률", usage),
         ("경보 스위치(FLAP/LOOP)", "%d대" % len(alerts)),
         ("미확인 알람", "%d건" % unacked),
     ]
@@ -133,13 +145,16 @@ def _build_summary_sheet(wb, db_path, switches, fac_hosts):
 def _build_switch_sheet(wb, db_path, switches):
     ws = wb.create_sheet("스위치 현황")
     ws.append(["구분", "IP", "호스트네임", "벤더", "위치", "상태", "경보",
-               "포트(사용/전체)", "MAC 수", "마지막 수집"])
+               "포트(사용/전체)", "사용률", "MAC 수", "마지막 수집"])
     _style_header_row(ws)
 
+    total_up = total_ports = 0
     for sw in switches:
         snap_id = _db.latest_snapshot_id(db_path, sw["id"])
         ports = _db.get_ports(db_path, snap_id) if snap_id else []
         up = sum(1 for p in ports if p.get("status") == "up")
+        total_up += up
+        total_ports += len(ports)
         mac_count = _db.get_mac_count(db_path, snap_id) if snap_id else 0
         status = sw.get("status") or "new"
         ws.append([
@@ -151,6 +166,7 @@ def _build_switch_sheet(wb, db_path, switches):
             _STATUS_KO.get(status, status),
             _ALERT_KO.get(sw.get("alert") or "none", sw.get("alert") or ""),
             ("%d / %d" % (up, len(ports))) if ports else "",
+            ("%d%%" % round(up * 100 / len(ports))) if ports else "",
             mac_count or "",
             (sw.get("last_collected") or "").replace("T", " ")[:16],
         ])

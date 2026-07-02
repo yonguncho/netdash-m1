@@ -44,18 +44,41 @@ def _parse_times(raw):
 
 def _loop(db_path):
     last_slot = None
+    last_fac_slot = None
+    last_purge_day = None
     while not _stop:
         try:
-            enabled = (db.get_setting(db_path, "auto_collect_enabled", "0") == "1")
-            if enabled:
+            now = datetime.now()
+            hhmm = now.strftime("%H:%M")
+            today = now.strftime("%Y-%m-%d")
+
+            # 1) 장비 자동 수집(하루 N회)
+            if db.get_setting(db_path, "auto_collect_enabled", "0") == "1":
                 times = _parse_times(db.get_setting(db_path, "auto_collect_times", "06:00,18:00"))
-                now = datetime.now()
-                hhmm = now.strftime("%H:%M")
-                slot = now.strftime("%Y-%m-%d ") + hhmm
+                slot = today + " " + hhmm
                 if hhmm in times and slot != last_slot:
                     last_slot = slot
                     utils.log_event("info", "auto_collect_trigger", time=hhmm)
                     collector.collect_all_registered(db_path)
+
+            # 2) 설비 대역 자동 스캔(1일 1회, 대역별 순차 — 부하 분산)
+            if db.get_setting(db_path, "facility_auto_enabled", "0") == "1":
+                fac_time = (db.get_setting(db_path, "facility_auto_time", "07:00") or "07:00").strip()
+                fac_slot = today + " " + hhmm
+                if hhmm == fac_time and fac_slot != last_fac_slot:
+                    last_fac_slot = fac_slot
+                    utils.log_event("info", "facility_auto_trigger", time=hhmm)
+                    from . import facility
+                    threading.Thread(target=facility.run_auto_scan,
+                                     args=(db_path,), daemon=True).start()
+
+            # 3) 알람 이력 자동 정리(보존 기간 초과 삭제, 1일 1회)
+            if today != last_purge_day:
+                last_purge_day = today
+                days = db.get_setting(db_path, "alert_retention_days", "90") or "90"
+                n = db.purge_device_events(db_path, days)
+                if n:
+                    utils.log_event("info", "device_events_purged", count=n, retention_days=days)
         except Exception as e:
             utils.log_event("error", "scheduler_loop_error", error=str(e))
         time.sleep(50)  # 분 단위 슬롯을 놓치지 않도록 1분 미만 주기

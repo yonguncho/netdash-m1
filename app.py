@@ -156,6 +156,13 @@ def create_app(demo_mode=None):
         scheduler.start_scheduler(db_path)
     except Exception as e:
         log_event("warning", "scheduler_start_failed", error=str(e))
+    # 스위치 도달성 감시(TCP-22, 부하 없는 1분 내 끊김 감지 — 설정으로 on/off)
+    if not config.app.get("demo_mode"):
+        try:
+            from core import reachability
+            reachability.start_monitor(db_path)
+        except Exception as e:
+            log_event("warning", "reachability_start_failed", error=str(e))
 
     # Load demo data in demo mode
     if config.app.get("demo_mode"):
@@ -235,6 +242,16 @@ def create_app(demo_mode=None):
                     sw["room_rack"] = room["rack"]
                     sw["room_unit"] = room["unit"]
                     sw["room_label"] = room["label"]
+
+            # 도달성 감시 결과 주입(True=도달, False=불가, 없으면 미확인)
+            try:
+                from core import reachability
+                reach = reachability.get_state()
+                for sw in switches:
+                    if sw["id"] in reach:
+                        sw["reachable"] = reach[sw["id"]]
+            except Exception:
+                pass
 
             return jsonify({
                 "switches": switches,
@@ -643,13 +660,40 @@ def create_app(demo_mode=None):
 
     @app.route("/api/alerts", methods=["GET"])
     def list_alerts():
-        """장비 변경/알람 이벤트 목록 + 미확인 개수."""
+        """장비 변경/알람 이벤트 목록 + 미확인 개수. ?kind=&days=&unack=1 필터."""
         try:
             only = request.args.get("unack") == "1"
-            return jsonify({"events": db.list_device_events(db_path, limit=200, only_unack=only),
+            kind = (request.args.get("kind") or "").strip() or None
+            days_raw = (request.args.get("days") or "").strip()
+            days = int(days_raw) if days_raw.isdigit() else None
+            return jsonify({"events": db.list_device_events(db_path, limit=300, only_unack=only,
+                                                            kind=kind, days=days),
                             "unacked": db.count_unacked_events(db_path)})
         except Exception as e:
             log_event("error", "alerts_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/<int:switch_id>/configs", methods=["GET"])
+    def list_switch_configs(switch_id):
+        """스위치의 설정(running-config) 백업 목록(내용 제외)."""
+        try:
+            return jsonify({"backups": db.get_config_backups(db_path, switch_id)})
+        except Exception as e:
+            log_event("error", "configs_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/configs/<int:backup_id>", methods=["GET"])
+    def get_config_content(backup_id):
+        """설정 백업 원문 다운로드(txt)."""
+        try:
+            row = db.get_config_backup_content(db_path, backup_id)
+            if not row:
+                return jsonify({"error": "not found"}), 404
+            fname = "config_sw%s_%s.txt" % (row.get("switch_id"), (row.get("ts") or "")[:10])
+            return Response(row.get("content") or "", mimetype="text/plain; charset=utf-8",
+                            headers={"Content-Disposition": "attachment; filename=%s" % fname})
+        except Exception as e:
+            log_event("error", "config_content_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/alerts/ack", methods=["POST"])
@@ -755,6 +799,11 @@ def create_app(demo_mode=None):
             started = facility_mod.start_collect_band(db_path, switch_id, subnet, username, password, src)
             if not started:
                 return jsonify({"error": "이미 수집 중입니다"}), 409
+            # 자동 스캔 대상으로 대역→스위치 매핑 기억
+            try:
+                facility_mod.remember_band(db_path, subnet, switch_id)
+            except Exception:
+                pass
             return jsonify({"ok": True, "subnet": subnet})
         except Exception as e:
             log_event("error", "facility_collect_error", error=collector._sanitize_error_msg(str(e)))
@@ -984,11 +1033,17 @@ def create_app(demo_mode=None):
 
     @app.route("/api/settings/auto_collect", methods=["GET"])
     def get_auto_collect():
-        """M14: 자동 수집 설정 조회."""
+        """자동화 설정 조회(자동 수집·설비 자동 스캔·알람 보존·도달성 감시)."""
         try:
+            from core import facility as _fac
             return jsonify({
                 "enabled": db.get_setting(db_path, "auto_collect_enabled", "0") == "1",
                 "times": db.get_setting(db_path, "auto_collect_times", "06:00,18:00") or "06:00,18:00",
+                "facility_enabled": db.get_setting(db_path, "facility_auto_enabled", "0") == "1",
+                "facility_time": db.get_setting(db_path, "facility_auto_time", "07:00") or "07:00",
+                "facility_bands": len(_fac.get_band_map(db_path)),
+                "retention_days": db.get_setting(db_path, "alert_retention_days", "90") or "90",
+                "reach_enabled": db.get_setting(db_path, "reach_check_enabled", "1") != "0",
             })
         except Exception as e:
             log_event("error", "get_auto_collect_error", error=collector._sanitize_error_msg(str(e)))
@@ -997,7 +1052,7 @@ def create_app(demo_mode=None):
     @app.route("/api/settings/auto_collect", methods=["POST"])
     @rate_limit("set_auto_collect", max_requests=20, window_seconds=60)
     def set_auto_collect():
-        """M14: 자동 수집 on/off + 시각(HH:MM,HH:MM) 설정."""
+        """자동화 설정 저장(자동 수집·설비 자동 스캔·알람 보존·도달성 감시)."""
         try:
             data = request.get_json() or {}
             enabled = "1" if data.get("enabled") else "0"
@@ -1012,8 +1067,31 @@ def create_app(demo_mode=None):
                 valid = ["06:00", "18:00"]
             db.set_setting(db_path, "auto_collect_enabled", enabled)
             db.set_setting(db_path, "auto_collect_times", ",".join(valid[:6]))
-            log_event("info", "auto_collect_set", enabled=enabled, times=",".join(valid[:6]))
-            return jsonify({"ok": True, "enabled": enabled == "1", "times": ",".join(valid[:6])})
+
+            # 설비 대역 자동 스캔(1일 1회 HH:MM)
+            fac_enabled = "1" if data.get("facility_enabled") else "0"
+            fac_time = (data.get("facility_time") or "07:00").strip()
+            if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", fac_time):
+                fac_time = "07:00"
+            db.set_setting(db_path, "facility_auto_enabled", fac_enabled)
+            db.set_setting(db_path, "facility_auto_time", fac_time)
+
+            # 알람 보존 일수(7~365)
+            try:
+                days = min(365, max(7, int(data.get("retention_days", 90))))
+            except (TypeError, ValueError):
+                days = 90
+            db.set_setting(db_path, "alert_retention_days", str(days))
+
+            # 도달성 감시 on/off
+            db.set_setting(db_path, "reach_check_enabled",
+                           "1" if data.get("reach_enabled", True) else "0")
+
+            log_event("info", "auto_collect_set", enabled=enabled, times=",".join(valid[:6]),
+                      facility=fac_enabled, retention=days)
+            return jsonify({"ok": True, "enabled": enabled == "1", "times": ",".join(valid[:6]),
+                            "facility_enabled": fac_enabled == "1", "facility_time": fac_time,
+                            "retention_days": str(days)})
         except Exception as e:
             log_event("error", "set_auto_collect_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500

@@ -38,6 +38,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "port_channels",
         # 장비 변경/알람 이벤트
         "device_events",
+        # 설정(running-config) 백업
+        "config_backups",
     }
     assert expected == tables
 

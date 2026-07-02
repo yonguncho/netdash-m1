@@ -70,23 +70,38 @@ function _applyLocFilter(list, inputId) {
 // ─── M14: 자동 수집 설정 ─────────────────────────────────────────
 (function () {
   var btn = document.getElementById("btn-auto-collect");
+  function _setVal(id, v) { var el = document.getElementById(id); if (el) el.value = v; }
+  function _setChk(id, v) { var el = document.getElementById(id); if (el) el.checked = !!v; }
+  function _val(id, dflt) { var el = document.getElementById(id); return el ? el.value : dflt; }
+  function _chk(id) { var el = document.getElementById(id); return el ? el.checked : false; }
   if (btn) btn.addEventListener("click", function () {
     fetch("/api/settings/auto_collect").then(function (r) { return r.json(); }).then(function (d) {
-      document.getElementById("ac-enabled").checked = !!d.enabled;
-      document.getElementById("ac-times").value = d.times || "06:00,18:00";
+      _setChk("ac-enabled", d.enabled);
+      _setVal("ac-times", d.times || "06:00,18:00");
+      _setChk("ac-fac-enabled", d.facility_enabled);
+      _setVal("ac-fac-time", d.facility_time || "07:00");
+      _setChk("ac-reach-enabled", d.reach_enabled !== false);
+      _setVal("ac-retention", d.retention_days || "90");
+      var info = document.getElementById("ac-fac-info");
+      if (info) info.textContent = (d.facility_bands || 0) + "개 대역이 자동 스캔 대상으로 기억되어 있습니다. " +
+        "(설비 탭에서 '대역 수집'을 한 번 실행한 대역이 자동 등록. 스위치에 저장된 계정 필요)";
       openModal("modal-auto-collect");
     }).catch(function (e) { console.error(e); });
   });
   var save = document.getElementById("btn-ac-save");
   if (save) save.addEventListener("click", function () {
     var body = {
-      enabled: document.getElementById("ac-enabled").checked,
-      times: document.getElementById("ac-times").value,
+      enabled: _chk("ac-enabled"),
+      times: _val("ac-times", "06:00,18:00"),
+      facility_enabled: _chk("ac-fac-enabled"),
+      facility_time: _val("ac-fac-time", "07:00"),
+      reach_enabled: _chk("ac-reach-enabled"),
+      retention_days: _val("ac-retention", "90"),
     };
     fetch("/api/settings/auto_collect", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function (res) {
-      if (res.ok) { closeModal("modal-auto-collect"); alert("자동 수집 설정이 저장되었습니다. (시각: " + res.times + ")"); }
+      if (res.ok) { closeModal("modal-auto-collect"); alert("자동화 설정이 저장되었습니다."); }
       else alert(res.error || "저장 실패");
     }).catch(function (e) { console.error(e); alert("서버 오류"); });
   });
@@ -524,7 +539,9 @@ function swCardHTML(sw, withCheck) {
 
   var alertBadge = (sw.alert && sw.alert !== "none")
     ? "<span class='sw-card__alert-badge badge--" + sw.alert + "'>" + (sw.alert === "critical" ? "⚠ LOOP" : "⚠ FLAP") + "</span>"
-    : "";
+    : (sw.reachable === false
+       ? "<span class='sw-card__alert-badge badge--critical' title='도달성 감시(TCP-22)에서 응답 없음'>🔴 도달불가</span>"
+       : "");
 
   var dotClass = sw.alert === "critical" ? "dot--critical"
     : sw.alert === "warning" ? "dot--warning"
@@ -1449,12 +1466,25 @@ function doSearch() {
 // ─── 알람(변경 이벤트) ───────────────────────────────────────────
 var _ALERT_KIND = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
+  device_moved: "설비 이동", config_changed: "설정 변경",
   switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
   flapping: "포트 flapping", looping: "포트 looping",
 };
 
+function _alertFilterQS() {
+  var k = document.getElementById("alert-filter-kind");
+  var d = document.getElementById("alert-filter-days");
+  var u = document.getElementById("alert-filter-unack");
+  var qs = [];
+  if (k && k.value) qs.push("kind=" + encodeURIComponent(k.value));
+  if (d && d.value) qs.push("days=" + encodeURIComponent(d.value));
+  if (u && u.checked) qs.push("unack=1");
+  return qs.length ? "?" + qs.join("&") : "";
+}
+
 function loadAlerts(renderList) {
-  fetch("/api/alerts").then(function (r) { return r.json(); }).then(function (data) {
+  var url = "/api/alerts" + (renderList ? _alertFilterQS() : "");
+  fetch(url).then(function (r) { return r.json(); }).then(function (data) {
     var badge = document.getElementById("alert-badge");
     var n = data.unacked || 0;
     if (badge) {
@@ -1493,6 +1523,10 @@ function _renderAlerts(events) {
   if (bell) bell.addEventListener("click", function () {
     openModal("modal-alerts");
     loadAlerts(true);
+  });
+  ["alert-filter-kind", "alert-filter-days", "alert-filter-unack"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("change", function () { loadAlerts(true); });
   });
   var ack = document.getElementById("btn-alerts-ack");
   if (ack) ack.addEventListener("click", function () {

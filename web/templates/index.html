@@ -36,7 +36,30 @@
         <span>알람 / 변경 이벤트</span>
         <button class="modal__close" data-close="modal-alerts">&times;</button>
       </div>
-      <div class="modal__body" id="alerts-body" style="max-height:70vh;overflow:auto"></div>
+      <div style="display:flex;gap:8px;padding:10px 20px 0;align-items:center">
+        <select id="alert-filter-kind" style="font-size:12px;padding:4px">
+          <option value="">전체 종류</option>
+          <option value="new_device">새 설비</option>
+          <option value="device_offline">설비 연결 끊김</option>
+          <option value="device_online">설비 복구</option>
+          <option value="device_moved">설비 이동</option>
+          <option value="switch_unreachable">스위치 연결 실패</option>
+          <option value="switch_recovered">스위치 복구</option>
+          <option value="flapping">포트 flapping</option>
+          <option value="looping">포트 looping</option>
+          <option value="config_changed">설정 변경</option>
+        </select>
+        <select id="alert-filter-days" style="font-size:12px;padding:4px">
+          <option value="">전체 기간</option>
+          <option value="1">최근 1일</option>
+          <option value="7">최근 7일</option>
+          <option value="30">최근 30일</option>
+        </select>
+        <label style="font-size:12px;color:#475569;display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input id="alert-filter-unack" type="checkbox"> 미확인만
+        </label>
+      </div>
+      <div class="modal__body" id="alerts-body" style="max-height:64vh;overflow:auto"></div>
       <div class="modal__footer">
         <button id="btn-alerts-ack" class="btn btn--primary">모두 확인</button>
         <button class="btn btn--ghost" data-close="modal-alerts">닫기</button>
@@ -205,8 +228,20 @@
         <p style="margin-top:8px;color:#64748b;font-size:12px">
           예) 하루 2회: <code>06:00,18:00</code><br>
           저장된 자격증명이 있는 스위치/방화벽만 자동 수집됩니다(수집 시 "계정 저장" 체크).
-          문제 발생 시 언제든 수동 수집도 가능합니다.
         </p>
+        <hr style="margin:12px 0;border:none;border-top:1px solid #e5e7eb">
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
+          <input id="ac-fac-enabled" type="checkbox"> 설비 대역 자동 스캔 (1일 1회, 대역별 순차)
+        </label>
+        <label style="margin-top:8px">스캔 시각 (HH:MM)</label>
+        <input id="ac-fac-time" type="text" placeholder="07:00" style="width:100px">
+        <p id="ac-fac-info" style="margin-top:4px;color:#64748b;font-size:12px"></p>
+        <hr style="margin:12px 0;border:none;border-top:1px solid #e5e7eb">
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
+          <input id="ac-reach-enabled" type="checkbox"> 스위치 도달성 감시 (TCP-22, 1분 주기 — 장비 부하 없음)
+        </label>
+        <label style="margin-top:8px">알람 보존 기간 (일, 지난 이벤트 자동 정리)</label>
+        <input id="ac-retention" type="number" min="7" max="365" style="width:100px">
       </div>
       <div class="modal__footer">
         <button id="btn-ac-save" class="btn btn--primary">저장</button>
