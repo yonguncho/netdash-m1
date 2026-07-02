@@ -27,6 +27,24 @@ def _make_xlsx(tmp_path, rows):
     return str(p)
 
 
+def test_upload_fw_word_boundary(client, tmp_path):
+    """회귀(Opus): 'fw' 부분일치 오분류 방지 — GBFW-SW01은 스위치, FW01은 방화벽."""
+    path = _make_xlsx(tmp_path, [
+        ["hostname", "ip"],
+        ["GBFW-SW01", "10.11.0.1"],      # 'fw' 포함이지만 토큰 경계 아님 + SW 명시 → 스위치
+        ["SWFW-CORE", "10.11.0.2"],      # fw가 경계 없이 붙음 → 스위치
+        ["FW01", "10.11.0.3"],           # fw+숫자 → 방화벽
+        ["DMZ-FW-01", "10.11.0.4"],      # -fw- → 방화벽
+    ])
+    with open(path, "rb") as f:
+        r = client.post("/api/upload", data={"file": (f, "inv.xlsx")},
+                        content_type="multipart/form-data")
+    assert r.status_code == 201
+    b = r.get_json()
+    assert len(b["imported_switch_ids"]) == 2
+    assert len(b["imported_firewall_ids"]) == 2
+
+
 def test_upload_splits_sw_and_fw(client, tmp_path):
     # name 열은 없고 hostname으로만 구분 → SW/FW
     path = _make_xlsx(tmp_path, [

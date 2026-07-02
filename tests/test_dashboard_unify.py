@@ -11,10 +11,10 @@ APP_JS = ROOT / "web" / "static" / "app.js"
 
 
 def test_switch_tab_renamed():
+    """탭 이름: '스위치 현황' (v3.26.1에서 '스위치 리스트'→'스위치 현황' 재변경)."""
     html = HTML.read_text(encoding="utf-8")
-    assert "스위치 리스트" in html
-    # 탭 버튼 텍스트가 '스위치 현황'이 아니어야
-    assert '>스위치 현황</button>' not in html
+    assert '>스위치 현황</button>' in html
+    assert "스위치 리스트" not in html
 
 
 def test_reconcile_tab_removed():

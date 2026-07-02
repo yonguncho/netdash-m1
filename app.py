@@ -541,11 +541,17 @@ def create_app(demo_mode=None):
 
             # 호스트네임/이름으로 방화벽(FW)·스위치(SW) 구분.
             # 사용자 명명 규칙: 방화벽은 hostname에 'FW', 스위치는 'SW'.
-            # 'fw'가 들어있으면 방화벽, 아니면 스위치로 등록.
+            # FIX(Opus): 'fw' 부분일치는 "GBFW-SW01" 같은 스위치를 오분류 →
+            # 토큰 경계 기반(-_공백 구분 또는 fw+숫자)으로만 방화벽 판정.
+            # 단, 'sw'가 함께 명시된 이름(...FW-SW...)은 스위치 우선.
+            import re as _re
+            _FW_PAT = _re.compile(r"(?:^|[-_ .])fw(?:[-_ .\d]|$)", _re.IGNORECASE)
+            _SW_PAT = _re.compile(r"(?:^|[-_ .])(?:fa)?sw(?:[-_ .\d]|$)", _re.IGNORECASE)
             sw_rows, fw_rows = [], []
             for sw in valid_switches:
                 text = ((sw.get("hostname") or "") + " " + (sw.get("name") or "")).lower()
-                (fw_rows if "fw" in text else sw_rows).append(sw)
+                is_fw = bool(_FW_PAT.search(text)) and not _SW_PAT.search(text)
+                (fw_rows if is_fw else sw_rows).append(sw)
 
             # Import switches (upsert by name/IP)
             imported_switch_ids = []

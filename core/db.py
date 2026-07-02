@@ -963,13 +963,8 @@ def latest_snapshot_id(db_path, switch_id):
         return row[0] if row else None
 
 
-def get_switches(db_path):
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, name, ip, hostname, vendor, model, location, status, alert, last_collected FROM switches ORDER BY id"
-        )
-        return [dict(row) for row in cursor.fetchall()]
+# NOTE: get_switches는 아래(M7 섹션)에 단일 정의만 존재한다.
+# (과거 이 위치에 중복 정의가 있어 첫 정의가 사장되던 버그 — Opus 검증에서 제거)
 
 
 def set_switch_status(db_path, switch_id, status, error=None):

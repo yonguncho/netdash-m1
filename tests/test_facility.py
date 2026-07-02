@@ -279,6 +279,25 @@ def test_export_xlsx(temp_db):
     assert data[:2] == b"PK" and len(data) > 100  # xlsx = zip
 
 
+def test_export_offline_shows_last_seen(temp_db):
+    """회귀(Opus): 오프라인 설비는 '직접'이 아니라 '마지막 관측'으로 표기."""
+    from core import facility
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.1.0.0/24", "ip": "10.1.0.5", "mac": "aa", "switch_id": 1,
+         "switch_name": "SW", "port": "Gi1/0/1", "online": 0, "direct": 1}])
+    row = facility._export_rows(temp_db)[0]
+    assert row["직접연결"] == "마지막 관측"
+    assert row["상태"] == "연결 실패"
+
+
+def test_get_switches_single_definition():
+    """회귀(Opus): db.get_switches 중복 정의 제거 확인."""
+    import inspect
+    from core import db as _db
+    src = inspect.getsource(_db)
+    assert src.count("def get_switches(") == 1
+
+
 def test_export_txt(temp_db):
     from core import facility
     db.save_facility_hosts(temp_db, [

@@ -295,15 +295,23 @@ def _export_rows(db_path):
     rows = []
     for h in db.get_facility_hosts(db_path):
         direct = h.get("direct", 1) and h.get("switch_name")
+        online = bool(h.get("online"))
+        # 오프라인이면 '직접'이 아니라 '마지막 관측'으로 표기(Opus 검증 반영)
+        if direct and online:
+            label = "직접"
+        elif direct:
+            label = "마지막 관측"
+        else:
+            label = "미확인"
         rows.append({
             "대역": h.get("subnet") or "",
             "IP": h.get("ip") or "",
             "MAC": h.get("mac") or "",
             "연결 스위치": (h.get("switch_name") or "") if direct else "직접 연결 미확인",
             "포트": (h.get("port") or "") if direct else "",
-            "직접연결": "직접" if direct else "미확인",
+            "직접연결": label,
             "그 외 관측": h.get("via") or "",
-            "상태": "온라인" if h.get("online") else "오프라인",
+            "상태": "온라인" if online else "연결 실패",
         })
     return rows
 

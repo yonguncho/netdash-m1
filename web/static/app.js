@@ -824,7 +824,12 @@ function _renderFacilityRows() {
   }
   tbody.innerHTML = rows.map(function (h) {
     var swCell, portCell;
-    if (_facIsDirect(h)) {
+    if (_facIsDirect(h) && !h.online) {
+      // 오프라인이지만 마지막 관측 위치는 유지 — '직접'처럼 보이지 않게 회색 표기
+      swCell = "<span style='color:#94a3b8'>" + escHtml(h.switch_name) +
+        "</span> <span class='status-badge status-badge--new' title='연결이 끊기기 전 마지막으로 관측된 위치'>마지막 관측</span>";
+      portCell = "<code style='color:#94a3b8'>" + escHtml(h.port || "-") + "</code>";
+    } else if (_facIsDirect(h)) {
       swCell = "<span style='font-weight:600'>" + escHtml(h.switch_name) +
         "</span> <span class='status-badge status-badge--ok'>직접</span>";
       portCell = "<code>" + escHtml(h.port || "-") + "</code>";
