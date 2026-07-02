@@ -177,8 +177,8 @@ def create_app(demo_mode=None):
     # API Token validation for production mode (CWE-306 fix: enforce authentication on all API routes)
     @app.before_request
     def validate_api_token():
-        # Skip token validation only for "/" (home) route and health checks
-        if request.path == "/" or request.path == "/health":
+        # Skip token validation only for page shells ("/", "/wall") and health checks
+        if request.path in ("/", "/health", "/wall"):
             return
         # In demo mode, skip validation only if explicitly enabled in config
         if config.app.get("demo_mode"):
@@ -205,6 +205,66 @@ def create_app(demo_mode=None):
             if not hmac.compare_digest(token, expected_token):
                 log_event("warning", "api_invalid_token", path=request.path)
                 return jsonify({"error": "unauthorized"}), 401
+
+    # ── 접근(감사) 로그: 어느 PC가 언제 무엇을 했는지 자동 기록 ──
+    # 변경 행위(POST/PUT/DELETE)와 다운로드성 GET만 기록(조회 폴링은 제외 — 소음 방지).
+    def _audit_label(m, p):
+        if m == "POST":
+            if p == "/api/switches/bulk-collect":
+                return "일괄 수집 실행"
+            if p.startswith("/api/switches/") and p.endswith("/collect"):
+                return "스위치 수집 실행"
+            if p.startswith("/api/firewalls/") and p.endswith("/collect"):
+                return "방화벽 수집 실행"
+            if p == "/api/switches/bulk-delete":
+                return "스위치 일괄 삭제"
+            if p == "/api/switches/manual":
+                return "스위치 등록"
+            if p == "/api/firewalls":
+                return "방화벽 등록"
+            if p == "/api/upload":
+                return "엑셀 업로드"
+            if p == "/api/import-inventory":
+                return "장비 일괄등록"
+            if p == "/api/facility/collect":
+                return "설비 대역 수집"
+            if p == "/api/facility/rematch":
+                return "설비 재매칭"
+            if p.startswith("/api/settings/"):
+                return "설정 변경"
+            if p == "/api/alerts/ack":
+                return "알람 확인"
+        elif m == "PUT":
+            if p.startswith("/api/switches/"):
+                return "스위치 수정"
+            if p.startswith("/api/firewalls/"):
+                return "방화벽 수정"
+        elif m == "DELETE":
+            if p.startswith("/api/switches/"):
+                return "스위치 삭제"
+            if p.startswith("/api/firewalls/"):
+                return "방화벽 삭제"
+        elif m == "GET":
+            if p == "/api/report":
+                return "보고서 다운로드"
+            if p == "/api/facility/export":
+                return "설비 목록 추출"
+            if p.startswith("/api/configs/") and "diff" not in p:
+                return "설정 백업 열람"
+        return None
+
+    @app.after_request
+    def audit_request(response):
+        try:
+            if response.status_code < 400:
+                label = _audit_label(request.method, request.path)
+                if label:
+                    db.save_audit(db_path, request.remote_addr, label,
+                                  target=request.path, method=request.method,
+                                  path=request.path)
+        except Exception:
+            pass
+        return response
 
     # Security headers for all responses
     @app.after_request
@@ -677,6 +737,70 @@ def create_app(demo_mode=None):
                             "unacked": db.count_unacked_events(db_path)})
         except Exception as e:
             log_event("error", "alerts_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/audit", methods=["GET"])
+    def list_audit_log():
+        """툴 접근(감사) 로그 조회 — 어느 PC가 언제 무엇을 했는지."""
+        try:
+            return jsonify({"logs": db.list_audit(db_path, limit=300)})
+        except Exception as e:
+            log_event("error", "audit_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/<int:switch_id>/port-history", methods=["GET"])
+    def port_history(switch_id):
+        """포트 이력: 스냅샷 이력에서 (포트,MAC) 최초/최근 관측. ?port=로 특정 포트만."""
+        try:
+            port = (request.args.get("port") or "").strip() or None
+            return jsonify({"history": db.get_port_history(db_path, switch_id, port=port)})
+        except Exception as e:
+            log_event("error", "port_history_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/wall", methods=["GET"])
+    def wallboard():
+        """관제(월보드) 모드 — 대형 모니터용 읽기 전용 전체화면."""
+        return render_template("wall.html")
+
+    @app.route("/api/wall", methods=["GET"])
+    def wall_data():
+        """월보드 데이터: 요약 카운터 + 문제 장비 + 최근 알람."""
+        try:
+            switches = db.get_switches(db_path)
+            try:
+                from core import reachability
+                reach = reachability.get_state()
+            except Exception:
+                reach = {}
+            failed = [s for s in switches if s.get("status") == "failed"]
+            alerts_sw = [s for s in switches if (s.get("alert") or "none") != "none"]
+            unreach = [s for s in switches if reach.get(s["id"]) is False]
+            fac = db.get_facility_hosts(db_path)
+            fac_off = [h for h in fac if not h.get("online")]
+            problems = []
+            seen = set()
+            for s, why in ([(x, "도달 불가") for x in unreach] +
+                           [(x, "수집 실패") for x in failed] +
+                           [(x, "LOOP 경보" if x.get("alert") == "critical" else "FLAP 경보")
+                            for x in alerts_sw]):
+                if s["id"] in seen:
+                    continue
+                seen.add(s["id"])
+                problems.append({"name": s.get("name"), "ip": s.get("ip"), "why": why})
+            return jsonify({
+                "total_switches": len(switches),
+                "unreachable": len(unreach),
+                "failed": len(failed),
+                "alert_switches": len(alerts_sw),
+                "facility_total": len(fac),
+                "facility_offline": len(fac_off),
+                "unacked_alerts": db.count_unacked_events(db_path),
+                "problems": problems[:30],
+                "recent_events": db.list_device_events(db_path, limit=12),
+            })
+        except Exception as e:
+            log_event("error", "wall_data_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/topology", methods=["GET"])

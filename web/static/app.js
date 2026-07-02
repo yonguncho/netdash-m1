@@ -200,6 +200,7 @@ document.querySelectorAll(".detail-tab").forEach(btn => {
     btn.classList.add("active");
     document.getElementById("dtab-" + btn.dataset.dtab).classList.add("active");
     if (btn.dataset.dtab === "config" && _currentSwitchId) loadConfigTab(_currentSwitchId);
+    if (btn.dataset.dtab === "history" && _currentSwitchId) loadPortHistory(_currentSwitchId);
   });
 });
 
@@ -1657,6 +1658,67 @@ function loadConfigTab(switchId) {
           })
           .catch(function () { body.textContent = "비교 오류"; });
       });
+    })
+    .catch(function (e) { console.error(e); pane.innerHTML = "<p style='color:#991b1b'>불러오기 오류</p>"; });
+}
+
+// ─── 접근 로그(감사) ─────────────────────────────────────────────
+(function () {
+  var btn = document.getElementById("btn-audit");
+  if (!btn) return;
+  btn.addEventListener("click", function () {
+    openModal("modal-audit");
+    var body = document.getElementById("audit-body");
+    body.innerHTML = "<tr><td colspan=4 style='color:#64748b'>불러오는 중...</td></tr>";
+    fetch("/api/audit").then(function (r) { return r.json(); }).then(function (data) {
+      var logs = data.logs || [];
+      if (!logs.length) {
+        body.innerHTML = "<tr><td colspan=4 style='color:#64748b'>기록이 없습니다.</td></tr>";
+        return;
+      }
+      body.innerHTML = logs.map(function (l) {
+        return "<tr><td style='white-space:nowrap'>" + escHtml((l.ts || "").replace("T", " ").slice(0, 16)) +
+          "</td><td><code>" + escHtml(l.client_ip || "-") + "</code></td><td><strong>" +
+          escHtml(l.action || "-") + "</strong></td><td style='color:#64748b;font-size:12px'>" +
+          escHtml(l.target || "") + "</td></tr>";
+      }).join("");
+    }).catch(function (e) { console.error(e); body.innerHTML = "<tr><td colspan=4>오류</td></tr>"; });
+  });
+})();
+
+// ─── 포트 이력(누가 언제 꽂았나) ─────────────────────────────────
+function loadPortHistory(switchId, port) {
+  var pane = document.getElementById("dtab-history");
+  if (!pane) return;
+  pane.innerHTML = "<p style='color:#64748b'>불러오는 중...</p>";
+  var qs = port ? "?port=" + encodeURIComponent(port) : "";
+  fetch("/api/switches/" + switchId + "/port-history" + qs)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var rows = data.history || [];
+      var head =
+        "<div style='display:flex;gap:8px;align-items:center;margin-bottom:8px'>" +
+        "<input id='ph-port' class='tbl-search' data-target='ph-body' placeholder='포트/MAC 필터...' " +
+        "style='padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px'>" +
+        "<span style='font-size:11px;color:#64748b'>스냅샷 이력 기반 — 수집할수록 정밀해집니다. " +
+        "'현재 없음'은 뽑혔거나 교체된 것.</span></div>";
+      if (!rows.length) {
+        pane.innerHTML = head + "<p style='color:#64748b'>이력이 없습니다. 이 스위치를 2회 이상 수집하면 변화가 기록됩니다.</p>";
+        return;
+      }
+      pane.innerHTML = head +
+        "<table class='data-table'><thead><tr><th>포트</th><th>MAC</th><th>최초 관측</th><th>최근 관측</th><th>관측 횟수</th><th>상태</th></tr></thead>" +
+        "<tbody id='ph-body'>" + rows.map(function (h) {
+          var cur = h.current
+            ? "<span class='status-badge status-badge--ok'>현재 연결</span>"
+            : "<span class='status-badge status-badge--new'>현재 없음</span>";
+          return "<tr><td><code>" + escHtml(h.port || "-") + "</code></td>" +
+            "<td><code>" + escHtml(h.mac || "-") + "</code></td>" +
+            "<td>" + escHtml((h.first_seen || "").slice(0, 16)) + "</td>" +
+            "<td>" + escHtml((h.last_seen || "").slice(0, 16)) + "</td>" +
+            "<td style='text-align:center'>" + (h.seen_count || 0) + "</td>" +
+            "<td>" + cur + "</td></tr>";
+        }).join("") + "</tbody></table>";
     })
     .catch(function (e) { console.error(e); pane.innerHTML = "<p style='color:#991b1b'>불러오기 오류</p>"; });
 }

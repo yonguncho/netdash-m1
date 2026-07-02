@@ -205,6 +205,20 @@ CREATE TABLE IF NOT EXISTS switch_logs (
 )
 """
 
+# 툴 접근(감사) 로그 — 어느 PC가 언제 무엇을 했는지
+CREATE_AUDIT_LOG_TABLE = """
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT DEFAULT (datetime('now')),
+    client_ip TEXT,
+    action TEXT,
+    target TEXT,
+    method TEXT,
+    path TEXT
+)
+"""
+
+
 # 스위치 설정(running-config) 백업 — 변경 diff 알람용
 CREATE_CONFIG_BACKUPS_TABLE = """
 CREATE TABLE IF NOT EXISTS config_backups (
@@ -354,6 +368,7 @@ def init_schema(db_path):
                 CREATE_PORT_CHANNELS_TABLE,
                 CREATE_DEVICE_EVENTS_TABLE,
                 CREATE_CONFIG_BACKUPS_TABLE,
+                CREATE_AUDIT_LOG_TABLE,
             ]:
                 cursor.execute(table_sql)
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
@@ -831,6 +846,74 @@ def ack_device_events(db_path, ids=None):
                 return cur.rowcount
             except Exception:
                 return 0
+
+
+def save_audit(db_path, client_ip, action, target="", method="", path=""):
+    """툴 접근(감사) 로그 1건 기록 + 오래된 로그 정리(최근 5000건 유지)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO audit_log (client_ip, action, target, method, path) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (str(client_ip or "")[:64], str(action or "")[:100],
+                     str(target or "")[:200], str(method or "")[:10], str(path or "")[:200]))
+                conn.execute(
+                    "DELETE FROM audit_log WHERE id NOT IN "
+                    "(SELECT id FROM audit_log ORDER BY id DESC LIMIT 5000)")
+            except Exception as e:
+                log_event("warning", "save_audit_skipped", error=str(e))
+
+
+def list_audit(db_path, limit=300):
+    """접근 로그 최신순 조회."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (int(limit),))
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def get_port_history(db_path, switch_id, port=None, limit=500):
+    """포트 이력: 스냅샷 시계열에서 (포트, MAC)별 최초/최근 관측 시각.
+
+    추가 수집 없이 기존 mac_entries 이력 재활용(수집 주기 해상도).
+    현재(최신 스냅샷)에 존재하면 current=1.
+    Returns: [{port, mac, first_seen, last_seen, current, seen_count}]
+    """
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            latest = latest_snapshot_id(db_path, switch_id)
+            params = [switch_id]
+            port_cond = ""
+            if port:
+                port_cond = " AND LOWER(m.port)=LOWER(?)"
+                params.append(port)
+            params.append(int(limit))
+            cur.execute(
+                """SELECT m.port AS port, m.mac AS mac,
+                          MIN(s.collected_at) AS first_seen,
+                          MAX(s.collected_at) AS last_seen,
+                          COUNT(DISTINCT m.snapshot_id) AS seen_count,
+                          MAX(m.snapshot_id) AS last_snap
+                   FROM mac_entries m
+                   JOIN snapshots s ON m.snapshot_id = s.id
+                   WHERE m.switch_id = ?%s
+                   GROUP BY m.port, m.mac
+                   ORDER BY MAX(s.collected_at) DESC, m.port
+                   LIMIT ?""" % port_cond, params)
+            rows = []
+            for r in cur.fetchall():
+                d = dict(r)
+                last_snap = d.pop("last_snap", None)
+                d["current"] = 1 if (latest and last_snap == latest) else 0
+                rows.append(d)
+            return rows
+        except Exception:
+            return []
 
 
 def get_port_channel_members(db_path):

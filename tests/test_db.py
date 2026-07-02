@@ -40,6 +40,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "device_events",
         # 설정(running-config) 백업
         "config_backups",
+        # 툴 접근(감사) 로그
+        "audit_log",
     }
     assert expected == tables
 

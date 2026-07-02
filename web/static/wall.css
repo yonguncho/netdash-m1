@@ -1,0 +1,55 @@
+/* NetDash 관제(월보드) — 대형 모니터용 다크 전체화면 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: #0b1220; color: #e2e8f0;
+  font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.wall-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 18px 32px; border-bottom: 1px solid #1e293b;
+}
+.wall-logo { font-size: 26px; font-weight: 800; letter-spacing: 1px; }
+.wall-clock { font-size: 22px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+
+.wall-tiles {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 16px; padding: 22px 32px;
+}
+.tile {
+  background: #111a2e; border: 1px solid #1e293b; border-radius: 12px;
+  padding: 22px 10px; text-align: center;
+}
+.tile__num { font-size: 56px; font-weight: 800; line-height: 1; color: #38bdf8; }
+.tile__label { margin-top: 10px; font-size: 15px; color: #94a3b8; }
+.tile--bad .tile__num { color: #64748b; }
+.tile--warn .tile__num { color: #64748b; }
+.tile--bad.tile--on .tile__num { color: #ef4444; }
+.tile--warn.tile--on .tile__num { color: #f59e0b; }
+.tile--bad.tile--on { border-color: #ef4444; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.35);} 50% { box-shadow: 0 0 22px 4px rgba(239,68,68,.35);} }
+
+.wall-problems {
+  flex: 1; overflow: auto; padding: 6px 32px 16px;
+  display: flex; flex-wrap: wrap; gap: 14px; align-content: flex-start;
+}
+.wall-ok {
+  width: 100%; text-align: center; margin-top: 8vh;
+  font-size: 44px; color: #22c55e; font-weight: 700;
+}
+.wall-ok small { display: block; margin-top: 12px; font-size: 16px; color: #64748b; font-weight: 400; }
+.pcard {
+  background: #1a1024; border: 2px solid #ef4444; border-radius: 10px;
+  padding: 16px 20px; min-width: 250px;
+}
+.pcard__name { font-size: 20px; font-weight: 700; }
+.pcard__ip { color: #94a3b8; margin-top: 4px; font-size: 14px; }
+.pcard__why { margin-top: 8px; color: #f87171; font-weight: 700; font-size: 15px; }
+
+.wall-ticker {
+  border-top: 1px solid #1e293b; padding: 10px 32px;
+  height: 46px; overflow: hidden; background: #0e1526;
+}
+.wall-ticker__inner { display: flex; gap: 40px; white-space: nowrap; font-size: 14px; color: #94a3b8; }
+.wall-ticker__inner b { color: #e2e8f0; }

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NetDash 관제</title>
+  <link rel="stylesheet" href="/static/wall.css">
+</head>
+<body>
+  <header class="wall-header">
+    <span class="wall-logo">NetDash 관제</span>
+    <span id="wall-clock" class="wall-clock"></span>
+  </header>
+
+  <section class="wall-tiles">
+    <div class="tile"><div class="tile__num" id="t-total">-</div><div class="tile__label">등록 스위치</div></div>
+    <div class="tile tile--bad"><div class="tile__num" id="t-unreach">-</div><div class="tile__label">도달 불가</div></div>
+    <div class="tile tile--bad"><div class="tile__num" id="t-failed">-</div><div class="tile__label">수집 실패</div></div>
+    <div class="tile tile--warn"><div class="tile__num" id="t-alert">-</div><div class="tile__label">경보(FLAP/LOOP)</div></div>
+    <div class="tile tile--warn"><div class="tile__num" id="t-facoff">-</div><div class="tile__label">설비 연결 실패</div></div>
+    <div class="tile tile--warn"><div class="tile__num" id="t-unack">-</div><div class="tile__label">미확인 알람</div></div>
+  </section>
+
+  <section id="wall-problems" class="wall-problems"></section>
+
+  <footer class="wall-ticker">
+    <div id="wall-events" class="wall-ticker__inner"></div>
+  </footer>
+
+  <script src="/static/wall.js"></script>
+</body>
+</html>

@@ -18,6 +18,8 @@
       <button id="ip-search-btn">검색</button>
     </div>
     <div class="header__right">
+      <a href="/wall" target="_blank" class="btn btn--secondary" style="font-size:11px;padding:3px 8px;text-decoration:none" title="대형 모니터용 관제 화면(새 탭, 10초 자동 갱신)">🖥 관제</a>
+      <button id="btn-audit" class="alert-bell" title="접근 로그(어느 PC가 언제 무엇을 했는지)">📒</button>
       <button id="btn-alerts" class="alert-bell" title="알람(새 설비·연결 끊김·스위치 연결 실패 등)">
         🔔<span id="alert-badge" class="alert-badge hidden">0</span>
       </button>
@@ -27,6 +29,28 @@
       <span id="last-updated" class="header__ts"></span>
     </div>
   </header>
+
+  <!-- 접근 로그 모달 -->
+  <div id="modal-audit" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box" style="width:760px;max-width:95vw">
+      <div class="modal__header">
+        <span>접근 로그 (툴 사용 기록)</span>
+        <button class="modal__close" data-close="modal-audit">&times;</button>
+      </div>
+      <div class="modal__body" style="max-height:70vh;overflow:auto">
+        <p style="font-size:12px;color:#64748b;margin-bottom:8px">
+          어느 PC(IP)가 언제 수집·삭제·설정 변경·다운로드를 했는지의 기록입니다(최근 300건, 5000건 보관).</p>
+        <table class="data-table">
+          <thead><tr><th>시각</th><th>사용자 IP</th><th>행위</th><th>대상</th></tr></thead>
+          <tbody id="audit-body"></tbody>
+        </table>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn--ghost" data-close="modal-audit">닫기</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 알람 모달 -->
   <div id="modal-alerts" class="modal hidden">
@@ -478,6 +502,7 @@
       <button class="detail-tab" data-dtab="arps">ARP</button>
       <button class="detail-tab" data-dtab="syslog">시스템 로그</button>
       <button class="detail-tab" data-dtab="config">설정(config)</button>
+      <button class="detail-tab" data-dtab="history">포트 이력</button>
     </div>
     <div class="detail-panel__body">
       <div id="dtab-ports" class="dtab-pane active"></div>
@@ -485,6 +510,7 @@
       <div id="dtab-arps" class="dtab-pane"></div>
       <div id="dtab-syslog" class="dtab-pane"></div>
       <div id="dtab-config" class="dtab-pane"></div>
+      <div id="dtab-history" class="dtab-pane"></div>
     </div>
   </div>
 
