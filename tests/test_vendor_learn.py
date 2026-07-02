@@ -39,6 +39,10 @@ class _FakeCfg:
     def get_max_concurrent(self):
         return 2
 
+    def get_raw_outputs_path(self):
+        import tempfile
+        return tempfile.mkdtemp(prefix="ndraw_")
+
 
 def test_worker_learns_vendor_and_updates_db(temp_db, monkeypatch):
     """unknown 스위치를 수집하면 학습된 벤더로 DB가 갱신된다(워커 흐름)."""

@@ -113,7 +113,11 @@
           <button id="btn-view-card" class="btn btn--primary" style="font-size:12px">카드 뷰</button>
           <button id="btn-view-rack" class="btn btn--secondary" style="font-size:12px">랙 뷰</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer"><input type="checkbox" id="dash-check-all"> 전체선택</label>
+          <input id="dash-cred-user" type="text" placeholder="공통 계정" autocomplete="off" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:90px" title="여기에 계정을 입력해 두면, 스위치 선택 후 '정보 수집'을 누를 때 팝업 없이 이 계정으로 바로 수집합니다">
+          <input id="dash-cred-pass" type="password" placeholder="비밀번호" autocomplete="new-password" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:90px">
+          <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#475569;cursor:pointer" title="이 계정을 각 장비에 암호화 저장해 자동 수집에 재사용"><input type="checkbox" id="dash-cred-persist"> 저장</label>
           <button id="btn-bulk-collect" class="btn btn--primary" style="font-size:12px" disabled>정보 수집 (0)</button>
+          <button id="btn-dash-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
           <input id="loc-filter-dash" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
           <button id="btn-add-manual" class="btn btn--secondary">+ 수동 추가</button>
           <button id="btn-import-excel" class="btn btn--primary">엑셀 가져오기</button>

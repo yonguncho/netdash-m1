@@ -64,6 +64,26 @@ def test_bulk_collect_rejects_invalid_credentials(client, monkeypatch):
     assert r.status_code == 400
 
 
+def test_dash_header_credentials_ui():
+    """상단 공통 계정 입력(팝업 없이 즉시 일괄 수집) UI + 로직."""
+    html = HTML.read_text(encoding="utf-8")
+    assert 'id="dash-cred-user"' in html and 'id="dash-cred-pass"' in html
+    assert 'id="dash-cred-persist"' in html
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "_runBulkCollect" in js
+    assert "dash-cred-user" in js  # 상단 계정 있으면 팝업 생략 경로
+
+
+def test_dash_bulk_delete_ui_present():
+    """현황판 선택 삭제 버튼(수집 선택 체크박스 공용) + 핸들러."""
+    html = HTML.read_text(encoding="utf-8")
+    assert 'id="btn-dash-bulk-delete"' in html
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "btn-dash-bulk-delete" in js
+    # 선택 삭제도 bulk-delete API 재사용
+    assert js.count("/api/switches/bulk-delete") >= 2
+
+
 def test_bulk_collect_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'id="btn-bulk-collect"' in html

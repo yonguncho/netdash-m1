@@ -1272,8 +1272,11 @@ function openCredentialModal(sw) {
     "<strong>IP:</strong> " + escHtml(sw.ip) +
     (sw.hostname ? "&nbsp;&nbsp;<strong>호스트네임:</strong> " + escHtml(sw.hostname) : "") +
     (sw.location ? "<br><strong>위치:</strong> " + escHtml(sw.location) : "");
-  document.getElementById("cred-username").value = "";
-  document.getElementById("cred-password").value = "";
+  // 상단 공통 계정이 입력돼 있으면 자동 채움(개별 수집도 재입력 불필요)
+  var hu = document.getElementById("dash-cred-user");
+  var hp = document.getElementById("dash-cred-pass");
+  document.getElementById("cred-username").value = hu ? hu.value.trim() : "";
+  document.getElementById("cred-password").value = hp ? hp.value : "";
   openModal("modal-credential");
 }
 
@@ -1327,11 +1330,17 @@ function collectSwitch(switchId, username, password, persist) {
 
 // ─── 일괄 정보 수집 (공통 계정) ──────────────────────────────────
 function _updateBulkCollectBtn() {
-  var btn = document.getElementById("btn-bulk-collect");
-  if (!btn) return;
   var n = Object.keys(_bulkSel).length;
-  btn.textContent = "정보 수집 (" + n + ")";
-  btn.disabled = n === 0;
+  var btn = document.getElementById("btn-bulk-collect");
+  if (btn) {
+    btn.textContent = "정보 수집 (" + n + ")";
+    btn.disabled = n === 0;
+  }
+  var del = document.getElementById("btn-dash-bulk-delete");
+  if (del) {
+    del.textContent = "선택 삭제 (" + n + ")";
+    del.disabled = n === 0;
+  }
 }
 
 // 수집 선택 체크박스 변경(위임)
@@ -1355,37 +1364,31 @@ document.addEventListener("change", function (e) {
     _updateBulkCollectBtn();
   });
 
-  // "정보 수집(N)" → 계정 입력 팝업
-  var open = document.getElementById("btn-bulk-collect");
-  if (open) open.addEventListener("click", function () {
-    var ids = Object.keys(_bulkSel);
-    if (!ids.length) { alert("먼저 수집할 스위치를 선택하세요."); return; }
-    var names = ids.map(function (id) {
-      var s = (_switches || []).find(function (x) { return String(x.id) === String(id); });
-      return s ? (s.name + " (" + s.ip + ")") : ("#" + id);
-    });
-    document.getElementById("bulk-cred-info").innerHTML =
-      "<strong>" + ids.length + "대</strong> 선택됨<br>" +
-      "<span style='font-size:12px;color:#475569'>" + names.map(escHtml).join(", ") + "</span>";
-    document.getElementById("bulk-username").value = "";
-    document.getElementById("bulk-password").value = "";
-    var bp = document.getElementById("bulk-persist"); if (bp) bp.checked = false;
-    openModal("modal-bulk-collect");
+  // "선택 삭제(N)" → 현황판에서 선택한 스위치 일괄 삭제
+  var dashDel = document.getElementById("btn-dash-bulk-delete");
+  if (dashDel) dashDel.addEventListener("click", function () {
+    var ids = Object.keys(_bulkSel).map(function (x) { return parseInt(x, 10); });
+    if (!ids.length) return;
+    if (!confirm(ids.length + "대의 스위치를 삭제하시겠습니까? (관련 수집 데이터도 함께 삭제됩니다)")) return;
+    fetch("/api/switches/bulk-delete", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ids: ids}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) {
+        _bulkSel = {};
+        var allc = document.getElementById("dash-check-all"); if (allc) allc.checked = false;
+        alert(res.deleted + "대 삭제 완료");
+        pollState();
+      } else alert(res.error || "삭제 실패");
+    }).catch(function (e) { console.error(e); alert("삭제 오류"); });
   });
 
-  // "수집 시작" → 일괄 수집 요청
-  var start = document.getElementById("btn-bulk-start");
-  if (start) start.addEventListener("click", function () {
-    var ids = Object.keys(_bulkSel).map(function (x) { return parseInt(x, 10); });
-    if (!ids.length) { closeModal("modal-bulk-collect"); return; }
-    var username = document.getElementById("bulk-username").value.trim();
-    var password = document.getElementById("bulk-password").value;
-    if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
-    var persist = document.getElementById("bulk-persist");
+  // 일괄 수집 실행(공통) — 성공 시 선택 해제 + 안내
+  function _runBulkCollect(ids, username, password, persist) {
     fetch("/api/switches/bulk-collect", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ids: ids, username: username, password: password,
-                            persist: persist && persist.checked}),
+                            persist: !!persist}),
     }).then(function (r) { return r.json(); }).then(function (res) {
       closeModal("modal-bulk-collect");
       if (res.ok) {
@@ -1399,6 +1402,48 @@ document.addEventListener("change", function (e) {
         alert(res.error || "일괄 수집 실패");
       }
     }).catch(function (e) { console.error("bulk collect:", e); alert("일괄 수집 오류"); });
+  }
+
+  // "정보 수집(N)" — 상단 공통 계정이 입력돼 있으면 팝업 없이 바로 수집,
+  // 비어 있으면 기존처럼 계정 입력 팝업.
+  var open = document.getElementById("btn-bulk-collect");
+  if (open) open.addEventListener("click", function () {
+    var ids = Object.keys(_bulkSel);
+    if (!ids.length) { alert("먼저 수집할 스위치를 선택하세요."); return; }
+    var hu = document.getElementById("dash-cred-user");
+    var hp = document.getElementById("dash-cred-pass");
+    var hpersist = document.getElementById("dash-cred-persist");
+    var user = hu ? hu.value.trim() : "";
+    var pass = hp ? hp.value : "";
+    if (user && pass) {
+      // 상단 계정으로 즉시 수집(대량 선택 시 팝업 생략)
+      _runBulkCollect(ids.map(function (x) { return parseInt(x, 10); }),
+                      user, pass, hpersist && hpersist.checked);
+      return;
+    }
+    var names = ids.map(function (id) {
+      var s = (_switches || []).find(function (x) { return String(x.id) === String(id); });
+      return s ? (s.name + " (" + s.ip + ")") : ("#" + id);
+    });
+    document.getElementById("bulk-cred-info").innerHTML =
+      "<strong>" + ids.length + "대</strong> 선택됨<br>" +
+      "<span style='font-size:12px;color:#475569'>" + names.map(escHtml).join(", ") + "</span>";
+    document.getElementById("bulk-username").value = "";
+    document.getElementById("bulk-password").value = "";
+    var bp = document.getElementById("bulk-persist"); if (bp) bp.checked = false;
+    openModal("modal-bulk-collect");
+  });
+
+  // "수집 시작" → 일괄 수집 요청(팝업 경로)
+  var start = document.getElementById("btn-bulk-start");
+  if (start) start.addEventListener("click", function () {
+    var ids = Object.keys(_bulkSel).map(function (x) { return parseInt(x, 10); });
+    if (!ids.length) { closeModal("modal-bulk-collect"); return; }
+    var username = document.getElementById("bulk-username").value.trim();
+    var password = document.getElementById("bulk-password").value;
+    if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
+    var persist = document.getElementById("bulk-persist");
+    _runBulkCollect(ids, username, password, persist && persist.checked);
   });
 })();
 
