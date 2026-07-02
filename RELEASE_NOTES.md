@@ -1,5 +1,18 @@
 # NetDash 릴리스 노트
 
+## v3.30.2 (2026-07-02) — EXOS 실장비 형식 보강 + 실패 시 다음 장비 즉시 진행
+
+- **ExtremeXOS 포트 상태 파싱 보강.** 실장비 `show ports no-refresh`는 상태가
+  단어(active/ready)가 아니라 **한 글자 코드**로 나오는 형식이 흔함:
+  Port State **E/D**(Enabled/Disabled) + Link State **A/R/NP**(Active/Ready/NotPresent).
+  두 형식 모두 인식하도록 수정(A=up, R=down, D=disabled). `10G` 속도 표기도 인식.
+  페이징 명령 오타 수정(`disable clipaging`).
+- **수집 실패 시 다음 스위치로 즉시 진행.** 응답 없는 장비에 재시도 3회×타임아웃
+  (~100초)을 낭비하지 않도록 **SSH 전 TCP-22 사전 확인** — 도달 불가면 즉시 실패
+  처리하고 큐의 다음 장비를 진행(일괄/자동 수집 흐름이 빨라짐).
+  ※ 큐 자체는 원래 장비별 격리라 한 대 실패가 나머지를 막지 않음 — 이번 수정은
+  실패 판정을 100초 → 4초로 단축하는 것.
+
 ## v3.30.1 (2026-07-02) — config 일괄 다운로드(ZIP)
 
 - 스위치 현황 탭에 **"config 일괄 다운로드"** 버튼 — 전체 스위치의 **최신 running-config

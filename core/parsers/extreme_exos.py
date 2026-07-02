@@ -61,8 +61,10 @@ def _parse_ports(status_output, desc_output, switch_id):
         # First token must be a port: slot:port ("1:1") or standalone ("5").
         if not re.match(r"^(?:\d+:)?\d+$", port_tok):
             continue
-        # EXOS 'show ports no-refresh' Link State: active(=up) / ready(=down) / disabled.
-        # (구버전/타 출력의 up/down도 함께 인식). 정확 토큰 매칭.
+        # EXOS 'show ports no-refresh' 상태 판별. 두 형식 모두 지원:
+        #  ① 단어형: active/ready/disabled (show ports information 등)
+        #  ② 글자형(실장비 no-refresh 기본): Port State E/D + Link State A/R/NP/L
+        #     E=Enabled, D=Disabled / A=Active(up), R=Ready(down), NP=Not Present
         status = None
         for tok in tokens[1:]:
             tl = tok.lower()
@@ -73,12 +75,26 @@ def _parse_ports(status_output, desc_output, switch_id):
             if tl in ("disabled", "disable"):
                 status = "disabled"; break
         if status is None:
+            # 글자형: 인접한 (E|D) (A|R|NP|L) 토큰 쌍을 찾는다
+            for i in range(1, len(tokens) - 1):
+                ps, ls = tokens[i], tokens[i + 1]
+                if ps in ("E", "D") and ls in ("A", "R", "NP", "L"):
+                    if ps == "D":
+                        status = "disabled"
+                    else:
+                        status = "up" if ls == "A" else "down"
+                    break
+            else:
+                # 링크 상태 없이 "... D"로 끝나는 비활성 포트(마지막 토큰이 D)
+                if tokens[-1] == "D":
+                    status = "disabled"
+        if status is None:
             continue
 
-        # 속도/듀플렉스 best-effort: 숫자 속도(10/100/1000/10000...) + FULL/HALF
+        # 속도/듀플렉스 best-effort: 숫자(1000) 또는 10G 표기 + FULL/HALF
         spd = ""
         for tok in tokens[1:]:
-            if re.match(r"^\d{2,6}$", tok):
+            if re.match(r"^\d{2,6}$", tok) or re.match(r"^\d{1,3}G$", tok, re.IGNORECASE):
                 spd = tok; break
         dup = ""
         for tok in tokens[1:]:

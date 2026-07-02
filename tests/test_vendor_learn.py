@@ -43,6 +43,7 @@ class _FakeCfg:
 def test_worker_learns_vendor_and_updates_db(temp_db, monkeypatch):
     """unknown 스위치를 수집하면 학습된 벤더로 DB가 갱신된다(워커 흐름)."""
     monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
     sid = db.save_switch(temp_db, "CORE-NX", "10.0.0.9", "unknown")
     credentials.save_credential(sid, "admin", "pw")
 
@@ -66,6 +67,7 @@ def test_worker_learns_vendor_and_updates_db(temp_db, monkeypatch):
 def test_worker_keeps_known_vendor(temp_db, monkeypatch):
     """이미 벤더가 지정된 스위치는 detect_vendor=False로 호출(학습 안 함)."""
     monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
     sid = db.save_switch(temp_db, "ACC-SW", "10.0.0.8", "cisco")
     credentials.save_credential(sid, "admin", "pw")
 

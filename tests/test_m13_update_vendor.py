@@ -103,8 +103,8 @@ def test_collector_read_timeout_moved_to_send_command():
 
 # ── v3.5.2 검증 후속 수정 ──────────────────────────────────────────
 def test_paging_cmd_per_vendor():
-    """EXOS는 terminal length 0가 아니라 disable clpaging."""
-    assert collector._PAGING_CMD["extreme_exos"] == "disable clpaging"
+    """EXOS는 terminal length 0가 아니라 disable clipaging(v3.30.2 오타 수정)."""
+    assert collector._PAGING_CMD["extreme_exos"] == "disable clipaging"
     assert collector._PAGING_CMD["cisco_ios"] == "terminal length 0"
     # 미정의 벤더는 None(페이징 생략)
     assert collector._PAGING_CMD.get("paloalto_panos") is None

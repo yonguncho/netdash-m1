@@ -67,6 +67,21 @@ def _norm_vendor(vendor):
     return _NETMIKO_VENDOR.get(v, v)
 
 
+def _tcp_precheck(ip, port=22, timeout=4, source_ip=None):
+    """SSH 시도 전 TCP 도달성 사전 확인.
+
+    응답 없는 장비에 재시도 3회×30초(~100초)를 낭비하지 않고 즉시 실패 처리해
+    큐의 다음 장비로 빠르게 넘어가게 한다(일괄/자동 수집 흐름 유지).
+    """
+    import socket
+    src = (source_ip, 0) if source_ip else None
+    try:
+        with socket.create_connection((str(ip), int(port)), timeout=timeout, source_address=src):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
 def _is_unknown_vendor(vendor):
     return (vendor or "").strip().lower() in ("", "unknown")
 
@@ -110,7 +125,7 @@ def _commands_for(vendor):
 _PAGING_CMD = {
     "cisco_ios": "terminal length 0",
     "arista_eos": "terminal length 0",
-    "extreme_exos": "disable clpaging",
+    "extreme_exos": "disable clipaging",  # (netmiko도 세션 준비에서 자동 실행)
     "juniper_junos": "set cli screen-length 0",
 }
 
@@ -269,6 +284,10 @@ def _worker_loop():
                 password = cred.get("password")
                 # M12: 설정된 출발지 IP로 바인딩(장비 ACL 통과). 미설정이면 OS 기본 라우팅.
                 source_ip = db.get_setting(db_path, "source_ip") or None
+                # 응답 없는 장비는 즉시 실패(재시도 낭비 없이 다음 장비로)
+                if not _tcp_precheck(switch["ip"], source_ip=source_ip):
+                    raise ConnectionError(
+                        "TCP-22 도달 불가(응답 없음) — 즉시 실패 처리, 다음 장비 진행")
                 if vendor == "alteon":
                     # Alteon은 메뉴형 CLI(netmiko 미지원) → 전용 paramiko 수집
                     outputs = _alteon_collect(switch, username, password, source_ip=source_ip)
