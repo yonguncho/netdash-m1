@@ -916,6 +916,39 @@ def create_app(demo_mode=None):
             log_event("error", "configs_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/configs/export-all", methods=["GET"])
+    def export_all_configs():
+        """전체 스위치의 '최신' config 백업을 ZIP 한 파일로 다운로드."""
+        try:
+            import io as _io
+            import zipfile as _zip
+            from datetime import datetime as _dt
+            buf = _io.BytesIO()
+            count = 0
+            with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as zf:
+                for sw in db.get_switches(db_path):
+                    backups = db.get_config_backups(db_path, sw["id"], limit=1)
+                    if not backups:
+                        continue
+                    row = db.get_config_backup_content(db_path, backups[0]["id"])
+                    if not row or not row.get("content"):
+                        continue
+                    # 파일명: 이름_IP_백업시각.txt (금지문자 제거)
+                    safe = re.sub(r"[^A-Za-z0-9._-]", "_", "%s_%s" % (sw.get("name") or sw["id"], sw.get("ip") or ""))
+                    fname = "%s_%s.txt" % (safe, (row.get("ts") or "")[:10])
+                    zf.writestr(fname, row["content"])
+                    count += 1
+            if count == 0:
+                return jsonify({"error": "저장된 config 백업이 없습니다. 스위치를 수집하면 자동 백업됩니다."}), 404
+            buf.seek(0)
+            stamp = _dt.now().strftime("%Y%m%d")
+            return Response(buf.read(), mimetype="application/zip",
+                            headers={"Content-Disposition":
+                                     "attachment; filename=netdash_configs_%s.zip" % stamp})
+        except Exception as e:
+            log_event("error", "configs_export_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/configs/<int:backup_id>", methods=["GET"])
     def get_config_content(backup_id):
         """설정 백업 원문 다운로드(txt)."""

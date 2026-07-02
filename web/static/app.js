@@ -1662,6 +1662,14 @@ function loadConfigTab(switchId) {
     .catch(function (e) { console.error(e); pane.innerHTML = "<p style='color:#991b1b'>불러오기 오류</p>"; });
 }
 
+// ─── config 일괄 다운로드(ZIP) ───────────────────────────────────
+(function () {
+  var btn = document.getElementById("btn-configs-export");
+  if (btn) btn.addEventListener("click", function () {
+    window.location = "/api/configs/export-all";
+  });
+})();
+
 // ─── 접근 로그(감사) ─────────────────────────────────────────────
 (function () {
   var btn = document.getElementById("btn-audit");

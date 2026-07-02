@@ -89,6 +89,25 @@ def test_wall_data_api(client):
         assert key in b
 
 
+# ─── config 일괄 다운로드(ZIP) ─────────────────────────────
+def test_configs_export_all(client):
+    import io
+    import zipfile
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    s1 = db.save_switch(dbp, "ZIP-SW1", "10.55.0.1", "cisco_ios")
+    s2 = db.save_switch(dbp, "ZIP-SW2", "10.55.0.2", "cisco_ios")
+    db.save_config_backup(dbp, s1, "hostname ZIP-SW1")
+    db.save_config_backup(dbp, s2, "hostname ZIP-SW2")
+    r = client.get("/api/configs/export-all")
+    assert r.status_code == 200
+    assert "zip" in r.headers.get("Content-Type", "")
+    zf = zipfile.ZipFile(io.BytesIO(r.data))
+    names = zf.namelist()
+    assert any("ZIP-SW1" in n for n in names) and any("ZIP-SW2" in n for n in names)
+    assert b"hostname ZIP-SW1" in zf.read([n for n in names if "ZIP-SW1" in n][0])
+
+
 # ─── UI ─────────────────────────────
 def test_new_ui_elements():
     html = HTML.read_text(encoding="utf-8")
