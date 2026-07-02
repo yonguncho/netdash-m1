@@ -64,8 +64,8 @@ def test_worker_learns_vendor_and_updates_db(temp_db, monkeypatch):
     assert db.get_switch(temp_db, sid)["vendor"] == "cisco_nxos"
 
 
-def test_worker_keeps_known_vendor(temp_db, monkeypatch):
-    """이미 벤더가 지정된 스위치는 detect_vendor=False로 호출(학습 안 함)."""
+def test_worker_always_verifies_vendor(temp_db, monkeypatch):
+    """벤더가 지정돼 있어도 항상 show version으로 실제 OS 검증(detect_vendor=True)."""
     monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
     monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
     sid = db.save_switch(temp_db, "ACC-SW", "10.0.0.8", "cisco")
@@ -85,4 +85,30 @@ def test_worker_keeps_known_vendor(temp_db, monkeypatch):
         if "detect" in seen:
             break
         time.sleep(0.1)
-    assert seen.get("detect") is False
+    assert seen.get("detect") is True
+
+
+def test_worker_corrects_wrong_vendor(temp_db, monkeypatch):
+    """cisco로 잘못 등록된 EXOS 장비 — show version으로 교정되어 DB 갱신.
+
+    (실장비 증상: EXOS인데 cisco 명령 'show interfaces status'가 실행돼 command_failed)
+    """
+    monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    sid = db.save_switch(temp_db, "EXOS-MISREG", "10.0.0.9", "cisco")   # 잘못 등록
+    credentials.save_credential(sid, "admin", "pw")
+
+    def fake_ssh(switch, username, password, vendor, source_ip=None, detect_vendor=False):
+        assert detect_vendor is True
+        # show version에서 ExtremeXOS 판별됐다고 가정 → 실제 OS 반환
+        return ({"status": "", "mac": "", "arp": ""}, "extreme_exos")
+    monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
+
+    collector.init_collector()
+    collector.collect_switch(temp_db, sid, "admin", "pw")
+    import time
+    for _ in range(80):
+        if db.get_switch(temp_db, sid)["vendor"] == "extreme_exos":
+            break
+        time.sleep(0.1)
+    assert db.get_switch(temp_db, sid)["vendor"] == "extreme_exos"

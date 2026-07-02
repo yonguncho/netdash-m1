@@ -293,16 +293,20 @@ def _worker_loop():
                     outputs = _alteon_collect(switch, username, password, source_ip=source_ip)
                     eff_vendor = "alteon"
                 else:
-                    # 벤더 미지정이면 접속 후 show version으로 실제 벤더 학습
+                    # 항상 show version부터 실행해 실제 OS를 확인하고, 그 OS의
+                    # 명령셋으로 수집한다. 등록 벤더가 틀려도(예: EXOS인데 cisco로
+                    # 등록) 자동 교정된다. 판별 실패 시엔 등록 벤더 그대로.
                     outputs, eff_vendor = _ssh_collect(
                         switch, username, password, vendor,
-                        source_ip=source_ip, detect_vendor=is_unknown)
-                # 학습 성공 시 DB 벤더 갱신 + 이번 파싱도 학습된 벤더로
-                if is_unknown and eff_vendor and eff_vendor != raw_vendor:
+                        source_ip=source_ip, detect_vendor=True)
+                # 실제 OS가 등록 벤더와 다르면 DB 교정 + 이번 파싱도 실제 OS로
+                if eff_vendor and eff_vendor != vendor:
                     try:
                         db.update_switch(db_path, switch_id, vendor=eff_vendor)
-                        utils.log_event("info", "vendor_learned",
-                                        switch_id=switch_id, vendor=eff_vendor)
+                        utils.log_event("info",
+                                        "vendor_learned" if is_unknown else "vendor_corrected",
+                                        switch_id=switch_id,
+                                        from_vendor=vendor, vendor=eff_vendor)
                     except Exception as _e:
                         utils.log_event("warning", "vendor_update_failed",
                                         switch_id=switch_id, error=_sanitize_error_msg(str(_e)))

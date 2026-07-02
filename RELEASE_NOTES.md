@@ -1,5 +1,17 @@
 # NetDash 릴리스 노트
 
+## v3.31.0 (2026-07-02) — 항상 show version으로 OS 확인 후 그 OS 명령으로 수집
+
+- **모든 수집에서 `show version`을 먼저 실행해 실제 OS를 확인**하고,
+  그 OS의 명령셋으로 수집합니다(기존엔 벤더 '알 수 없음'일 때만).
+  - **잘못 등록된 벤더 자동 교정**: EXOS 장비가 cisco로 등록돼 있어도
+    (증상: `show interfaces status` command_failed) show version에서 ExtremeXOS를
+    판별해 **EXOS 명령(show ports no-refresh/show fdb/show iparp)으로 전환**하고
+    DB 벤더도 교정합니다. 다음 수집부터는 처음부터 올바른 접속 드라이버 사용.
+  - 판별 실패 시엔 등록된 벤더 그대로 진행(동작 변화 없음).
+- 인식 OS: Cisco IOS/IOS-XE · NX-OS · Arista EOS · ExtremeXOS · JUNOS.
+  (Alteon은 메뉴형 CLI라 벤더를 alteon으로 직접 지정 — show version 경로 미적용)
+
 ## v3.30.2 (2026-07-02) — EXOS 실장비 형식 보강 + 실패 시 다음 장비 즉시 진행
 
 - **ExtremeXOS 포트 상태 파싱 보강.** 실장비 `show ports no-refresh`는 상태가
