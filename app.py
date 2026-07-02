@@ -163,6 +163,12 @@ def create_app(demo_mode=None):
             reachability.start_monitor(db_path)
         except Exception as e:
             log_event("warning", "reachability_start_failed", error=str(e))
+        # 알람 이메일 발송 스레드(설정으로 on/off, 60초 묶음 발송)
+        try:
+            from core import notifier
+            notifier.start_notifier(db_path)
+        except Exception as e:
+            log_event("warning", "notifier_start_failed", error=str(e))
 
     # Load demo data in demo mode
     if config.app.get("demo_mode"):
@@ -671,6 +677,110 @@ def create_app(demo_mode=None):
                             "unacked": db.count_unacked_events(db_path)})
         except Exception as e:
             log_event("error", "alerts_list_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/topology", methods=["GET"])
+    def get_topology():
+        """스위치 간 연결 관계(수집 데이터 기반 추론)."""
+        try:
+            from core import topology
+            return jsonify(topology.build_topology(db_path))
+        except Exception as e:
+            log_event("error", "topology_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/configs/diff", methods=["GET"])
+    def config_diff():
+        """설정 백업 두 개(a=이전, b=이후)의 줄 단위 diff. b 생략 시 a의 직전 백업과 비교."""
+        try:
+            import difflib
+            b_id = request.args.get("b", "")
+            a_id = request.args.get("a", "")
+            if not (a_id.isdigit()):
+                return jsonify({"error": "a required"}), 400
+            newer = db.get_config_backup_content(db_path, int(a_id))
+            if not newer:
+                return jsonify({"error": "not found"}), 404
+            if b_id.isdigit():
+                older = db.get_config_backup_content(db_path, int(b_id))
+            else:
+                # 같은 스위치의 직전 백업
+                backups = db.get_config_backups(db_path, newer["switch_id"], limit=20)
+                prev = [x for x in backups if x["id"] < newer["id"]]
+                older = db.get_config_backup_content(db_path, prev[0]["id"]) if prev else None
+            old_lines = (older.get("content") or "").splitlines() if older else []
+            new_lines = (newer.get("content") or "").splitlines()
+            diff = list(difflib.unified_diff(
+                old_lines, new_lines,
+                fromfile="이전(%s)" % ((older or {}).get("ts", "-")[:16]),
+                tofile="현재(%s)" % (newer.get("ts", "-")[:16]),
+                lineterm="", n=3))
+            return jsonify({"ok": True, "diff": diff,
+                            "same": not diff,
+                            "older_ts": (older or {}).get("ts"),
+                            "newer_ts": newer.get("ts")})
+        except Exception as e:
+            log_event("error", "config_diff_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/settings/email", methods=["GET"])
+    def get_email_settings():
+        """알람 이메일 설정 조회(SMTP 비밀번호는 저장 여부만)."""
+        try:
+            return jsonify({
+                "enabled": db.get_setting(db_path, "email_enabled", "0") == "1",
+                "smtp_host": db.get_setting(db_path, "smtp_host", "") or "",
+                "smtp_port": db.get_setting(db_path, "smtp_port", "25") or "25",
+                "smtp_from": db.get_setting(db_path, "smtp_from", "netdash@localhost") or "",
+                "email_to": db.get_setting(db_path, "email_to", "") or "",
+                "min_sev": db.get_setting(db_path, "email_min_sev", "warning") or "warning",
+                "has_auth": bool(db.get_setting(db_path, "smtp_auth_blob", "")),
+            })
+        except Exception as e:
+            log_event("error", "get_email_settings_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/settings/email", methods=["POST"])
+    @rate_limit("set_email", max_requests=20, window_seconds=60)
+    def set_email_settings():
+        """알람 이메일 설정 저장. SMTP 인증정보는 DPAPI 암호화 저장(입력 시에만 갱신)."""
+        try:
+            data = request.get_json() or {}
+            db.set_setting(db_path, "email_enabled", "1" if data.get("enabled") else "0")
+            db.set_setting(db_path, "smtp_host", (data.get("smtp_host") or "").strip()[:200])
+            port_raw = str(data.get("smtp_port") or "25").strip()
+            db.set_setting(db_path, "smtp_port", port_raw if port_raw.isdigit() else "25")
+            db.set_setting(db_path, "smtp_from", (data.get("smtp_from") or "netdash@localhost").strip()[:200])
+            db.set_setting(db_path, "email_to", (data.get("email_to") or "").strip()[:500])
+            sev = data.get("min_sev") or "warning"
+            db.set_setting(db_path, "email_min_sev", sev if sev in ("warning", "info") else "warning")
+            # 인증(선택): 입력됐을 때만 갱신
+            user = (data.get("smtp_user") or "").strip()
+            pw = data.get("smtp_pass") or ""
+            if user and pw:
+                blob = credentials.encrypt_text("%s|%s" % (user, pw))
+                if blob:
+                    db.set_setting(db_path, "smtp_auth_blob", blob)
+            elif data.get("clear_auth"):
+                db.set_setting(db_path, "smtp_auth_blob", "")
+            log_event("info", "email_settings_saved")
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "set_email_settings_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/settings/email/test", methods=["POST"])
+    @rate_limit("email_test", max_requests=5, window_seconds=60)
+    def test_email():
+        """테스트 메일 즉시 발송."""
+        try:
+            from core import notifier
+            ok = notifier.send_email(db_path, "[NetDash] 테스트 메일",
+                                     "NetDash 알람 이메일 설정이 정상입니다.")
+            return jsonify({"ok": ok,
+                            "detail": "발송 성공" if ok else "발송 실패 — SMTP 서버/수신 주소를 확인하세요"})
+        except Exception as e:
+            log_event("error", "email_test_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/<int:switch_id>/configs", methods=["GET"])

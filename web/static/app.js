@@ -85,8 +85,38 @@ function _applyLocFilter(list, inputId) {
       var info = document.getElementById("ac-fac-info");
       if (info) info.textContent = (d.facility_bands || 0) + "개 대역이 자동 스캔 대상으로 기억되어 있습니다. " +
         "(설비 탭에서 '대역 수집'을 한 번 실행한 대역이 자동 등록. 스위치에 저장된 계정 필요)";
+      // 이메일 설정 로드
+      fetch("/api/settings/email").then(function (r) { return r.json(); }).then(function (e) {
+        _setChk("em-enabled", e.enabled);
+        _setVal("em-host", e.smtp_host || "");
+        _setVal("em-port", e.smtp_port || "25");
+        _setVal("em-from", e.smtp_from || "");
+        _setVal("em-to", e.email_to || "");
+        _setVal("em-sev", e.min_sev || "warning");
+        _setVal("em-user", ""); _setVal("em-pass", "");
+        var tr = document.getElementById("em-test-result");
+        if (tr) tr.textContent = e.has_auth ? "SMTP 인증정보 저장됨(변경 시에만 재입력)" : "";
+      }).catch(function () {});
       openModal("modal-auto-collect");
     }).catch(function (e) { console.error(e); });
+  });
+  var emTest = document.getElementById("btn-em-test");
+  if (emTest) emTest.addEventListener("click", function () {
+    var tr = document.getElementById("em-test-result");
+    if (tr) tr.textContent = "설정 저장 후 테스트 중...";
+    // 현재 입력값을 먼저 저장한 뒤 테스트(저장 안 된 값으로 테스트되는 혼동 방지)
+    fetch("/api/settings/email", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        enabled: _chk("em-enabled"), smtp_host: _val("em-host", ""), smtp_port: _val("em-port", "25"),
+        smtp_from: _val("em-from", ""), email_to: _val("em-to", ""), min_sev: _val("em-sev", "warning"),
+        smtp_user: _val("em-user", ""), smtp_pass: _val("em-pass", ""),
+      }),
+    }).then(function () {
+      return fetch("/api/settings/email/test", { method: "POST", headers: {"Content-Type": "application/json"}, body: "{}" });
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (tr) { tr.textContent = res.detail || (res.ok ? "발송 성공" : "발송 실패"); tr.style.color = res.ok ? "#15803d" : "#991b1b"; }
+    }).catch(function () { if (tr) tr.textContent = "테스트 오류"; });
   });
   var save = document.getElementById("btn-ac-save");
   if (save) save.addEventListener("click", function () {
@@ -98,11 +128,20 @@ function _applyLocFilter(list, inputId) {
       reach_enabled: _chk("ac-reach-enabled"),
       retention_days: _val("ac-retention", "90"),
     };
+    var emailBody = {
+      enabled: _chk("em-enabled"), smtp_host: _val("em-host", ""), smtp_port: _val("em-port", "25"),
+      smtp_from: _val("em-from", ""), email_to: _val("em-to", ""), min_sev: _val("em-sev", "warning"),
+      smtp_user: _val("em-user", ""), smtp_pass: _val("em-pass", ""),
+    };
     fetch("/api/settings/auto_collect", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function (res) {
-      if (res.ok) { closeModal("modal-auto-collect"); alert("자동화 설정이 저장되었습니다."); }
-      else alert(res.error || "저장 실패");
+      if (!res.ok) { alert(res.error || "저장 실패"); return null; }
+      return fetch("/api/settings/email", {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(emailBody),
+      });
+    }).then(function (r) {
+      if (r) { closeModal("modal-auto-collect"); alert("자동화 설정이 저장되었습니다."); }
     }).catch(function (e) { console.error(e); alert("서버 오류"); });
   });
 })();
@@ -149,6 +188,7 @@ document.querySelectorAll(".tab-nav__btn").forEach(btn => {
     if (btn.dataset.tab === "firewall") loadFirewalls();
     if (btn.dataset.tab === "facility") loadFacility();
     if (btn.dataset.tab === "room") { loadFirewalls(); renderRoom(_switches); }
+    if (btn.dataset.tab === "topology") loadTopology();
   });
 });
 
@@ -159,6 +199,7 @@ document.querySelectorAll(".detail-tab").forEach(btn => {
     document.querySelectorAll(".dtab-pane").forEach(p => p.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById("dtab-" + btn.dataset.dtab).classList.add("active");
+    if (btn.dataset.dtab === "config" && _currentSwitchId) loadConfigTab(_currentSwitchId);
   });
 });
 
@@ -1461,6 +1502,163 @@ function doSearch() {
       openModal("modal-search-result");
     })
     .catch(function(e) { console.error(e); alert("검색 오류"); });
+}
+
+// ─── 토폴로지(스위치 연결 관계 SVG) ──────────────────────────────
+function loadTopology() {
+  var host = document.getElementById("topology-canvas");
+  if (host) host.innerHTML = "<p style='color:#94a3b8;padding:20px'>토폴로지 계산 중...</p>";
+  fetch("/api/topology").then(function (r) { return r.json(); }).then(function (data) {
+    renderTopology(data.nodes || [], data.links || []);
+  }).catch(function (e) { console.error("topology:", e); });
+}
+
+function renderTopology(nodes, links) {
+  var host = document.getElementById("topology-canvas");
+  if (!host) return;
+  if (!nodes.length) {
+    host.innerHTML = "<p style='color:#94a3b8;padding:20px'>표시할 스위치가 없습니다. 스위치를 수집하면 연결 관계가 그려집니다.</p>";
+    return;
+  }
+  // 계층(depth)별 그룹. depth 미상(링크 미발견)은 마지막 행
+  var levels = {};
+  var maxDepth = 0;
+  nodes.forEach(function (n) {
+    var d = (n.depth === null || n.depth === undefined) ? -1 : n.depth;
+    (levels[d] = levels[d] || []).push(n);
+    if (d > maxDepth) maxDepth = d;
+  });
+  var orphan = levels[-1] || [];
+  delete levels[-1];
+  if (orphan.length) levels[maxDepth + 1] = (levels[maxDepth + 1] || []).concat(orphan);
+
+  var NODE_W = 150, NODE_H = 44, GAP_X = 30, GAP_Y = 90;
+  var pos = {};
+  var maxCols = 1;
+  Object.keys(levels).forEach(function (d) { maxCols = Math.max(maxCols, levels[d].length); });
+  var width = Math.max(900, maxCols * (NODE_W + GAP_X) + 60);
+  var rows = Object.keys(levels).map(Number).sort(function (a, b) { return a - b; });
+  var height = rows.length * (NODE_H + GAP_Y) + 60;
+
+  rows.forEach(function (d, ri) {
+    var row = levels[d];
+    var totalW = row.length * NODE_W + (row.length - 1) * GAP_X;
+    var x0 = (width - totalW) / 2;
+    row.forEach(function (n, i) {
+      pos[n.id] = { x: x0 + i * (NODE_W + GAP_X), y: 30 + ri * (NODE_H + GAP_Y) };
+    });
+  });
+
+  function statusColor(n) {
+    if (n.alert === "critical") return "#ef4444";
+    if (n.alert === "warning") return "#f59e0b";
+    if (n.status === "done") return "#22c55e";
+    if (n.status === "failed") return "#ef4444";
+    return "#64748b";
+  }
+
+  var svg = ["<svg xmlns='http://www.w3.org/2000/svg' width='" + width + "' height='" + height + "'>"];
+  // 링크(먼저 그려 노드 아래로)
+  links.forEach(function (l) {
+    var a = pos[l.a], b = pos[l.b];
+    if (!a || !b) return;
+    var x1 = a.x + NODE_W / 2, y1 = a.y + NODE_H / 2;
+    var x2 = b.x + NODE_W / 2, y2 = b.y + NODE_H / 2;
+    var dash = l.mutual ? "" : " stroke-dasharray='6,4'";
+    svg.push("<line x1='" + x1 + "' y1='" + y1 + "' x2='" + x2 + "' y2='" + y2 +
+      "' stroke='#475569' stroke-width='2'" + dash + "/>");
+    // 포트 라벨(각 끝 30% 지점)
+    function lbl(px, py, text) {
+      if (!text) return;
+      svg.push("<text x='" + px + "' y='" + (py - 3) + "' fill='#94a3b8' font-size='9' text-anchor='middle'>" +
+        escHtml(String(text)) + "</text>");
+    }
+    lbl(x1 + (x2 - x1) * 0.25, y1 + (y2 - y1) * 0.25, l.a_port);
+    lbl(x1 + (x2 - x1) * 0.75, y1 + (y2 - y1) * 0.75, l.b_port);
+  });
+  // 노드
+  nodes.forEach(function (n) {
+    var p = pos[n.id];
+    if (!p) return;
+    svg.push("<g class='topo-node' data-swid='" + n.id + "' style='cursor:pointer'>");
+    svg.push("<rect x='" + p.x + "' y='" + p.y + "' width='" + NODE_W + "' height='" + NODE_H +
+      "' rx='6' fill='#1e293b' stroke='" + statusColor(n) + "' stroke-width='2'/>");
+    svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 18) +
+      "' fill='#e2e8f0' font-size='11' font-weight='700' text-anchor='middle'>" +
+      escHtml((n.name || "").slice(0, 22)) + "</text>");
+    svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 33) +
+      "' fill='#94a3b8' font-size='10' text-anchor='middle'>" + escHtml(n.ip || "") + "</text>");
+    svg.push("</g>");
+  });
+  svg.push("</svg>");
+  host.innerHTML = svg.join("");
+  // 노드 클릭 → 상세보기
+  host.querySelectorAll(".topo-node").forEach(function (g) {
+    g.addEventListener("click", function () {
+      var id = parseInt(g.getAttribute("data-swid"), 10);
+      var sw = (_switches || []).find(function (s) { return s.id === id; });
+      if (sw) openDetailPanel(sw);
+    });
+  });
+}
+
+(function () {
+  var b = document.getElementById("btn-topo-refresh");
+  if (b) b.addEventListener("click", loadTopology);
+})();
+
+// ─── 설정(config) 백업/diff 탭 ───────────────────────────────────
+function loadConfigTab(switchId) {
+  var pane = document.getElementById("dtab-config");
+  if (!pane) return;
+  pane.innerHTML = "<p style='color:#64748b'>불러오는 중...</p>";
+  fetch("/api/switches/" + switchId + "/configs")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var backups = data.backups || [];
+      if (!backups.length) {
+        pane.innerHTML = "<p style='color:#64748b'>저장된 설정 백업이 없습니다. 이 스위치를 수집하면 running-config가 자동 백업됩니다(변경 시에만 새 버전 저장).</p>";
+        return;
+      }
+      var opts = backups.map(function (b) {
+        return "<option value='" + b.id + "'>" + escHtml((b.ts || "").replace("T", " ").slice(0, 16)) + "</option>";
+      }).join("");
+      pane.innerHTML =
+        "<div style='display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap'>" +
+        "<label style='font-size:12px'>버전:</label><select id='cfg-sel-a' style='font-size:12px'>" + opts + "</select>" +
+        "<button id='btn-cfg-diff' class='btn btn--primary' style='font-size:12px;padding:4px 10px'>직전 버전과 비교</button>" +
+        "<a id='btn-cfg-download' class='btn btn--secondary' style='font-size:12px;padding:4px 10px' target='_blank'>원문 다운로드</a>" +
+        "<span style='font-size:11px;color:#64748b'>백업 " + backups.length + "개(변경 시에만 저장)</span>" +
+        "</div><div id='cfg-diff-body' style='font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;" +
+        "background:#0f172a;color:#e2e8f0;border-radius:6px;padding:12px;max-height:55vh;overflow:auto'>버전을 선택하고 '직전 버전과 비교'를 누르세요.</div>";
+      function _syncDl() {
+        var sel = document.getElementById("cfg-sel-a");
+        var dl = document.getElementById("btn-cfg-download");
+        if (sel && dl) dl.href = "/api/configs/" + sel.value;
+      }
+      _syncDl();
+      document.getElementById("cfg-sel-a").addEventListener("change", _syncDl);
+      document.getElementById("btn-cfg-diff").addEventListener("click", function () {
+        var aid = document.getElementById("cfg-sel-a").value;
+        var body = document.getElementById("cfg-diff-body");
+        body.textContent = "비교 중...";
+        fetch("/api/configs/diff?a=" + encodeURIComponent(aid))
+          .then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (!res.ok) { body.textContent = res.error || "비교 실패"; return; }
+            if (res.same) { body.textContent = "직전 버전과 차이가 없습니다."; return; }
+            if (!res.older_ts) { body.textContent = "이전 백업이 없습니다(첫 백업)."; return; }
+            body.innerHTML = (res.diff || []).map(function (line) {
+              var color = line.charAt(0) === "+" ? "#4ade80"
+                        : line.charAt(0) === "-" ? "#f87171"
+                        : line.slice(0, 2) === "@@" ? "#60a5fa" : "#94a3b8";
+              return "<span style='color:" + color + "'>" + escHtml(line) + "</span>";
+            }).join("\n");
+          })
+          .catch(function () { body.textContent = "비교 오류"; });
+      });
+    })
+    .catch(function (e) { console.error(e); pane.innerHTML = "<p style='color:#991b1b'>불러오기 오류</p>"; });
 }
 
 // ─── 알람(변경 이벤트) ───────────────────────────────────────────

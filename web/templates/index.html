@@ -75,6 +75,7 @@
     <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
     <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
     <button class="tab-nav__btn" data-tab="vlan">VLAN</button>
+    <button class="tab-nav__btn" data-tab="topology">토폴로지</button>
   </nav>
 
   <!-- 탭 컨텐츠 -->
@@ -208,6 +209,21 @@
       <p style="margin:4px 0 10px;font-size:12px;color:#64748b">VLAN을 클릭하면 해당 VLAN이 있는 스위치(호스트네임·IP·MAC 수)를 펼쳐 볼 수 있습니다.</p>
       <div id="vlan-accordion"></div>
     </div>
+
+    <!-- 토폴로지 탭 (스위치 간 연결 관계 자동 추론) -->
+    <div id="tab-topology" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">네트워크 토폴로지</span>
+        <div class="pane-toolbar__actions">
+          <button id="btn-topo-refresh" class="btn btn--secondary" style="font-size:12px">↻ 새로고침</button>
+        </div>
+      </div>
+      <p style="margin:4px 0 10px;font-size:12px;color:#64748b">
+        수집된 ARP·MAC 테이블로 스위치 간 연결을 자동 추론합니다(장비 추가 접근 없음).
+        실선=양방향 확인 링크, 점선=한쪽만 관측. 노드 클릭=상세보기. 스위치들을 수집할수록 정확해집니다.
+      </p>
+      <div id="topology-canvas" style="overflow:auto;background:#0f172a;border-radius:8px;min-height:480px"></div>
+    </div>
   </main>
 
   <!-- 계정 입력 모달 -->
@@ -242,6 +258,31 @@
         </label>
         <label style="margin-top:8px">알람 보존 기간 (일, 지난 이벤트 자동 정리)</label>
         <input id="ac-retention" type="number" min="7" max="365" style="width:100px">
+        <hr style="margin:12px 0;border:none;border-top:1px solid #e5e7eb">
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
+          <input id="em-enabled" type="checkbox"> 알람 이메일 발송 (60초 묶음, 내부 SMTP 릴레이)
+        </label>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <div style="flex:2"><label>SMTP 서버</label><input id="em-host" type="text" placeholder="10.0.0.25"></div>
+          <div style="flex:1"><label>포트</label><input id="em-port" type="text" placeholder="25"></div>
+        </div>
+        <label style="margin-top:6px">발신 주소</label>
+        <input id="em-from" type="text" placeholder="netdash@company.local">
+        <label style="margin-top:6px">수신 주소 (쉼표로 여러 명)</label>
+        <input id="em-to" type="text" placeholder="admin@company.local, noc@company.local">
+        <div style="display:flex;gap:8px;margin-top:6px;align-items:flex-end">
+          <div style="flex:1"><label>알림 수준</label>
+            <select id="em-sev"><option value="warning">경고 이상만(권장)</option><option value="info">모든 이벤트</option></select>
+          </div>
+          <button id="btn-em-test" class="btn btn--secondary" style="font-size:12px">테스트 발송</button>
+        </div>
+        <p style="margin-top:4px;color:#64748b;font-size:12px">
+          인증이 필요한 릴레이면 아래에 입력(암호화 저장, 비워두면 기존 유지):</p>
+        <div style="display:flex;gap:8px">
+          <input id="em-user" type="text" placeholder="SMTP 계정(선택)" autocomplete="off" style="flex:1">
+          <input id="em-pass" type="password" placeholder="비밀번호(선택)" autocomplete="new-password" style="flex:1">
+        </div>
+        <div id="em-test-result" style="margin-top:6px;font-size:12px"></div>
       </div>
       <div class="modal__footer">
         <button id="btn-ac-save" class="btn btn--primary">저장</button>
@@ -436,12 +477,14 @@
       <button class="detail-tab" data-dtab="macs">MAC 테이블</button>
       <button class="detail-tab" data-dtab="arps">ARP</button>
       <button class="detail-tab" data-dtab="syslog">시스템 로그</button>
+      <button class="detail-tab" data-dtab="config">설정(config)</button>
     </div>
     <div class="detail-panel__body">
       <div id="dtab-ports" class="dtab-pane active"></div>
       <div id="dtab-macs" class="dtab-pane"></div>
       <div id="dtab-arps" class="dtab-pane"></div>
       <div id="dtab-syslog" class="dtab-pane"></div>
+      <div id="dtab-config" class="dtab-pane"></div>
     </div>
   </div>
 

@@ -666,7 +666,7 @@ def save_port_channels(db_path, snapshot_id, switch_id, port_channels):
 
 def save_device_event(db_path, kind, severity="info", subnet=None, ip=None,
                       mac=None, switch_id=None, label=None, message=None):
-    """장비 변경/알람 이벤트 1건 기록."""
+    """장비 변경/알람 이벤트 1건 기록(+이메일 알림 큐 전달)."""
     with _db_lock:
         with get_db(db_path) as conn:
             try:
@@ -677,6 +677,14 @@ def save_device_event(db_path, kind, severity="info", subnet=None, ip=None,
                     (kind, severity, subnet, ip, mac, switch_id, label, message))
             except Exception as e:
                 log_event("warning", "save_device_event_skipped", error=str(e))
+                return
+    # 이메일 알림 큐(발송 여부는 notifier가 설정 확인) — 지연 import(순환 방지)
+    try:
+        from . import notifier
+        notifier.notify({"kind": kind, "severity": severity, "subnet": subnet,
+                         "ip": ip, "label": label, "message": message})
+    except Exception:
+        pass
 
 
 def list_device_events(db_path, limit=200, only_unack=False, kind=None, days=None):
