@@ -81,6 +81,67 @@ def test_parse_ports_no_refresh_letter_states():
     assert by["1:16"]["status"] == "disabled"   # 링크 상태 없이 D로 끝
 
 
+def test_run_with_timeout():
+    """하드 타임아웃: 초과 시 TimeoutError, 정상/예외는 그대로 전달."""
+    import time
+    from core import collector
+    # 정상 반환
+    assert collector._run_with_timeout(lambda: 42, 5) == 42
+    # 원예외 전달
+    import pytest
+    with pytest.raises(ValueError):
+        collector._run_with_timeout(lambda: (_ for _ in ()).throw(ValueError("x")), 5)
+    # 제한 초과 → TimeoutError
+    with pytest.raises(TimeoutError):
+        collector._run_with_timeout(lambda: time.sleep(3), 0.3)
+
+
+def test_worker_hard_timeout_moves_to_next(temp_db, monkeypatch):
+    """수집이 무한정 걸려도 하드 타임아웃으로 실패 처리 → 다음 스위치 진행.
+
+    실장비 증상: EXOS 수집이 '수집중' 고착 + 다음 스위치 미진행(큐 정지).
+    """
+    import time
+    import tempfile
+    from core import collector, credentials, db as _db
+
+    class _Cfg:
+        app = {"demo_mode": False}
+        collector = {"hard_timeout": 1}   # 1초 제한
+        def get_max_concurrent(self):
+            return 1
+        def get_raw_outputs_path(self):
+            return tempfile.mkdtemp(prefix="ndraw_")
+    monkeypatch.setattr(collector, "get_config", lambda *a, **k: _Cfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    monkeypatch.setattr(collector, "_probe_os", lambda *a, **k: None)
+
+    hung = _db.save_switch(temp_db, "HUNG-EXOS", "10.98.0.1", "extreme")
+    alive = _db.save_switch(temp_db, "NEXT-SW", "10.98.0.2", "cisco")
+    credentials.save_credential(hung, "u", "p")
+    credentials.save_credential(alive, "u", "p")
+
+    def fake_ssh(switch, username, password, vendor, source_ip=None,
+                 detect_vendor=False, max_retries=3):
+        if switch["ip"] == "10.98.0.1":
+            time.sleep(30)   # 무한 대기 시뮬레이션
+        return ({"status": "", "mac": "", "arp": ""}, vendor)
+    monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
+
+    collector.init_collector()
+    collector.collect_switch(temp_db, hung, "u", "p")
+    collector.collect_switch(temp_db, alive, "u", "p")
+
+    for _ in range(120):
+        s1 = _db.get_switch(temp_db, hung)["status"]
+        s2 = _db.get_switch(temp_db, alive)["status"]
+        if s1 == "failed" and s2 == "done":
+            break
+        time.sleep(0.1)
+    assert _db.get_switch(temp_db, hung)["status"] == "failed"   # 고착 대신 실패
+    assert _db.get_switch(temp_db, alive)["status"] == "done"     # 다음 장비 진행
+
+
 def test_worker_skips_to_next_on_unreachable(temp_db, monkeypatch):
     """수집 실패(도달 불가) 시 즉시 실패 처리하고 다음 스위치 수집 진행."""
     from core import collector, credentials, db as _db
@@ -88,6 +149,7 @@ def test_worker_skips_to_next_on_unreachable(temp_db, monkeypatch):
     import tempfile
     class _Cfg:
         app = {"demo_mode": False}
+        collector = {"hard_timeout": 5}
         def get_max_concurrent(self):
             return 1  # 워커 1개 → 순차 처리로 '다음 장비 진행' 검증
         def get_raw_outputs_path(self):

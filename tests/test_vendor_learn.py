@@ -66,6 +66,7 @@ def test_commands_for_falls_back_to_parser():
 class _FakeCfg:
     """워커가 데모 분기를 타지 않도록 non-demo 설정 스텁(전역 싱글턴 미변경)."""
     app = {"demo_mode": False}
+    collector = {"hard_timeout": 5}
 
     def get_max_concurrent(self):
         return 2
@@ -90,10 +91,11 @@ def test_worker_learns_vendor_and_updates_db(temp_db, monkeypatch):
 
     collector.init_collector()
     collector.collect_switch(temp_db, sid, "admin", "pw")
-    # 워커가 처리할 때까지 대기
+    # 워커가 DB 기록까지 마치도록 종료 상태까지 대기(임시폴더 삭제 경합 방지)
     import time
-    for _ in range(80):
-        if db.get_switch(temp_db, sid)["vendor"] == "cisco_nxos":
+    for _ in range(100):
+        sw = db.get_switch(temp_db, sid)
+        if sw["status"] in ("done", "failed") and sw["vendor"] == "cisco_nxos":
             break
         time.sleep(0.1)
     assert db.get_switch(temp_db, sid)["vendor"] == "cisco_nxos"
@@ -116,8 +118,9 @@ def test_worker_always_verifies_vendor(temp_db, monkeypatch):
     collector.init_collector()
     collector.collect_switch(temp_db, sid, "admin", "pw")
     import time
-    for _ in range(80):
-        if "detect" in seen:
+    # 워커가 DB 기록까지 마치도록 종료 상태까지 대기(임시폴더 삭제 경합 방지)
+    for _ in range(100):
+        if db.get_switch(temp_db, sid)["status"] in ("done", "failed"):
             break
         time.sleep(0.1)
     assert seen.get("detect") is True
@@ -181,8 +184,9 @@ def test_worker_corrects_wrong_vendor(temp_db, monkeypatch):
     collector.init_collector()
     collector.collect_switch(temp_db, sid, "admin", "pw")
     import time
-    for _ in range(80):
-        if db.get_switch(temp_db, sid)["vendor"] == "extreme_exos":
+    for _ in range(100):
+        sw = db.get_switch(temp_db, sid)
+        if sw["status"] in ("done", "failed") and sw["vendor"] == "extreme_exos":
             break
         time.sleep(0.1)
     assert db.get_switch(temp_db, sid)["vendor"] == "extreme_exos"

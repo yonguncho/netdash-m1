@@ -71,6 +71,32 @@ class _DriverMismatchError(RuntimeError):
     """netmiko 드라이버-장비 불일치(프롬프트 매칭 실패). 재시도 무의미 → 즉시 폴백."""
 
 
+def _run_with_timeout(fn, timeout_sec, *args, **kwargs):
+    """장비당 수집 하드 타임아웃 — 어떤 이유로든(SSH 무한대기 등) 제한시간을
+    넘기면 강제 실패 처리해 워커가 다음 장비로 진행하게 한다.
+
+    별도 데몬 스레드에서 fn을 실행하고 join(timeout). 초과 시 TimeoutError.
+    (버려진 스레드는 데몬이라 앱 동작에 영향 없음 — '수집중' 영구 고착 방지가 우선)
+    """
+    result = {}
+
+    def _target():
+        try:
+            result["v"] = fn(*args, **kwargs)
+        except BaseException as e:  # noqa: BLE001 — 원예외 그대로 전달
+            result["e"] = e
+
+    th = threading.Thread(target=_target, daemon=True)
+    th.start()
+    th.join(timeout_sec)
+    if th.is_alive():
+        raise TimeoutError(
+            "수집 제한시간(%d초) 초과 — 강제 종료, 다음 장비 진행" % timeout_sec)
+    if "e" in result:
+        raise result["e"]
+    return result.get("v")
+
+
 def _tcp_precheck(ip, port=22, timeout=4, source_ip=None):
     """SSH 시도 전 TCP 도달성 사전 확인.
 
@@ -351,16 +377,22 @@ def _worker_loop():
                 if not _tcp_precheck(switch["ip"], source_ip=source_ip):
                     raise ConnectionError(
                         "TCP-22 도달 불가(응답 없음) — 즉시 실패 처리, 다음 장비 진행")
+                # 장비당 하드 타임아웃(기본 480초, config collector.hard_timeout).
+                # SSH 무한대기·명령 타임아웃 연쇄로 '수집중' 고착 → 큐 정지 방지.
+                hard_to = int(config.collector.get("hard_timeout", 480) or 480)
                 if vendor == "alteon":
                     # Alteon은 메뉴형 CLI(netmiko 미지원) → 전용 paramiko 수집
-                    outputs = _alteon_collect(switch, username, password, source_ip=source_ip)
+                    outputs = _run_with_timeout(
+                        _alteon_collect, hard_to,
+                        switch, username, password, source_ip=source_ip)
                     eff_vendor = "alteon"
                 else:
                     # 항상 show version부터 실행해 실제 OS를 확인하고, 그 OS의
                     # 명령셋으로 수집한다. 등록 벤더가 틀려도(예: EXOS인데 cisco로
                     # 등록) 자동 교정된다. 판별 실패 시엔 등록 벤더 그대로.
                     try:
-                        outputs, eff_vendor = _ssh_collect(
+                        outputs, eff_vendor = _run_with_timeout(
+                            _ssh_collect, hard_to,
                             switch, username, password, vendor,
                             source_ip=source_ip, detect_vendor=True)
                     except Exception as first_err:
@@ -373,7 +405,8 @@ def _worker_loop():
                         utils.log_event("info", "vendor_probe_retry",
                                         switch_id=switch_id, probed=probed,
                                         first_error=_sanitize_error_msg(str(first_err)))
-                        outputs, eff_vendor = _ssh_collect(
+                        outputs, eff_vendor = _run_with_timeout(
+                            _ssh_collect, hard_to,
                             switch, username, password, probed,
                             source_ip=source_ip, detect_vendor=False, max_retries=1)
                         eff_vendor = probed
@@ -605,15 +638,23 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 # 명령별 개별 예외 처리: 한 명령이 실패(미지원/타임아웃)해도 나머지는 수집.
                 # (예: EXOS의 특정 show 명령이 없어도 전체 수집이 실패하지 않도록)
                 cmd_errors = 0
+                cmd_success = 0
                 for key, command in commands.items():
                     try:
                         outputs[key] = conn.send_command(command, read_timeout=read_timeout)
+                        cmd_success += 1
                         utils.log_event("debug", "command_executed", command=command)
                     except Exception as _ce:
                         outputs[key] = ""
                         cmd_errors += 1
                         utils.log_event("warning", "command_failed", switch=switch["name"],
                                         command=command, error=_sanitize_error_msg(str(_ce)))
+                        # 성공한 명령이 하나도 없는데 2연속 실패 = 드라이버/명령셋
+                        # 불일치 확정 → 남은 명령의 타임아웃 연쇄(수 분)를 낭비하지
+                        # 않고 조기 중단(워커가 폴백/실패 처리 후 다음 장비 진행).
+                        if cmd_success == 0 and cmd_errors >= 2:
+                            raise _DriverMismatchError(
+                                "초반 명령 연속 실패(%d) — 명령셋 불일치 조기 중단" % cmd_errors)
                 # 모든 명령이 실패(응답 전무)면 드라이버/명령셋 불일치 → 재시도 없이 폴백
                 if commands and cmd_errors == len(commands):
                     raise _DriverMismatchError("all collection commands failed")
