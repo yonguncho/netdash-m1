@@ -380,6 +380,7 @@ def init_schema(db_path):
                 ("note", "TEXT"),
                 ("os_version", "TEXT"),
                 ("model", "TEXT"),
+                ("last_error", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")
@@ -1152,7 +1153,7 @@ def get_switch(db_path, switch_id):
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, name, ip, hostname, vendor, model, os_version, location, status, alert, note, last_collected FROM switches WHERE id = ?",
+            "SELECT id, name, ip, hostname, vendor, model, os_version, location, status, alert, note, last_error, last_collected FROM switches WHERE id = ?",
             (switch_id,)
         )
         row = cursor.fetchone()
@@ -1176,14 +1177,27 @@ def latest_snapshot_id(db_path, switch_id):
 
 
 def set_switch_status(db_path, switch_id, status, error=None):
+    """상태 갱신 + 실패 사유 저장(실패 시 last_error 기록, 성공/수집중이면 비움).
+
+    이전엔 error 인자를 받고도 버려서 실패 원인을 화면에서 볼 수 없었다.
+    """
     utils.log_event("info", "set_switch_status", switch_id=switch_id, status=status)
     with _db_lock:
         with get_db(db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE switches SET status = ? WHERE id = ?",
-                (status, switch_id)
-            )
+            try:
+                if status == "failed":
+                    cursor.execute(
+                        "UPDATE switches SET status = ?, last_error = ? WHERE id = ?",
+                        (status, (str(error) if error else "")[:300], switch_id))
+                else:
+                    cursor.execute(
+                        "UPDATE switches SET status = ?, last_error = NULL WHERE id = ?",
+                        (status, switch_id))
+            except Exception:
+                # 구버전 DB에 last_error 컬럼이 없으면 상태만 갱신
+                cursor.execute(
+                    "UPDATE switches SET status = ? WHERE id = ?", (status, switch_id))
 
 
 def update_switch_status(db_path, switch_id, status, error=None):

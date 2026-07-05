@@ -612,6 +612,10 @@ function swCardHTML(sw, withCheck) {
     (sw.tps_location ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" : "") +
     (sw.location ? "<span style='font-size:10px'>" + escHtml(sw.location) + "</span>" : "") +
     (sw.note ? "<span style='font-size:10px;color:#9a3412'>📝 " + escHtml(sw.note) + "</span>" : "") +
+    (sw.status === "failed" && sw.last_error
+      ? "<span style='font-size:10px;color:#991b1b' title='" + escHtml(sw.last_error) + "'>⚠ " +
+        escHtml(sw.last_error.slice(0, 40)) + (sw.last_error.length > 40 ? "…" : "") + "</span>"
+      : "") +
     "</div>" +
     "<div class='sw-card__status'>" +
     "<span class='dot " + dotClass + "'></span>" +
@@ -656,7 +660,11 @@ function renderSwitchTable(switches) {
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(sw.vendor || "-") + "</td><td>" +
       mv + "</td><td>" +
       locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
-      escHtml(sw.status) + "</span></td><td>" +
+      escHtml(sw.status) + "</span>" +
+      (sw.status === "failed" && sw.last_error
+        ? "<div style='font-size:11px;color:#991b1b;max-width:260px'>" + escHtml(sw.last_error) + "</div>"
+        : "") +
+      "</td><td>" +
       (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "-") +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +

@@ -71,6 +71,26 @@ class _DriverMismatchError(RuntimeError):
     """netmiko 드라이버-장비 불일치(프롬프트 매칭 실패). 재시도 무의미 → 즉시 폴백."""
 
 
+def _friendly_fail_reason(msg):
+    """수집 실패 원인을 실행 가능한 한국어 안내로 변환(원문 뒤에 병기)."""
+    low = (msg or "").lower()
+    if "도달 불가" in (msg or "") or "tcp-22" in low:
+        return "장비 응답 없음(TCP-22 도달 불가) — 전원/케이블/방화벽 확인. " + msg
+    if "수집 제한시간" in (msg or "") or "timeouterror" in low:
+        return "수집 제한시간 초과(장비 응답 지연/세션 멈춤). " + msg
+    if "authentication" in low or "auth" in low and "fail" in low:
+        return "인증 실패 — 계정/비밀번호 확인. " + msg
+    if "pattern not detected" in low or "드라이버 불일치" in (msg or "") or "명령셋 불일치" in (msg or ""):
+        return "장비 OS와 명령/드라이버 불일치 — 벤더 지정 확인(자동 교정 시도됨). " + msg
+    if "no credentials" in low:
+        return "저장된 계정 없음 — 계정 입력 또는 '계정 저장' 후 재시도. " + msg
+    if "timed out" in low or "timeout" in low:
+        return "연결/응답 시간 초과 — 네트워크 경로/출발지 IP 확인. " + msg
+    if "incompatible ssh" in low or "kex" in low or "no acceptable" in low:
+        return "SSH 알고리즘 협상 실패(구형 장비) — 재시도 권장. " + msg
+    return msg
+
+
 def _run_with_timeout(fn, timeout_sec, *args, **kwargs):
     """장비당 수집 하드 타임아웃 — 어떤 이유로든(SSH 무한대기 등) 제한시간을
     넘기면 강제 실패 처리해 워커가 다음 장비로 진행하게 한다.
@@ -505,7 +525,8 @@ def _worker_loop():
             # Sanitize error messages to prevent credential/path exposure in logs (security fix: CVE-style issue)
             sanitized_error = _sanitize_error_msg(str(e))
             utils.log_event("error", "collect_error", switch_id=switch_id, error_type=type(e).__name__, error=sanitized_error)
-            db.set_switch_status(db_path, switch_id, "failed", error=sanitized_error)
+            db.set_switch_status(db_path, switch_id, "failed",
+                                 error=_friendly_fail_reason(sanitized_error))
             # 직전에 실패 상태가 아니었으면(정상→실패, 신규→실패) 연결 실패 알람
             if prev_status != "failed":
                 try:
