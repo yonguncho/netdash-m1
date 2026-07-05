@@ -64,6 +64,28 @@ def test_bulk_collect_rejects_invalid_credentials(client, monkeypatch):
     assert r.status_code == 400
 
 
+def test_dash_status_filter_tabs():
+    """현황판 상태 필터 탭(전체/정상/오류/미수집) — 필터된 리스트만 선택·재수집."""
+    html = HTML.read_text(encoding="utf-8")
+    assert 'data-sfilter="failed"' in html and 'data-sfilter="new"' in html
+    assert 'id="sf-cnt-failed"' in html
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "_swStatusBucket" in js and "_applyStatusFilter" in js
+    assert "_dashStatusFilter" in js
+    # 필터 전환 시 이전 선택 해제(다른 리스트 오수집 방지)
+    assert js.index("_bulkSel = {};  // 필터 전환") > 0
+
+
+def test_rack_group_select_ui():
+    """랙 뷰 구역별 일괄 선택 버튼 — 그 구역만 '정보 수집(N)'로 재수집."""
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "rack-group-sel" in js
+    assert "구역 전체 선택" in js and "구역 선택 해제" in js
+    # 선택된 유닛 하이라이트 + 수집 버튼 카운트 갱신
+    assert "outline:2px solid #38bdf8" in js
+    assert js.count("_updateBulkCollectBtn") >= 3
+
+
 def test_dash_header_credentials_ui():
     """상단 공통 계정 입력(팝업 없이 즉시 일괄 수집) UI + 로직."""
     html = HTML.read_text(encoding="utf-8")

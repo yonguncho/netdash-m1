@@ -362,6 +362,47 @@ function renderEventsTab(events) {
 // ─── 스위치 카드 렌더링 ──────────────────────────────────────────
 var _viewMode = "card";  // card | rack
 var _bulkSel = {};        // 일괄 수집 선택 집합 {switch_id: true} — 재렌더에도 유지
+var _dashStatusFilter = "all";  // all | ok | failed | new — 현황판 상태 필터 탭
+
+// 상태 분류: 오류 = 수집 실패 또는 도달 불가, 미수집 = 아직 한 번도 수집 안 됨
+function _swStatusBucket(sw) {
+  if (sw.status === "failed" || sw.reachable === false) return "failed";
+  if (sw.status === "done") return "ok";
+  if (sw.status === "collecting") return "ok";  // 진행 중은 정상 취급
+  return "new";
+}
+
+function _applyStatusFilter(list) {
+  if (_dashStatusFilter === "all") return list;
+  return (list || []).filter(function (s) { return _swStatusBucket(s) === _dashStatusFilter; });
+}
+
+function _updateStatusCounts(list) {
+  var c = { all: (list || []).length, ok: 0, failed: 0, "new": 0 };
+  (list || []).forEach(function (s) { c[_swStatusBucket(s)]++; });
+  ["all", "ok", "failed", "new"].forEach(function (k) {
+    var el = document.getElementById("sf-cnt-" + k);
+    if (el) el.textContent = c[k];
+  });
+}
+
+(function () {
+  document.querySelectorAll(".dash-sfilter").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      _dashStatusFilter = btn.getAttribute("data-sfilter");
+      document.querySelectorAll(".dash-sfilter").forEach(function (b) {
+        b.className = "btn dash-sfilter " +
+          (b === btn ? "btn--primary" : "btn--secondary");
+        b.style.fontSize = "12px";
+      });
+      _bulkSel = {};  // 필터 전환 시 이전 선택 해제(다른 리스트 오수집 방지)
+      var allc = document.getElementById("dash-check-all");
+      if (allc) allc.checked = false;
+      renderSwitchGrid(_switches);
+      if (_viewMode === "rack") renderRackView(_switches);
+    });
+  });
+})();
 
 (function () {
   var bc = document.getElementById("btn-view-card");
@@ -392,8 +433,9 @@ function _deviceRackKeys(dev) {
 function renderRackView(switches) {
   var host = document.getElementById("rack-view");
   if (!host) return;
-  switches = _applyLocFilter(switches, "loc-filter-dash");
-  var fws = _applyLocFilter(_firewalls || [], "loc-filter-dash");
+  switches = _applyStatusFilter(_applyLocFilter(switches, "loc-filter-dash"));
+  var fws = _dashStatusFilter === "all"
+    ? _applyLocFilter(_firewalls || [], "loc-filter-dash") : [];
   // 스위치 + 방화벽을 하나의 위치 맵으로. 그룹 → 랙 → 유닛
   var devices = switches.map(function (s) { return { k: "sw", o: s }; })
     .concat(fws.map(function (f) { return { k: "fw", o: f }; }));
@@ -408,6 +450,17 @@ function renderRackView(switches) {
   host.innerHTML = gkeys.map(function (g) {
     var racks = groups[g];
     var rkeys = Object.keys(racks).sort();
+    // 구역 내 스위치 id 목록(방화벽 제외) — 구역 전체 선택→'정보 수집(N)'용
+    var gIds = [];
+    rkeys.forEach(function (t) {
+      racks[t].forEach(function (d) { if (d.k !== "fw") gIds.push(d.o.id); });
+    });
+    var allSel = gIds.length > 0 && gIds.every(function (id) { return _bulkSel[id]; });
+    var selBtn = gIds.length
+      ? " <button class='btn " + (allSel ? "btn--primary" : "btn--secondary") +
+        " rack-group-sel' data-ids='" + gIds.join(",") + "' style='font-size:11px;padding:2px 8px'>" +
+        (allSel ? "구역 선택 해제" : "구역 전체 선택(" + gIds.length + ")") + "</button>"
+      : "";
     var racksHtml = rkeys.map(function (t) {
       var units = racks[t].map(function (d) {
         if (d.k === "fw") {
@@ -417,17 +470,32 @@ function renderRackView(switches) {
             "<span class='rack-unit__ip'>" + escHtml(f.host) + "</span></div>";
         }
         var sw = d.o, cls = swStatusClass(sw);
-        return "<div class='rack-unit rack-unit--" + cls + "' " +
-          "data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>" +
+        var sel = _bulkSel[sw.id] ? " style='outline:2px solid #38bdf8'" : "";
+        return "<div class='rack-unit rack-unit--" + cls + "'" + sel +
+          " data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>" +
           "<span class='rack-unit__name'>" + escHtml(sw.name) + "</span>" +
           "<span class='rack-unit__ip'>" + escHtml(sw.ip) + "</span></div>";
       }).join("");
       return "<div class='rack'><div class='rack__label'>" + escHtml(t) + "</div>" +
         "<div class='rack__units'>" + units + "</div></div>";
     }).join("");
-    return "<div class='rack-group'><div class='rack-group__title'>📍 " + escHtml(g) + "</div>" +
+    return "<div class='rack-group'><div class='rack-group__title'>📍 " + escHtml(g) + selBtn + "</div>" +
       "<div class='rack-row'>" + racksHtml + "</div></div>";
   }).join("");
+
+  // 구역 전체 선택/해제 토글 → 상단 '정보 수집(N)'로 그 구역만 일괄 수집
+  host.querySelectorAll(".rack-group-sel").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var ids = (btn.getAttribute("data-ids") || "").split(",").filter(Boolean);
+      var all = ids.every(function (id) { return _bulkSel[id]; });
+      ids.forEach(function (id) {
+        if (all) delete _bulkSel[id]; else _bulkSel[id] = true;
+      });
+      _updateBulkCollectBtn();
+      renderRackView(_switches);  // 버튼 라벨/유닛 하이라이트 갱신
+    });
+  });
 }
 
 // ─── 서버실 현황 (location "A09U27" 랙/유닛) ─────────────────────
@@ -546,11 +614,17 @@ function renderRoomRackView(switches, firewalls) {
 }
 
 function renderSwitchGrid(switches) {
-  switches = _applyLocFilter(switches, "loc-filter-dash");
-  var fws = _applyLocFilter(_firewalls || [], "loc-filter-dash");
+  _updateStatusCounts(_applyLocFilter(switches, "loc-filter-dash"));
+  switches = _applyStatusFilter(_applyLocFilter(switches, "loc-filter-dash"));
+  // 상태 필터가 걸려 있으면 방화벽 카드는 숨김(스위치 재수집 목적 화면)
+  var fws = _dashStatusFilter === "all"
+    ? _applyLocFilter(_firewalls || [], "loc-filter-dash") : [];
   var grid = document.getElementById("switch-grid");
   if (!switches.length && !fws.length) {
-    grid.innerHTML = "<p class='placeholder'>표시할 장비가 없습니다. (위치 필터를 확인하거나 스위치/방화벽을 추가하세요)</p>";
+    grid.innerHTML = "<p class='placeholder'>" +
+      (_dashStatusFilter === "all"
+        ? "표시할 장비가 없습니다. (위치 필터를 확인하거나 스위치/방화벽을 추가하세요)"
+        : "해당 상태의 스위치가 없습니다.") + "</p>";
     return;
   }
   grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, true); }).join("") +

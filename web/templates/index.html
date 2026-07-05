@@ -129,6 +129,15 @@
         </div>
       </div>
       <div id="diagnostics-container"></div>
+      <!-- 상태 필터: 오류/미수집만 골라 보고 그 리스트만 선택·재수집 -->
+      <div id="dash-status-tabs" style="display:flex;gap:6px;margin:2px 0 10px">
+        <button class="btn btn--primary dash-sfilter" data-sfilter="all" style="font-size:12px">전체 <span id="sf-cnt-all">0</span></button>
+        <button class="btn btn--secondary dash-sfilter" data-sfilter="ok" style="font-size:12px">정상 <span id="sf-cnt-ok">0</span></button>
+        <button class="btn btn--secondary dash-sfilter" data-sfilter="failed" style="font-size:12px">오류 <span id="sf-cnt-failed">0</span></button>
+        <button class="btn btn--secondary dash-sfilter" data-sfilter="new" style="font-size:12px">미수집 <span id="sf-cnt-new">0</span></button>
+        <span style="font-size:11px;color:#64748b;align-self:center;margin-left:6px">
+          탭 선택 → 전체선택 → '정보 수집'으로 해당 리스트만 재수집</span>
+      </div>
       <div id="switch-grid" class="switch-grid">
         <p class="placeholder">스위치를 추가하거나 엑셀 파일을 가져오세요.</p>
       </div>
