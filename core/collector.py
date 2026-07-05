@@ -67,6 +67,10 @@ def _norm_vendor(vendor):
     return _NETMIKO_VENDOR.get(v, v)
 
 
+class _DriverMismatchError(RuntimeError):
+    """netmiko 드라이버-장비 불일치(프롬프트 매칭 실패). 재시도 무의미 → 즉시 폴백."""
+
+
 def _tcp_precheck(ip, port=22, timeout=4, source_ip=None):
     """SSH 시도 전 TCP 도달성 사전 확인.
 
@@ -296,9 +300,24 @@ def _worker_loop():
                     # 항상 show version부터 실행해 실제 OS를 확인하고, 그 OS의
                     # 명령셋으로 수집한다. 등록 벤더가 틀려도(예: EXOS인데 cisco로
                     # 등록) 자동 교정된다. 판별 실패 시엔 등록 벤더 그대로.
-                    outputs, eff_vendor = _ssh_collect(
-                        switch, username, password, vendor,
-                        source_ip=source_ip, detect_vendor=True)
+                    try:
+                        outputs, eff_vendor = _ssh_collect(
+                            switch, username, password, vendor,
+                            source_ip=source_ip, detect_vendor=True)
+                    except Exception as first_err:
+                        # netmiko 드라이버가 프롬프트 매칭에 실패하는 장비
+                        # (EXOS 증가형 프롬프트 → 'pattern not detected') 폴백:
+                        # 드라이버 무관 원시 셸로 OS 탐지 → 올바른 드라이버로 재시도.
+                        probed = _probe_os(switch, username, password, source_ip=source_ip)
+                        if not probed or probed == vendor:
+                            raise
+                        utils.log_event("info", "vendor_probe_retry",
+                                        switch_id=switch_id, probed=probed,
+                                        first_error=_sanitize_error_msg(str(first_err)))
+                        outputs, eff_vendor = _ssh_collect(
+                            switch, username, password, probed,
+                            source_ip=source_ip, detect_vendor=False, max_retries=1)
+                        eff_vendor = probed
                 # 실제 OS가 등록 벤더와 다르면 DB 교정 + 이번 파싱도 실제 OS로
                 if eff_vendor and eff_vendor != vendor:
                     try:
@@ -489,7 +508,7 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 # 벤더 미지정이면 show version으로 실제 벤더 학습 → 명령/파서 그에 맞춤
                 if detect_vendor:
                     try:
-                        ver = conn.send_command("show version", read_timeout=read_timeout)
+                        ver = conn.send_command("show version", read_timeout=20)
                         outputs["version"] = ver
                         detected = _detect_vendor_from_version(ver)
                         if detected and detected != eff_vendor:
@@ -505,8 +524,14 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                                 except Exception:
                                     pass
                     except Exception as _e:
+                        # show version조차 프롬프트 매칭 실패 = 드라이버-장비 불일치
+                        # (예: EXOS 증가형 프롬프트를 cisco 드라이버로 접속).
+                        # 나머지 명령도 전부 같은 이유로 실패하므로 시간 낭비 없이
+                        # 즉시 중단 → 워커가 원시 셸 OS 탐지 후 올바른 드라이버로 재시도.
                         utils.log_event("warning", "vendor_detect_failed",
                                         switch=switch["name"], error=_sanitize_error_msg(str(_e)))
+                        raise _DriverMismatchError(
+                            "show version 프롬프트 매칭 실패(드라이버 불일치 의심)")
                 # 명령별 개별 예외 처리: 한 명령이 실패(미지원/타임아웃)해도 나머지는 수집.
                 # (예: EXOS의 특정 show 명령이 없어도 전체 수집이 실패하지 않도록)
                 cmd_errors = 0
@@ -519,9 +544,9 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                         cmd_errors += 1
                         utils.log_event("warning", "command_failed", switch=switch["name"],
                                         command=command, error=_sanitize_error_msg(str(_ce)))
-                # 모든 명령이 실패(응답 전무)면 장비 무응답/명령셋 불일치 → 수집 실패 처리
+                # 모든 명령이 실패(응답 전무)면 드라이버/명령셋 불일치 → 재시도 없이 폴백
                 if commands and cmd_errors == len(commands):
-                    raise RuntimeError("all collection commands failed")
+                    raise _DriverMismatchError("all collection commands failed")
                 # 포트채널 멤버 해석 명령(config에 없어도 벤더별로 항상 시도)
                 pc_cmd = _PORT_CHANNEL_CMD.get(eff_vendor)
                 if pc_cmd and "port_channel" not in outputs:
@@ -537,6 +562,8 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                     except Exception:
                         pass
             return outputs, eff_vendor
+        except _DriverMismatchError:
+            raise  # 드라이버 불일치는 같은 드라이버로 재시도해도 무의미 → 즉시 폴백
         except Exception as e:
             # Sanitize SSH error messages to prevent credential/host info exposure (security fix)
             sanitized_error = _sanitize_error_msg(str(e))
@@ -586,6 +613,47 @@ def _alteon_read(shell, timeout=25, idle=0.6):
                     break
             _t.sleep(0.15)
     return buf
+
+
+def _probe_os(switch, username, password, source_ip=None):
+    """드라이버 무관 OS 탐지 — paramiko 원시 셸로 show version 실행.
+
+    netmiko 드라이버가 프롬프트 매칭에 실패하는 장비(대표: EXOS는 명령마다
+    프롬프트 번호가 증가 'SW.1 #'→'SW.2 #' → cisco 드라이버로는 'pattern not
+    detected')에서도 동작한다. 프롬프트 형식을 전혀 가정하지 않고 유휴까지 읽는다.
+    반환: 감지된 device_type 또는 None.
+    """
+    import paramiko
+    import time as _t
+    from . import ssh_compat
+    ssh_compat.enable_legacy_algorithms()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sock = None
+    if source_ip:
+        from . import netbind
+        sock = netbind.bind_socket(switch["ip"], 22, source_ip, 15)
+    try:
+        client.connect(switch["ip"], port=22, username=username, password=password,
+                       timeout=15, allow_agent=False, look_for_keys=False, sock=sock)
+        shell = client.invoke_shell(width=200, height=1000)
+        _t.sleep(1.0)
+        _alteon_read(shell, timeout=4)          # 배너/프롬프트 비우기(범용 리더 재사용)
+        shell.send("show version\n")
+        out = _alteon_read(shell, timeout=12)
+        detected = _detect_vendor_from_version(out)
+        utils.log_event("info", "os_probe", switch=switch.get("name"),
+                        detected=detected or "unknown")
+        return detected
+    except Exception as e:
+        utils.log_event("warning", "os_probe_failed", switch=switch.get("name"),
+                        error=_sanitize_error_msg(str(e)))
+        return None
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def _alteon_collect(switch, username, password, source_ip=None):

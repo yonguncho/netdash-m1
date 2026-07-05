@@ -92,6 +92,45 @@ def test_worker_always_verifies_vendor(temp_db, monkeypatch):
     assert seen.get("detect") is True
 
 
+def test_worker_probe_fallback_on_driver_mismatch(temp_db, monkeypatch):
+    """netmiko 프롬프트 매칭 실패(EXOS 증가형 프롬프트) → 원시 셸 OS 탐지 → 재시도.
+
+    실장비 증상: vendor_detect_failed 'pattern not detected' — cisco 드라이버가
+    EXOS의 'SW.1 #'→'SW.2 #' 증가형 프롬프트를 못 따라감.
+    """
+    monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    sid = db.save_switch(temp_db, "EXOS-PROMPT", "10.0.0.10", "cisco")
+    credentials.save_credential(sid, "admin", "pw")
+
+    calls = {"n": 0}
+
+    def fake_ssh(switch, username, password, vendor, source_ip=None,
+                 detect_vendor=False, max_retries=3):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            assert vendor == "cisco_ios"
+            raise collector._DriverMismatchError("pattern not detected")
+        # 2차: 탐지된 벤더로 재시도
+        assert vendor == "extreme_exos" and detect_vendor is False
+        return ({"status": "", "mac": "", "arp": ""}, "extreme_exos")
+    monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
+    monkeypatch.setattr(collector, "_probe_os",
+                        lambda switch, u, p, source_ip=None: "extreme_exos")
+
+    collector.init_collector()
+    collector.collect_switch(temp_db, sid, "admin", "pw")
+    import time
+    for _ in range(80):
+        sw = db.get_switch(temp_db, sid)
+        if sw["vendor"] == "extreme_exos" and sw["status"] == "done":
+            break
+        time.sleep(0.1)
+    sw = db.get_switch(temp_db, sid)
+    assert sw["vendor"] == "extreme_exos" and sw["status"] == "done"
+    assert calls["n"] == 2
+
+
 def test_worker_corrects_wrong_vendor(temp_db, monkeypatch):
     """cisco로 잘못 등록된 EXOS 장비 — show version으로 교정되어 DB 갱신.
 
