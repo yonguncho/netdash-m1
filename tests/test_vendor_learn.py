@@ -126,6 +126,35 @@ def test_worker_always_verifies_vendor(temp_db, monkeypatch):
     assert seen.get("detect") is True
 
 
+def test_worker_unknown_becomes_cisco_ios(temp_db, monkeypatch):
+    """회귀: unknown 장비가 IOS-XE로 감지되면 DB가 cisco_ios로 갱신.
+
+    (버그: unknown→cisco_ios 정규화 접속 벤더와 감지가 같으면 '변화 없음'으로
+    보고 갱신을 건너뛰어 화면에 unknown이 남았음 — raw 벤더와 비교로 수정)
+    """
+    monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    sid = db.save_switch(temp_db, "IOSXE-UNK", "10.0.0.12", "unknown")
+    credentials.save_credential(sid, "admin", "pw")
+
+    def fake_ssh(switch, username, password, vendor, source_ip=None,
+                 detect_vendor=False, max_retries=3):
+        # 세션 감지 성공: show version 출력 포함, eff_vendor는 접속 벤더와 동일
+        return ({"status": "", "mac": "", "arp": "",
+                 "version": "Cisco IOS XE Software, Version 17.09.01"}, vendor)
+    monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
+
+    collector.init_collector()
+    collector.collect_switch(temp_db, sid, "admin", "pw")
+    import time
+    for _ in range(100):
+        sw = db.get_switch(temp_db, sid)
+        if sw["status"] in ("done", "failed") and sw["vendor"] == "cisco_ios":
+            break
+        time.sleep(0.1)
+    assert db.get_switch(temp_db, sid)["vendor"] == "cisco_ios"  # unknown 아님
+
+
 def test_worker_probe_fallback_on_driver_mismatch(temp_db, monkeypatch):
     """netmiko 프롬프트 매칭 실패(EXOS 증가형 프롬프트) → 원시 셸 OS 탐지 → 재시도.
 

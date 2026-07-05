@@ -430,17 +430,26 @@ def _worker_loop():
                             switch, username, password, probed,
                             source_ip=source_ip, detect_vendor=False, max_retries=1)
                         eff_vendor = probed
-                # 실제 OS가 등록 벤더와 다르면 DB 교정 + 이번 파싱도 실제 OS로
-                if eff_vendor and eff_vendor != vendor:
-                    try:
-                        db.update_switch(db_path, switch_id, vendor=eff_vendor)
-                        utils.log_event("info",
-                                        "vendor_learned" if is_unknown else "vendor_corrected",
-                                        switch_id=switch_id,
-                                        from_vendor=vendor, vendor=eff_vendor)
-                    except Exception as _e:
-                        utils.log_event("warning", "vendor_update_failed",
-                                        switch_id=switch_id, error=_sanitize_error_msg(str(_e)))
+                # 실제 OS 판별: 세션 show version 출력 우선, 없으면(원시 셸 프로브
+                # 폴백 경로) eff_vendor. FIX: 예전엔 '정규화된 접속 벤더'와 비교해
+                # unknown→cisco_ios처럼 정규화 결과와 감지가 같으면 DB 갱신을
+                # 건너뛰어 화면에 unknown이 남았다 → '저장된 원래 벤더'와 비교.
+                detected = _detect_vendor_from_version(outputs.get("version", ""))
+                if not detected and eff_vendor and eff_vendor != vendor:
+                    detected = eff_vendor
+                if detected:
+                    vendor = detected  # 이번 파싱도 실제 OS 파서로
+                    if detected != (raw_vendor or "").strip().lower():
+                        try:
+                            db.update_switch(db_path, switch_id, vendor=detected)
+                            utils.log_event("info",
+                                            "vendor_learned" if is_unknown else "vendor_corrected",
+                                            switch_id=switch_id,
+                                            from_vendor=raw_vendor, vendor=detected)
+                        except Exception as _e:
+                            utils.log_event("warning", "vendor_update_failed",
+                                            switch_id=switch_id, error=_sanitize_error_msg(str(_e)))
+                elif eff_vendor:
                     vendor = eff_vendor
 
             raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
@@ -906,10 +915,14 @@ def collect_all_registered(db_path):
                 continue
             blob = db.get_switch_credential(db_path, sw["id"])
             if not blob:
+                utils.log_event("info", "auto_collect_skip_no_cred",
+                                switch_id=sw.get("id"), name=sw.get("name"))
                 continue
             # 스위치 자격증명은 "username|password" 형식(credentials.encrypt_credential)
             dec = credentials.decrypt_credential(blob)
             if not dec or "|" not in dec:
+                utils.log_event("warning", "auto_collect_skip_bad_cred",
+                                switch_id=sw.get("id"))
                 continue
             username, password = dec.split("|", 1)
             collect_switch(db_path, sw["id"], username, password)

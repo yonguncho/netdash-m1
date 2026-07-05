@@ -148,6 +148,11 @@ def create_app(demo_mode=None):
     db_path = config.get_db_path()
     db.init_schema(db_path)
     db.validate_schema(db_path)
+    # 이전 실행 중단으로 박제된 '수집중' 상태 복구(재시작 후 실제 수집은 없음)
+    try:
+        db.reset_stale_collecting(db_path)
+    except Exception as e:
+        log_event("warning", "stale_reset_failed", error=str(e))
 
     collector.init_collector()
     # M14: 하루 N회 자동 수집 스케줄러 시작(설정으로 on/off)

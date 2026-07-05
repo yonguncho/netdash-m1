@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import utils
+from .utils import log_event  # 다수 호출부가 짧은 이름 사용(미정의 NameError 잠복 버그 수정)
 
 logger = logging.getLogger(__name__)
 
@@ -1174,6 +1175,31 @@ def latest_snapshot_id(db_path, switch_id):
 
 # NOTE: get_switches는 아래(M7 섹션)에 단일 정의만 존재한다.
 # (과거 이 위치에 중복 정의가 있어 첫 정의가 사장되던 버그 — Opus 검증에서 제거)
+
+
+def reset_stale_collecting(db_path):
+    """앱 시작 시 '수집중' 고착 상태 복구.
+
+    이전 실행이 수집 도중 종료(강제 종료/크래시)되면 DB에 status='collecting'이
+    박제되어, 재시작 후 실제로는 아무것도 돌지 않는데 영원히 '수집중'으로 보였다.
+    시작 시 이런 행을 '실패(중단됨)'로 정리해 재수집 대상으로 만든다.
+    반환: 복구된 개수.
+    """
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                cur = conn.execute(
+                    "UPDATE switches SET status='failed', "
+                    "last_error='이전 실행이 수집 도중 중단됨(앱 재시작) — 재수집 필요' "
+                    "WHERE status='collecting'")
+                n = cur.rowcount
+            except Exception:
+                cur = conn.execute(
+                    "UPDATE switches SET status='failed' WHERE status='collecting'")
+                n = cur.rowcount
+    if n:
+        log_event("info", "stale_collecting_reset", count=n)
+    return n
 
 
 def set_switch_status(db_path, switch_id, status, error=None):
