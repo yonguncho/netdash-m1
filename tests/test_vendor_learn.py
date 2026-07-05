@@ -20,6 +20,37 @@ def test_detect_vendor_from_version():
     assert d("") is None
 
 
+def test_parse_os_version():
+    p = collector._parse_os_version
+    assert p("cisco_ios", "Cisco IOS XE Software, Version 17.03.05") == "IOS-XE 17.03.05"
+    assert p("cisco_ios", "Cisco IOS Software, C2960X Software, Version 15.2(7)E3, RELEASE") == "IOS 15.2(7)E3"
+    assert p("cisco_nxos", "  NXOS: version 9.3(5)") == "NX-OS 9.3(5)"
+    assert p("extreme_exos", "ExtremeXOS version 22.7.1.2 by release-manager") == "EXOS 22.7.1.2"
+    assert p("arista_eos", "Software image version: 4.25.4M") == "EOS 4.25.4M"
+    assert p("juniper_junos", "Junos: 18.4R3.3") == "JUNOS 18.4R3.3"
+    assert p("alteon", "Software Version 29.0.3.0 (FLASH image2)") == "Alteon 29.0.3.0"
+    assert p("cisco_ios", "") is None
+
+
+def test_parse_model():
+    m = collector._parse_model
+    assert m("cisco_ios", "Model Number                    : WS-C2960X-48TS-L") == "WS-C2960X-48TS-L"
+    assert m("cisco_ios", "cisco C9300-48P (X86) processor with ...") == "C9300-48P"
+    assert m("cisco_nxos", "  cisco Nexus9000 C93180YC-EX chassis") == "Nexus9000 C93180YC-EX"
+    assert m("arista_eos", "Arista DCS-7050TX-64\nHardware version: 01.01") == "DCS-7050TX-64"
+    assert m("extreme_exos", "System Type: X460G2-24t-10G4") == "X460G2-24t-10G4"
+    assert m("juniper_junos", "Model: ex4300-48t") == "ex4300-48t"
+    assert m("alteon", "Alteon Application Switch 6024") == "6024"
+    assert m("cisco_ios", "no model here at all") is None
+
+
+def test_update_switch_version_model(temp_db):
+    sid = db.save_switch(temp_db, "SW-V", "10.0.0.5", "cisco_ios")
+    db.update_switch(temp_db, sid, os_version="IOS-XE 17.3.5", model="C9300-48P")
+    sw = db.get_switch(temp_db, sid)
+    assert sw["os_version"] == "IOS-XE 17.3.5" and sw["model"] == "C9300-48P"
+
+
 def test_is_unknown_vendor():
     assert collector._is_unknown_vendor("unknown")
     assert collector._is_unknown_vendor("")

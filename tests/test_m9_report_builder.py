@@ -68,11 +68,11 @@ def test_switch_sheet(temp_db):
     _seed(temp_db)
     ws = _load(report_builder.build_report(temp_db))["스위치 현황"]
     headers = [c.value for c in ws[1]]
-    assert headers[:6] == ["구분", "IP", "호스트네임", "벤더", "위치", "상태"]
+    assert headers[:7] == ["구분", "IP", "호스트네임", "벤더", "모델", "버전", "위치"]
     rows = list(ws.iter_rows(min_row=2, values_only=True))
     sw_row = [r for r in rows if r[0] == "ACC-SW01"][0]
-    assert sw_row[7] == "1 / 2"      # up 1 / 전체 2
-    assert sw_row[5] in ("미수집", "정상", "수집 실패", "수집 중")  # 상태 한국어
+    assert sw_row[9] == "1 / 2"      # up 1 / 전체 2
+    assert sw_row[7] in ("미수집", "정상", "수집 실패", "수집 중")  # 상태 한국어
 
 
 # 5. 설비 시트에 설비 반영

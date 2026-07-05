@@ -111,6 +111,65 @@ def _detect_vendor_from_version(text):
     return None
 
 
+def _parse_os_version(vendor, text):
+    """show version 출력에서 짧은 버전 문자열 추출(스위치 현황 표기용).
+
+    예: 'IOS-XE 17.3.5', 'NX-OS 9.3(5)', 'EXOS 22.7.1.2', 'EOS 4.25.4M', 'JUNOS 18.4R3'
+    못 찾으면 None(기존 값 유지).
+    """
+    t = text or ""
+    if not t:
+        return None
+    v = (vendor or "").lower()
+    patterns = {
+        "cisco_nxos": [(r"NXOS:\s*version\s+(\S+)", "NX-OS "),
+                       (r"system:\s+version\s+(\S+)", "NX-OS ")],
+        "cisco_ios": [(r"IOS[- ]XE Software.*?Version\s+([\w.():]+)", "IOS-XE "),
+                      (r"Cisco IOS Software.*?Version\s+([\w.():]+?)[,\s]", "IOS "),
+                      (r"\bVersion\s+([\w.():]+?)[,\s]", "IOS ")],
+        "arista_eos": [(r"Software image version:\s*(\S+)", "EOS ")],
+        "extreme_exos": [(r"ExtremeXOS\s+version\s+(\S+)", "EXOS "),
+                         (r"IMG:\s*(\S+)", "EXOS ")],
+        "juniper_junos": [(r"Junos:\s*(\S+)", "JUNOS ")],
+        "alteon": [(r"Software\s+Version\s+(\S+)", "Alteon ")],
+    }
+    for pat, prefix in patterns.get(v, []):
+        m = re.search(pat, t, re.IGNORECASE)
+        if m:
+            return (prefix + m.group(1).strip().rstrip(",")).strip()[:60]
+    # 범용 폴백
+    m = re.search(r"[Vv]ersion[:\s]+([\w.():-]+)", t)
+    if m:
+        return m.group(1).strip().rstrip(",")[:60]
+    return None
+
+
+def _parse_model(vendor, text):
+    """show version 출력에서 하드웨어 모델명 추출. 못 찾으면 None."""
+    t = text or ""
+    if not t:
+        return None
+    v = (vendor or "").lower()
+    patterns = {
+        "cisco_nxos": [r"cisco\s+(Nexus\s?\S+(?:\s+\S+)?)\s+[Cc]hassis"],
+        "cisco_ios": [r"Model Number\s*:\s*(\S+)",
+                      r"cisco\s+((?:WS|C|IE|ME|CGR|ASR|ISR)[\w-]+)\s*\("],
+        "arista_eos": [r"^\s*Arista\s+(\S+)"],
+        "extreme_exos": [r"System Type:\s*(\S+)",
+                         r"PlatformName:\s*(\S+)"],
+        "juniper_junos": [r"Model:\s*(\S+)"],
+        "alteon": [r"(?:Application Switch|Alteon(?:\s+AAS)?)\s+(\d\S*)"],
+    }
+    for pat in patterns.get(v, []):
+        m = re.search(pat, t, re.IGNORECASE | re.MULTILINE)
+        if m:
+            return m.group(1).strip().rstrip(",")[:60]
+    m = re.search(r"Model(?:\s*Number)?\s*[:=]\s*(\S+)", t, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()[:60]
+    return None
+
+
 def _commands_for(vendor):
     """벤더의 수집 명령 집합. config에 없으면 파서 모듈 COMMANDS로 폴백."""
     cmds = get_config().get_commands(vendor)
@@ -333,6 +392,17 @@ def _worker_loop():
 
             raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
             utils.log_event("info", "raw_outputs_saved", path=str(raw_outputs_path))
+
+            # show version 출력에서 OS 버전/모델명 추출 → 스위치 현황 표기
+            ver_out = outputs.get("version", "")
+            if ver_out:
+                osv = _parse_os_version(vendor, ver_out)
+                model = _parse_model(vendor, ver_out)
+                if osv or model:
+                    try:
+                        db.update_switch(db_path, switch_id, os_version=osv, model=model)
+                    except Exception:
+                        pass
 
             parsed_data = _parse_outputs(vendor, outputs, switch_id)
 

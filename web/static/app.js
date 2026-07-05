@@ -646,10 +646,15 @@ function renderSwitchTable(switches) {
       ? "<span style='color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" +
         (sw.location ? "<br><span style='font-size:11px;color:#64748b'>" + escHtml(sw.location) + "</span>" : "")
       : escHtml(sw.location || "-");
+    // 모델/버전(수집 시 show version에서 자동 추출) — 2줄 스택
+    var mv = (sw.model ? "<div>" + escHtml(sw.model) + "</div>" : "") +
+             (sw.os_version ? "<div style='font-size:11px;color:#64748b'>" + escHtml(sw.os_version) + "</div>" : "");
+    if (!mv) mv = "<span style='color:#94a3b8'>-</span>";
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'></td>" +
       "<td>" + escHtml(sw.name) + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(sw.vendor || "-") + "</td><td>" +
+      mv + "</td><td>" +
       locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span></td><td>" +
       (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "-") +
