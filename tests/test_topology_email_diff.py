@@ -110,3 +110,13 @@ def test_new_ui_present():
     js = APP_JS.read_text(encoding="utf-8")
     assert "function loadTopology" in js and "function renderTopology" in js
     assert "function loadConfigTab" in js and "/api/configs/diff" in js
+
+
+def test_topology_tree_ui_features():
+    """v3.32: Meraki/UniFi식 트리 배치 + 호버 툴팁 + 줌/팬 + 미연결 분리."""
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "assignX" in js                 # tidy tree(부모=자식 중앙)
+    assert "topo-tip" in js                # 호버 툴팁
+    assert "viewBox" in js and "wheel" in js  # 줌/팬
+    assert "topo-orphan" in js             # 미연결 장비 하단 분리
+    assert "topo-edge" in js               # 베지어 링크 + 노드 호버 강조

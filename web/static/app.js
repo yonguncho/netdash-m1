@@ -1559,6 +1559,8 @@ function loadTopology() {
   }).catch(function (e) { console.error("topology:", e); });
 }
 
+// Meraki/UniFi식 토폴로지: 백본→업링크→액세스 트리 배치(부모 아래 자식),
+// 세로 베지어 링크, 링크 정보는 호버 툴팁, 줌/팬, 미연결 장비 하단 분리.
 function renderTopology(nodes, links) {
   var host = document.getElementById("topology-canvas");
   if (!host) return;
@@ -1566,85 +1568,224 @@ function renderTopology(nodes, links) {
     host.innerHTML = "<p style='color:#94a3b8;padding:20px'>표시할 스위치가 없습니다. 스위치를 수집하면 연결 관계가 그려집니다.</p>";
     return;
   }
-  // 계층(depth)별 그룹. depth 미상(링크 미발견)은 마지막 행
-  var levels = {};
-  var maxDepth = 0;
-  nodes.forEach(function (n) {
-    var d = (n.depth === null || n.depth === undefined) ? -1 : n.depth;
-    (levels[d] = levels[d] || []).push(n);
-    if (d > maxDepth) maxDepth = d;
+
+  var byId = {};
+  nodes.forEach(function (n) { byId[n.id] = n; });
+
+  // 인접 리스트
+  var adj = {};
+  links.forEach(function (l) {
+    (adj[l.a] = adj[l.a] || []).push(l.b);
+    (adj[l.b] = adj[l.b] || []).push(l.a);
   });
-  var orphan = levels[-1] || [];
-  delete levels[-1];
-  if (orphan.length) levels[maxDepth + 1] = (levels[maxDepth + 1] || []).concat(orphan);
 
-  var NODE_W = 150, NODE_H = 44, GAP_X = 30, GAP_Y = 90;
+  // 스패닝 트리(BFS): 컴포넌트별 루트 = 링크 수 최다(백본)
+  var parent = {}, children = {}, depth = {}, roots = [], visited = {};
+  var connectedIds = Object.keys(adj).map(Number);
+  connectedIds.sort(function (a, b) { return (adj[b] || []).length - (adj[a] || []).length; });
+  connectedIds.forEach(function (rid) {
+    if (visited[rid]) return;
+    roots.push(rid);
+    visited[rid] = true; depth[rid] = 0;
+    var q = [rid];
+    while (q.length) {
+      var cur = q.shift();
+      var nbrs = (adj[cur] || []).slice().sort(function (a, b) {
+        return ((byId[a] || {}).name || "").localeCompare((byId[b] || {}).name || "");
+      });
+      nbrs.forEach(function (nx) {
+        if (visited[nx]) return;
+        visited[nx] = true;
+        parent[nx] = cur;
+        (children[cur] = children[cur] || []).push(nx);
+        depth[nx] = depth[cur] + 1;
+        q.push(nx);
+      });
+    }
+  });
+  var orphans = nodes.filter(function (n) { return !(n.id in visited); });
+
+  // tidy tree 레이아웃: 리프에 순차 슬롯, 부모는 자식 중앙
+  var NODE_W = 160, NODE_H = 46, GAP_X = 26, GAP_Y = 110;
+  var slot = { v: 0 };
+  var xIndex = {};
+  function assignX(id) {
+    var ch = children[id] || [];
+    if (!ch.length) { xIndex[id] = slot.v++; return xIndex[id]; }
+    var xs = ch.map(assignX);
+    xIndex[id] = (xs[0] + xs[xs.length - 1]) / 2;
+    return xIndex[id];
+  }
+  roots.forEach(function (r) { assignX(r); slot.v += 0.6; });  // 컴포넌트 간 간격
+
+  var maxDepth = 0;
+  Object.keys(depth).forEach(function (k) { if (depth[k] > maxDepth) maxDepth = depth[k]; });
+  var width = Math.max(900, (slot.v + 1) * (NODE_W + GAP_X) + 60);
+  var height = (maxDepth + 1) * (NODE_H + GAP_Y) + 80;
+
   var pos = {};
-  var maxCols = 1;
-  Object.keys(levels).forEach(function (d) { maxCols = Math.max(maxCols, levels[d].length); });
-  var width = Math.max(900, maxCols * (NODE_W + GAP_X) + 60);
-  var rows = Object.keys(levels).map(Number).sort(function (a, b) { return a - b; });
-  var height = rows.length * (NODE_H + GAP_Y) + 60;
-
-  rows.forEach(function (d, ri) {
-    var row = levels[d];
-    var totalW = row.length * NODE_W + (row.length - 1) * GAP_X;
-    var x0 = (width - totalW) / 2;
-    row.forEach(function (n, i) {
-      pos[n.id] = { x: x0 + i * (NODE_W + GAP_X), y: 30 + ri * (NODE_H + GAP_Y) };
-    });
+  Object.keys(xIndex).forEach(function (k) {
+    pos[k] = { x: 30 + xIndex[k] * (NODE_W + GAP_X), y: 40 + depth[k] * (NODE_H + GAP_Y) };
   });
 
   function statusColor(n) {
-    if (n.alert === "critical") return "#ef4444";
+    if (!n) return "#64748b";
+    if (n.alert === "critical" || n.status === "failed" || n.reachable === false) return "#ef4444";
     if (n.alert === "warning") return "#f59e0b";
     if (n.status === "done") return "#22c55e";
-    if (n.status === "failed") return "#ef4444";
     return "#64748b";
   }
 
-  var svg = ["<svg xmlns='http://www.w3.org/2000/svg' width='" + width + "' height='" + height + "'>"];
-  // 링크(먼저 그려 노드 아래로)
-  links.forEach(function (l) {
+  var treeEdge = {};
+  Object.keys(parent).forEach(function (c) {
+    var p = parent[c];
+    treeEdge[Math.min(c, p) + "-" + Math.max(c, p)] = true;
+  });
+
+  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='" +
+             Math.max(520, Math.min(height, 760)) + "' viewBox='0 0 " + width + " " + height +
+             "' style='cursor:grab'>"];
+
+  // 링크(세로 베지어) — 트리 링크 실선, 보조/편방향 링크 점선
+  links.forEach(function (l, i) {
     var a = pos[l.a], b = pos[l.b];
     if (!a || !b) return;
-    var x1 = a.x + NODE_W / 2, y1 = a.y + NODE_H / 2;
-    var x2 = b.x + NODE_W / 2, y2 = b.y + NODE_H / 2;
-    var dash = l.mutual ? "" : " stroke-dasharray='6,4'";
-    svg.push("<line x1='" + x1 + "' y1='" + y1 + "' x2='" + x2 + "' y2='" + y2 +
-      "' stroke='#475569' stroke-width='2'" + dash + "/>");
-    // 포트 라벨(각 끝 30% 지점)
-    function lbl(px, py, text) {
-      if (!text) return;
-      svg.push("<text x='" + px + "' y='" + (py - 3) + "' fill='#94a3b8' font-size='9' text-anchor='middle'>" +
-        escHtml(String(text)) + "</text>");
-    }
-    lbl(x1 + (x2 - x1) * 0.25, y1 + (y2 - y1) * 0.25, l.a_port);
-    lbl(x1 + (x2 - x1) * 0.75, y1 + (y2 - y1) * 0.75, l.b_port);
+    var top = (depth[l.a] <= depth[l.b]) ? l.a : l.b;
+    var bot = (top === l.a) ? l.b : l.a;
+    var x1 = pos[top].x + NODE_W / 2, y1 = pos[top].y + NODE_H;
+    var x2 = pos[bot].x + NODE_W / 2, y2 = pos[bot].y;
+    var mid = (y1 + y2) / 2;
+    var isTree = treeEdge[Math.min(l.a, l.b) + "-" + Math.max(l.a, l.b)];
+    var stroke = l.mutual ? "#64748b" : "#475569";
+    var dash = (isTree && l.mutual) ? "" : " stroke-dasharray='6,4'";
+    var portA = l.a === top ? l.a_port : l.b_port;
+    var portB = l.a === top ? l.b_port : l.a_port;
+    var tip = escHtml((byId[top] || {}).name || "") + (portA ? " [" + escHtml(portA) + "]" : "") +
+      "  ↕  " + escHtml((byId[bot] || {}).name || "") + (portB ? " [" + escHtml(portB) + "]" : "") +
+      (l.mutual ? "  (양방향 확인)" : "  (한쪽만 관측)");
+    svg.push("<path class='topo-edge' data-ea='" + l.a + "' data-eb='" + l.b + "' data-tip=\"" + tip + "\" d='M" +
+      x1 + "," + y1 + " C" + x1 + "," + mid + " " + x2 + "," + mid + " " + x2 + "," + y2 +
+      "' fill='none' stroke='" + stroke + "' stroke-width='2'" + dash + "/>");
   });
-  // 노드
+
+  // 노드: 백본(루트)은 강조, 상태색 테두리 + 상태점
   nodes.forEach(function (n) {
     var p = pos[n.id];
     if (!p) return;
-    svg.push("<g class='topo-node' data-swid='" + n.id + "' style='cursor:pointer'>");
+    var isRoot = roots.indexOf(n.id) >= 0;
+    var tip = escHtml(n.name || "") + " · " + escHtml(n.ip || "") +
+      " · " + escHtml(n.vendor || "") + (n.group ? " · " + escHtml(n.group) : "");
+    svg.push("<g class='topo-node' data-swid='" + n.id + "' data-tip=\"" + tip + "\" style='cursor:pointer'>");
     svg.push("<rect x='" + p.x + "' y='" + p.y + "' width='" + NODE_W + "' height='" + NODE_H +
-      "' rx='6' fill='#1e293b' stroke='" + statusColor(n) + "' stroke-width='2'/>");
-    svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 18) +
+      "' rx='8' fill='" + (isRoot ? "#27314a" : "#1e293b") + "' stroke='" + statusColor(n) +
+      "' stroke-width='" + (isRoot ? 3 : 2) + "'/>");
+    if (isRoot) {
+      svg.push("<text x='" + (p.x + 10) + "' y='" + (p.y + 20) + "' font-size='13'>🏢</text>");
+    }
+    svg.push("<circle cx='" + (p.x + NODE_W - 12) + "' cy='" + (p.y + 12) + "' r='4' fill='" +
+      statusColor(n) + "'/>");
+    svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 19) +
       "' fill='#e2e8f0' font-size='11' font-weight='700' text-anchor='middle'>" +
       escHtml((n.name || "").slice(0, 22)) + "</text>");
-    svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 33) +
+    svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 35) +
       "' fill='#94a3b8' font-size='10' text-anchor='middle'>" + escHtml(n.ip || "") + "</text>");
     svg.push("</g>");
   });
   svg.push("</svg>");
-  host.innerHTML = svg.join("");
-  // 노드 클릭 → 상세보기
+
+  // 범례 + 미연결 장비 하단 분리
+  var legend =
+    "<div style='display:flex;gap:16px;align-items:center;padding:8px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +
+    "<span>🏢 백본(연결 최다)</span>" +
+    "<span><span style='display:inline-block;width:18px;border-top:2px solid #64748b;vertical-align:middle'></span> 링크(양방향 확인)</span>" +
+    "<span><span style='display:inline-block;width:18px;border-top:2px dashed #475569;vertical-align:middle'></span> 보조/편방향</span>" +
+    "<span style='color:#22c55e'>● 정상</span><span style='color:#ef4444'>● 실패/도달불가</span><span style='color:#f59e0b'>● 경보</span>" +
+    "<span style='margin-left:auto'>휠=확대/축소 · 드래그=이동 · 링크/노드에 마우스=상세 · 클릭=상세보기</span></div>";
+  var orphanHtml = "";
+  if (orphans.length) {
+    orphanHtml = "<div style='border-top:1px solid #1e293b;padding:8px 14px'>" +
+      "<span style='color:#94a3b8;font-size:11px'>연결 미발견 " + orphans.length +
+      "대(수집하면 자동 연결): </span>" +
+      orphans.map(function (n) {
+        return "<span class='topo-orphan' data-swid='" + n.id + "' style='display:inline-block;margin:2px 4px;padding:2px 8px;" +
+          "background:#1e293b;border:1px solid " + statusColor(n) + ";border-radius:4px;color:#cbd5e1;" +
+          "font-size:11px;cursor:pointer'>" + escHtml(n.name || "") + "</span>";
+      }).join("") + "</div>";
+  }
+  host.innerHTML = legend + svg.join("") + orphanHtml +
+    "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
+    "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:420px'></div>";
+
+  // 클릭 → 상세보기
+  function _open(id) {
+    var sw = (_switches || []).find(function (s) { return s.id === id; });
+    if (sw) openDetailPanel(sw);
+  }
+  host.querySelectorAll(".topo-node, .topo-orphan").forEach(function (g) {
+    g.addEventListener("click", function () { _open(parseInt(g.getAttribute("data-swid"), 10)); });
+  });
+
+  // 호버 툴팁 + 노드 호버 시 연결 링크 강조
+  var tipEl = document.getElementById("topo-tip");
+  function showTip(e, text) {
+    tipEl.textContent = text;
+    tipEl.style.display = "block";
+    tipEl.style.left = (e.clientX + 12) + "px";
+    tipEl.style.top = (e.clientY + 12) + "px";
+  }
+  host.querySelectorAll("[data-tip]").forEach(function (el) {
+    el.addEventListener("mousemove", function (e) { showTip(e, el.getAttribute("data-tip")); });
+    el.addEventListener("mouseleave", function () { tipEl.style.display = "none"; });
+  });
   host.querySelectorAll(".topo-node").forEach(function (g) {
-    g.addEventListener("click", function () {
-      var id = parseInt(g.getAttribute("data-swid"), 10);
-      var sw = (_switches || []).find(function (s) { return s.id === id; });
-      if (sw) openDetailPanel(sw);
+    var id = g.getAttribute("data-swid");
+    g.addEventListener("mouseenter", function () {
+      host.querySelectorAll(".topo-edge").forEach(function (p) {
+        var on = p.getAttribute("data-ea") === id || p.getAttribute("data-eb") === id;
+        p.setAttribute("stroke", on ? "#38bdf8" : "#334155");
+        p.setAttribute("stroke-width", on ? "3" : "1.5");
+      });
     });
+    g.addEventListener("mouseleave", function () {
+      host.querySelectorAll(".topo-edge").forEach(function (p) {
+        p.setAttribute("stroke", "#64748b");
+        p.setAttribute("stroke-width", "2");
+      });
+    });
+  });
+
+  // 줌(휠)/팬(드래그) — viewBox 조작
+  var svgEl = document.getElementById("topo-svg");
+  var vb = { x: 0, y: 0, w: width, h: height };
+  function applyVB() { svgEl.setAttribute("viewBox", vb.x + " " + vb.y + " " + vb.w + " " + vb.h); }
+  svgEl.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var scale = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+    var rect = svgEl.getBoundingClientRect();
+    var mx = vb.x + (e.clientX - rect.left) / rect.width * vb.w;
+    var my = vb.y + (e.clientY - rect.top) / rect.height * vb.h;
+    var nw = Math.min(width * 3, Math.max(width / 8, vb.w * scale));
+    var nh = nw * (vb.h / vb.w);
+    vb.x = mx - (mx - vb.x) * (nw / vb.w);
+    vb.y = my - (my - vb.y) * (nh / vb.h);
+    vb.w = nw; vb.h = nh;
+    applyVB();
+  }, { passive: false });
+  var drag = null;
+  svgEl.addEventListener("mousedown", function (e) {
+    drag = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y };
+    svgEl.style.cursor = "grabbing";
+  });
+  window.addEventListener("mousemove", function (e) {
+    if (!drag) return;
+    var rect = svgEl.getBoundingClientRect();
+    vb.x = drag.vx - (e.clientX - drag.sx) / rect.width * vb.w;
+    vb.y = drag.vy - (e.clientY - drag.sy) / rect.height * vb.h;
+    applyVB();
+  });
+  window.addEventListener("mouseup", function () {
+    drag = null;
+    if (svgEl) svgEl.style.cursor = "grab";
   });
 }
 
