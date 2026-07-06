@@ -27,10 +27,9 @@ def collect_firewall(vendor, host, port=None, token="", username="",
     """
     vendor = (vendor or "").lower()
     if vendor == "fortigate":
-        p = port or 443
-        interfaces = fortigate.get_interfaces(host, p, token, username, password, verify_ssl, source_ip=source_ip)
-        arp = fortigate.get_arp_table(host, p, token, username, password, verify_ssl, source_ip=source_ip)
-        return {"interfaces": interfaces, "arp": arp}
+        # 세션 1개로 인터페이스+ARP 수집(로그인 2회 → 1회, 429 rate-limit 방지)
+        return fortigate.collect(host, port or 443, token, username, password,
+                                 verify_ssl, source_ip=source_ip)
     if vendor == "paloalto":
         if not (username and password):
             raise ValueError("Palo Alto는 username/password가 필요합니다")

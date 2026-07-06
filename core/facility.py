@@ -108,20 +108,32 @@ def _choose_attachment(matches, port_counts, pc_map=None):
     return chosen[0], chosen[1], disp_port, direct, via
 
 
-def _parse_connected_subnets(route_out, iface_out):
-    """show ip route connected / show interface 출력에서 directly-connected 대역 추출.
+def _parse_connected_subnets(route_out, iface_out, cfg_out=""):
+    """directly-connected 대역 추출 — 3개 소스의 합집합.
 
+    ① show ip route connected: "C 10.92.174.0/23 is directly connected, Vlan100"
+    ② show ip interface: "Internet address is 10.92.174.11/23"
+    ③ running-config의 "ip address 10.92.174.11 255.255.254.0" (L2 SVI/VRF에서도 확실)
     Returns: ["10.92.174.0/23", ...] (중복 제거, /22 이하만)
     """
     found = []
-    # show ip route: "C  10.92.174.0/23 is directly connected, Vlan100"
+    # ① show ip route connected
     for line in (route_out or "").splitlines():
         m = re.search(r"([\d.]+/\d{1,2})\s+is\s+directly\s+connected", line)
         if m:
             found.append(m.group(1))
-    # show interface: "Internet address is 10.92.174.11/23"
+    # ② show ip interface (슬래시 표기 + 구형 '주소 마스크' 표기 모두)
     for line in (iface_out or "").splitlines():
         m = re.search(r"Internet address is\s+([\d.]+)/(\d{1,2})", line)
+        if m:
+            try:
+                net = ipaddress.IPv4Network("%s/%s" % (m.group(1), m.group(2)), strict=False)
+                found.append(str(net))
+            except (ipaddress.AddressValueError, ValueError):
+                pass
+    # ③ running-config: "ip address <ip> <netmask>" (dhcp/no ip address 제외)
+    for line in (cfg_out or "").splitlines():
+        m = re.search(r"^\s*ip address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)", line)
         if m:
             try:
                 net = ipaddress.IPv4Network("%s/%s" % (m.group(1), m.group(2)), strict=False)
@@ -178,7 +190,21 @@ def detect_subnets(db_path, switch_id, username, password, source_ip=None):
             iface_out = conn.send_command("show ip interface", read_timeout=30)
         except Exception:
             pass
-    return _parse_connected_subnets(route_out, iface_out)
+        # ③ running-config의 ip address 줄 — L2 SVI/VRF 환경에서도 확실한 소스
+        cfg_out = ""
+        try:
+            cfg_out = conn.send_command(
+                "show running-config | include ip address", read_timeout=30)
+        except Exception:
+            pass
+    subnets = _parse_connected_subnets(route_out, iface_out, cfg_out)
+    if not subnets:
+        # 진단용: 어떤 출력이 왔는지 로그로 남겨 형식 차이를 추적 가능하게
+        utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
+                        route_sample=(route_out or "")[:200],
+                        iface_sample=(iface_out or "")[:200],
+                        cfg_sample=(cfg_out or "")[:200])
+    return subnets
 
 
 def collect_band(db_path, switch_id, subnet, username, password, source_ip=None):

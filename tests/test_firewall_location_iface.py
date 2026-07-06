@@ -35,6 +35,58 @@ def test_fortigate_parse_monitor_interfaces_dict():
     assert by["port3"]["ip"] == "192.168.1.1" and by["port3"]["mask"] == "24"
 
 
+def test_fortigate_get_with_retry_429(monkeypatch):
+    """429 응답이면 Retry-After 대기 후 재시도, 정상 응답은 즉시 반환."""
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda s: None)
+
+    class R:
+        def __init__(self, code, retry_after=None):
+            self.status_code = code
+            self.headers = {"Retry-After": retry_after} if retry_after else {}
+
+    class S:
+        def __init__(self, codes):
+            self.codes = list(codes)
+            self.calls = 0
+        def get(self, url, timeout=15):
+            self.calls += 1
+            return R(self.codes.pop(0))
+
+    s = S([429, 429, 200])
+    r = fortigate._get_with_retry(s, "https://x/api")
+    assert r.status_code == 200 and s.calls == 3
+    s2 = S([200])
+    assert fortigate._get_with_retry(s2, "u").status_code == 200 and s2.calls == 1
+
+
+def test_fortigate_collect_single_session(monkeypatch):
+    """collect()가 세션 1개로 인터페이스+ARP 수집(로그인 1회 — 429 방지)."""
+    sessions = {"n": 0}
+
+    def fake_make_session(host, port, token, u, p, verify, source_ip=None):
+        sessions["n"] += 1
+        class S:
+            def get(self, url, timeout=15):
+                class R:
+                    status_code = 200
+                    headers = {}
+                    def raise_for_status(self):
+                        pass
+                    def json(self):
+                        if "monitor/system/interface" in url:
+                            return {"results": {"port1": {"name": "port1", "ip": "10.0.0.1/24"}}}
+                        return {"results": [{"ip": "10.0.0.5", "mac": "AA:BB:CC:00:11:22",
+                                             "interface": "port1"}]}
+                return R()
+        return S(), "https://x:443"
+    monkeypatch.setattr(fortigate, "_make_session", fake_make_session)
+
+    res = fortigate.collect("10.0.0.99")
+    assert sessions["n"] == 1                     # 세션(로그인) 1회만
+    assert len(res["interfaces"]) == 1 and len(res["arp"]) == 1
+
+
 # ─── PaloAlto 논리 인터페이스 IP ─────────────────────────────
 def test_paloalto_parse_logical_interfaces():
     out = (

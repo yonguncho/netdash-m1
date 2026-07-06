@@ -91,6 +91,19 @@ def test_parse_connected_subnets():
     assert subnets.count("10.92.174.0/23") == 1
 
 
+def test_parse_connected_subnets_from_config():
+    """L2 SVI/VRF 환경: route/interface가 비어도 running-config ip address로 도출."""
+    from core import facility
+    cfg = ("interface Vlan100\n"
+           " ip address 10.92.174.11 255.255.254.0\n"
+           "interface Vlan200\n"
+           " ip address 10.92.176.1 255.255.255.0\n"
+           " no ip address\n")
+    subnets = facility._parse_connected_subnets("", "", cfg)
+    assert "10.92.174.0/23" in subnets
+    assert "10.92.176.0/24" in subnets
+
+
 def test_facility_detect_validates(client):
     sid = client.post("/api/switches/manual", json={"ip": "10.0.0.11", "name": "GW", "vendor": "cisco"}).get_json()["switch_id"]
     # 계정 없음 → 400

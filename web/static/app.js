@@ -536,8 +536,10 @@ function _fwCardHTML(f) {
     : f.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
     : f.location ? "<span style='font-size:10px'>" + escHtml(f.location) + "</span>" : "";
   return "<div class='sw-card sw-card--" + sc + "'>" +
-    "<div class='sw-card__icon'><div class='sw-icon' style='display:flex;align-items:center;justify-content:center;font-size:30px'>🛡</div></div>" +
-    "<div class='sw-card__name'>" + escHtml(f.name) + "</div>" +
+    "<div class='sw-card__icon'><div class='sw-icon'><div class='sw-icon__ports'>" +
+    renderMiniPorts({ status: f.status }) +
+    "</div></div></div>" +
+    "<div class='sw-card__name'>🛡 " + escHtml(f.name) + "</div>" +
     "<div class='sw-card__meta'>" +
       "<span>" + escHtml(f.host) + "</span>" + locLine +
       "<span style='font-size:10px'>" + escHtml(f.vendor || "") + " · 방화벽</span>" +

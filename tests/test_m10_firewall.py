@@ -122,10 +122,12 @@ def test_save_interfaces_replaces(temp_db):
 
 # ── 디스패치 (네트워크 mock) ───────────────────────────────────────
 def test_collect_firewall_fortigate(monkeypatch):
-    monkeypatch.setattr(fortigate, "get_interfaces",
-                        lambda *a, **k: [{"name": "port1", "ip": "10.0.0.1", "mask": "", "vdom_zone": "root"}])
-    monkeypatch.setattr(fortigate, "get_arp_table",
-                        lambda *a, **k: [{"ip": "10.0.0.50", "mac": "AA:BB", "interface": "port1"}])
+    # v3.38.1: 디스패처가 세션 1개 재사용하는 fortigate.collect 사용(429 방지)
+    monkeypatch.setattr(fortigate, "collect",
+                        lambda *a, **k: {"interfaces": [{"name": "port1", "ip": "10.0.0.1",
+                                                         "mask": "", "vdom_zone": "root"}],
+                                         "arp": [{"ip": "10.0.0.50", "mac": "AA:BB",
+                                                  "interface": "port1"}]})
     result = fw.collect_firewall("fortigate", "10.0.0.1", token="tok")
     assert len(result["interfaces"]) == 1
     assert len(result["arp"]) == 1

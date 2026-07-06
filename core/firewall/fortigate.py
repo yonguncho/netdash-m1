@@ -51,17 +51,32 @@ _ARP_PATHS = (
 )
 
 
-def get_arp_table(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
-    """FortiGate 전체 ARP 테이블 수집.
+def _get_with_retry(session, url, timeout=15, retries=3):
+    """GET + 429(Too Many Requests) 시 Retry-After 만큼 대기 후 재시도.
 
-    Returns: [{"ip", "mac", "interface"}, ...]
+    FortiGate는 REST 로그인/호출 속도 제한이 있어 연속 호출 시 429를 반환한다.
     """
-    s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
+    import time as _t
+    r = session.get(url, timeout=timeout)
+    for _ in range(retries):
+        if r.status_code != 429:
+            break
+        try:
+            wait = min(30, int(r.headers.get("Retry-After", 10) or 10))
+        except (TypeError, ValueError):
+            wait = 10
+        logger.warning("fortigate 429 rate-limited url=%s wait=%ss", url, wait)
+        _t.sleep(wait)
+        r = session.get(url, timeout=timeout)
+    return r
 
+
+def _fetch_arp(s, base, host):
+    """열린 세션으로 ARP 조회(경로 폴백 + 429 재시도)."""
     data = None
     tried = []
     for path in _ARP_PATHS:
-        r = s.get(f"{base}{path}", timeout=15)
+        r = _get_with_retry(s, f"{base}{path}")
         tried.append(f"{path}={r.status_code}")
         if r.status_code == 404:
             continue  # 이 버전엔 없는 경로 → 다음 후보
@@ -83,6 +98,15 @@ def get_arp_table(host, port=443, token="", username="", password="", verify_ssl
             entries.append({"ip": ip, "mac": mac, "interface": iface})
     logger.info("fortigate_arp host=%s collected=%d", host, len(entries))
     return entries
+
+
+def get_arp_table(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
+    """FortiGate 전체 ARP 테이블 수집.
+
+    Returns: [{"ip", "mac", "interface"}, ...]
+    """
+    s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
+    return _fetch_arp(s, base, host)
 
 
 def _split_ip_mask(val):
@@ -119,18 +143,11 @@ def _parse_monitor_interfaces(results):
     return ifaces
 
 
-def get_interfaces(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
-    """FortiGate 인터페이스 목록 및 IP 대역 수집.
-
-    실제 런타임 IP를 위해 monitor 엔드포인트를 우선 사용(DHCP/PPPoE 할당 IP 반영).
-    구버전/권한 문제로 monitor가 없으면 cmdb(설정값)로 폴백.
-    Returns: [{"name", "ip", "mask", "vdom_zone", "type"}, ...]
-    """
-    s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
-
+def _fetch_interfaces(s, base, host):
+    """열린 세션으로 인터페이스 조회(monitor 우선 + cmdb 폴백 + 429 재시도)."""
     # 1) monitor: 실제 유효 IP
     try:
-        r = s.get(f"{base}/api/v2/monitor/system/interface", timeout=15)
+        r = _get_with_retry(s, f"{base}/api/v2/monitor/system/interface")
         if r.status_code == 200:
             ifaces = _parse_monitor_interfaces(r.json().get("results"))
             if ifaces:
@@ -140,7 +157,7 @@ def get_interfaces(host, port=443, token="", username="", password="", verify_ss
         logger.warning("fortigate monitor interface failed host=%s err=%s", host, e)
 
     # 2) cmdb: 설정값 폴백
-    r = s.get(f"{base}/api/v2/cmdb/system/interface", timeout=15)
+    r = _get_with_retry(s, f"{base}/api/v2/cmdb/system/interface")
     r.raise_for_status()
     ifaces = []
     for e in r.json().get("results", []):
@@ -154,6 +171,25 @@ def get_interfaces(host, port=443, token="", username="", password="", verify_ss
             })
     logger.info("fortigate_interfaces(cmdb) host=%s count=%d", host, len(ifaces))
     return ifaces
+
+
+def get_interfaces(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
+    """FortiGate 인터페이스 목록 및 IP 대역 수집(단독 호출용 — 세션 1개 생성)."""
+    s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
+    return _fetch_interfaces(s, base, host)
+
+
+def collect(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
+    """인터페이스 + ARP를 '세션 1개'로 수집.
+
+    이전엔 인터페이스/ARP가 각자 로그인해 세션 2개를 만들었고, FortiGate의
+    로그인·API 속도 제한에 걸려 429(Too Many Requests)가 발생했다.
+    Returns: {"interfaces": [...], "arp": [...]}
+    """
+    s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
+    interfaces = _fetch_interfaces(s, base, host)
+    arp = _fetch_arp(s, base, host)
+    return {"interfaces": interfaces, "arp": arp}
 
 
 def parse_arp_cli(output):
