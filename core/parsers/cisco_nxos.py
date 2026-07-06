@@ -20,6 +20,7 @@ COMMANDS = {
     "mac": "show mac address-table dynamic",
     "arp": "show ip arp",
     "port_channel": "show port-channel summary",
+    "inventory": "show inventory",   # 모델명(PID) — show version에 없는 표기 변형 대응
 }
 
 _IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"

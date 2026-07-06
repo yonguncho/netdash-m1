@@ -60,3 +60,7 @@ def test_vendor_ui_unified():
     assert "_canonVendor" in js and "_vendorLabel" in js
     # 현황판 검색이 IP 포함
     assert "s.ip, s.host, s.name" in js
+    # 벤더 컬럼은 순수 벤더명만(OS는 버전 컬럼이 담당)
+    assert 'cisco_nxos: "Cisco"' in js
+    assert 'extreme_exos: "Extreme"' in js
+    assert 'alteon: "Radware"' in js

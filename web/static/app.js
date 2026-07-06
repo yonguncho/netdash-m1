@@ -743,9 +743,10 @@ var _DEVICE_TYPES = ["BackBone", "L3 Switch", "L2 Switch", "L4 Switch",
 var _VENDOR_ALIAS = { cisco: "cisco_ios", nexus: "cisco_nxos", cisco_nexus: "cisco_nxos",
                       arista: "arista_eos", extreme: "extreme_exos", extremexos: "extreme_exos",
                       exos: "extreme_exos", juniper: "juniper_junos", radware: "alteon" };
-var _VENDOR_LABELS = { cisco_ios: "Cisco IOS/IOS-XE", cisco_nxos: "Cisco NX-OS",
-                       arista_eos: "Arista EOS", extreme_exos: "Extreme EXOS",
-                       juniper_junos: "Juniper JUNOS", alteon: "Radware Alteon",
+// 표기는 순수 벤더명만(OS 구분은 '버전' 컬럼이 담당: IOS-XE 17.x / NX-OS 9.x ...)
+var _VENDOR_LABELS = { cisco_ios: "Cisco", cisco_nxos: "Cisco",
+                       arista_eos: "Arista", extreme_exos: "Extreme",
+                       juniper_junos: "Juniper", alteon: "Radware",
                        unknown: "알 수 없음" };
 function _canonVendor(v) {
   v = (v || "").toLowerCase();

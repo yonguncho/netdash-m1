@@ -1,5 +1,16 @@
 # NetDash 릴리스 노트
 
+## v3.39.0 (2026-07-06) — Alteon 자동 인식 · 벤더 표기 간소화 · NX-OS 모델 · DB 락/limit 수정
+
+- **Alteon L4(5224 등) '알 수 없음' 수정.** Alteon 프롬프트(`>> Main#`)가 `#`로
+  끝나 cisco 접속이 '성공'하고 명령은 오류 텍스트만 받아 예외 없이 끝나던 문제 →
+  출력에서 **Alteon 시그니처를 탐지하면 전용(메뉴 CLI) 수집으로 즉시 재수집**하고
+  벤더를 alteon으로 교정. 모델(5224)·버전(Alteon 29.x)까지 표기.
+- **벤더 컬럼 표기 간소화**: `Cisco / Extreme / Arista / Juniper / Radware`처럼
+  **순수 벤더명만** 표기(OS 구분은 버전 컬럼: IOS-XE 17.x / NX-OS 9.x가 담당).
+- **NX-OS 모델명 미표기 수정**: `show inventory`를 수집에 추가하고 **PID**에서
+  모델을 파싱(표기 변형 무관, 가장 확실한 소스). 재수집 한 번이면 채워짐.
+
 ## v3.38.5 (2026-07-06) — 'database is locked' 수집 중단 수정 + 설정 변경 rate limit 완화
 
 - **수집 중 'database is locked'로 중단되던 문제 근본 수정.**

@@ -148,6 +148,17 @@ def _is_unknown_vendor(vendor):
     return (vendor or "").strip().lower() in ("", "unknown")
 
 
+def _looks_like_alteon(outputs):
+    """수집 출력에서 Alteon(메뉴형 CLI) 시그니처 탐지.
+
+    Alteon 프롬프트('>> Main#')는 '#'로 끝나 cisco 드라이버 접속이 '성공'하고,
+    cisco 명령은 메뉴 오류 텍스트만 받아 예외 없이 '완료'되지만 데이터가 빈다.
+    출력 어디든 Alteon 흔적이 보이면 alteon으로 교정해 전용 수집으로 재수집.
+    """
+    joined = "\n".join(str(v) for v in (outputs or {}).values())[:20000]
+    return bool(re.search(r">>\s?[\w\s.-]*Main#|Alteon|Radware", joined, re.IGNORECASE))
+
+
 def _detect_vendor_from_version(text):
     """show version 출력에서 실제 벤더(device_type) 학습. 못 찾으면 None.
 
@@ -164,6 +175,8 @@ def _detect_vendor_from_version(text):
         return "extreme_exos"
     if "junos" in t or "juniper" in t:
         return "juniper_junos"
+    if "alteon" in t or "radware" in t:
+        return "alteon"
     if "ios-xe" in t or "ios xe" in t or "cisco ios" in t or "ios software" in t or "cisco" in t:
         return "cisco_ios"
     return None
@@ -212,6 +225,7 @@ def _parse_model(vendor, text):
     patterns = {
         "cisco_nxos": [r"cisco\s+(Nexus\s?\S+(?:\s+\S+)?)\s+[Cc]hassis",
                        r"cisco\s+(N[0-9]K-\S+)",
+                       r'PID:\s*([A-Z0-9][\w./-]+)',   # show inventory(가장 확실)
                        r"Hardware\s*\n\s*cisco\s+(\S+(?:\s+\S+)?)"],
         "cisco_ios": [r"Model Number\s*:\s*(\S+)",
                       r"cisco\s+((?:WS|C|IE|ME|CGR|ASR|ISR)[\w-]+)\s*\("],
@@ -454,6 +468,17 @@ def _worker_loop():
                 # unknown→cisco_ios처럼 정규화 결과와 감지가 같으면 DB 갱신을
                 # 건너뛰어 화면에 unknown이 남았다 → '저장된 원래 벤더'와 비교.
                 detected = _detect_vendor_from_version(outputs.get("version", ""))
+                # Alteon(메뉴형 CLI)은 프롬프트가 '#'로 끝나 cisco 접속이 '성공'하고
+                # 명령은 오류 텍스트만 받아 예외 없이 끝난다(unknown+빈 데이터).
+                # 출력에 Alteon 시그니처가 보이면 전용 수집으로 즉시 재수집.
+                if not detected and eff_vendor != "alteon" and _looks_like_alteon(outputs):
+                    utils.log_event("info", "alteon_signature_recollect",
+                                    switch_id=switch_id)
+                    outputs = _run_with_timeout(
+                        _alteon_collect, hard_to,
+                        switch, username, password, source_ip=source_ip)
+                    eff_vendor = "alteon"
+                    detected = "alteon"
                 if not detected and eff_vendor and eff_vendor != vendor:
                     detected = eff_vendor
                 if detected:
@@ -481,6 +506,9 @@ def _worker_loop():
             if not model and outputs.get("sysinfo"):
                 # EXOS 모델(System Type:)은 show version이 아니라 show switch에 있음
                 model = _parse_model(vendor, outputs.get("sysinfo", ""))
+            if not model and outputs.get("inventory"):
+                # NX-OS 모델은 show inventory의 PID가 가장 확실(표기 변형 무관)
+                model = _parse_model(vendor, outputs.get("inventory", ""))
             if osv or model:
                 try:
                     db.update_switch(db_path, switch_id, os_version=osv, model=model)

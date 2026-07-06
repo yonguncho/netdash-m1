@@ -143,6 +143,58 @@ def test_worker_always_verifies_vendor(temp_db, monkeypatch):
     assert seen.get("detect") is True
 
 
+def test_looks_like_alteon():
+    assert collector._looks_like_alteon(
+        {"status": "Error: unknown command\n>> Standalone SLB - Main#"})
+    assert collector._looks_like_alteon(
+        {"version": "Alteon Application Switch 5224"})
+    assert not collector._looks_like_alteon(
+        {"status": "Gi1/0/1 connected 1 a-full a-1000"})
+
+
+def test_parse_nxos_model_from_inventory():
+    inv = ('NAME: "Chassis",  DESCR: "Nexus9000 C93180YC-EX chassis"\n'
+           'PID: N9K-C93180YC-EX     ,  VID: V02 ,  SN: FDO12345ABC\n')
+    assert collector._parse_model("cisco_nxos", inv) == "N9K-C93180YC-EX"
+
+
+def test_worker_alteon_signature_recollect(temp_db, monkeypatch):
+    """cisco 접속이 '성공'해도 출력이 Alteon(>> Main#)이면 전용 수집으로 재수집.
+
+    실장비 증상: Alteon 5224가 unknown으로 등록 → 수집은 완료인데 벤더 '알 수 없음'
+    + 데이터 빈 채로 남음.
+    """
+    monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    sid = db.save_switch(temp_db, "L4-5224", "10.0.0.24", "unknown")
+    credentials.save_credential(sid, "admin", "pw")
+
+    def fake_ssh(switch, username, password, vendor, source_ip=None,
+                 detect_vendor=False, max_retries=3):
+        # cisco 드라이버 접속 '성공' — 그러나 전부 메뉴 CLI 오류 텍스트
+        err = "Error: unknown command\n>> Standalone SLB - Main#"
+        return ({"status": err, "mac": err, "arp": err, "version": err}, vendor)
+    monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
+    monkeypatch.setattr(collector, "_alteon_collect",
+                        lambda switch, u, p, source_ip=None: {
+                            "status": "", "mac": "", "arp": "",
+                            "version": "Alteon Application Switch 5224\n"
+                                       "Software Version 29.0.3.0"})
+
+    collector.init_collector()
+    collector.collect_switch(temp_db, sid, "admin", "pw")
+    import time
+    for _ in range(100):
+        sw = db.get_switch(temp_db, sid)
+        if sw["status"] in ("done", "failed") and sw["vendor"] == "alteon":
+            break
+        time.sleep(0.1)
+    sw = db.get_switch(temp_db, sid)
+    assert sw["vendor"] == "alteon" and sw["status"] == "done"
+    assert sw["model"] == "5224"                       # 모델까지 채워짐
+    assert (sw["os_version"] or "").startswith("Alteon 29")
+
+
 def test_worker_unknown_becomes_cisco_ios(temp_db, monkeypatch):
     """회귀: unknown 장비가 IOS-XE로 감지되면 DB가 cisco_ios로 갱신.
 
