@@ -326,13 +326,23 @@ def _restrict_db_permissions(db_path):
 def get_db(db_path):
     conn = None
     try:
-        conn = sqlite3.connect(str(db_path))
+        # timeout=30: 락 경합 시 즉시 'database is locked'로 터지지 않고 최대 30초 대기.
+        # (기본 5초 — 수집 워커·설비 수집·도달성 체크 동시 쓰기 환경에서 부족했음)
+        conn = sqlite3.connect(str(db_path), timeout=30)
         # HARDENING (CWE-276): Restrict database file permissions to owner-only
         # Prevents unauthorized access to sensitive network topology data
         _restrict_db_permissions(db_path)
         conn.row_factory = sqlite3.Row
         # Enable FOREIGN KEY constraints: SQLite defaults to OFF, explicit ON required (data integrity fix)
         conn.execute("PRAGMA foreign_keys = ON")
+        # WAL 모드: 읽기와 쓰기가 서로 차단하지 않아 락 경합 자체가 대폭 감소.
+        # (한 번 설정되면 DB 파일에 영구 저장 — 매 연결 실행은 no-op 수준)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            pass
         yield conn
         conn.commit()
     except Exception as e:

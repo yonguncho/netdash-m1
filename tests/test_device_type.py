@@ -53,6 +53,16 @@ def test_bulk_set_type(client):
     assert r2.status_code == 400
 
 
+def test_edit_rate_limits_allow_continuous_editing():
+    """구분 인라인 변경(PUT) 연속 편집이 rate limit에 걸리지 않도록 한도 상향."""
+    import inspect
+    import app as _app
+    src = inspect.getsource(_app.create_app)
+    assert '"update_switch", max_requests=240' in src   # 대당 1회 PUT — 240대/분
+    assert '"delete_switch", max_requests=60' in src
+    assert '"bulk_set_type", max_requests=60' in src
+
+
 def test_switch_column_filters_removed():
     """v3.36.2: 컬럼 필터 행 전체 제거(드롭다운·초기화 포함) — 검색은 상단 통합 검색창 하나."""
     html = HTML.read_text(encoding="utf-8")

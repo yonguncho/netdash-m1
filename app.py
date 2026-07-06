@@ -358,7 +358,7 @@ def create_app(demo_mode=None):
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/manual", methods=["POST"])
-    @rate_limit("add_switch_manual", max_requests=10, window_seconds=60)
+    @rate_limit("add_switch_manual", max_requests=30, window_seconds=60)
     def add_switch_manual():
         """수동으로 스위치 1대 등록 (SSRF 검증 포함)."""
         try:
@@ -1210,7 +1210,7 @@ def create_app(demo_mode=None):
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/<int:switch_id>", methods=["PUT"])
-    @rate_limit("update_switch", max_requests=20, window_seconds=60)
+    @rate_limit("update_switch", max_requests=240, window_seconds=60)  # 구분 인라인 변경: 대당 1회 PUT — 연속 편집 허용
     def update_switch_endpoint(switch_id):
         """스위치 등록 정보 수정."""
         try:
@@ -1244,7 +1244,7 @@ def create_app(demo_mode=None):
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/<int:switch_id>", methods=["DELETE"])
-    @rate_limit("delete_switch", max_requests=20, window_seconds=60)
+    @rate_limit("delete_switch", max_requests=60, window_seconds=60)
     def delete_switch_endpoint(switch_id):
         """스위치 삭제 (잘못 등록 시 제거)."""
         try:
@@ -1262,7 +1262,7 @@ def create_app(demo_mode=None):
                     "Server", "Firewall", "AP", "Tablet", "PC", "기타"}
 
     @app.route("/api/switches/bulk-set-type", methods=["POST"])
-    @rate_limit("bulk_set_type", max_requests=30, window_seconds=60)
+    @rate_limit("bulk_set_type", max_requests=60, window_seconds=60)
     def bulk_set_device_type():
         """선택된 스위치들의 구분(장비 유형)을 일괄 변경. body {ids:[...], device_type}"""
         try:
@@ -1305,7 +1305,7 @@ def create_app(demo_mode=None):
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/firewalls/<int:fid>", methods=["PUT"])
-    @rate_limit("update_firewall", max_requests=20, window_seconds=60)
+    @rate_limit("update_firewall", max_requests=60, window_seconds=60)
     def update_firewall_endpoint(fid):
         """방화벽 등록 정보 수정."""
         try:
