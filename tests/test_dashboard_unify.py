@@ -37,5 +37,5 @@ def test_dashboard_unifies_firewall_card():
 def test_room_uses_same_card():
     js = APP_JS.read_text(encoding="utf-8")
     # 서버실/현황판 모두 동일한 통합 방화벽 카드 사용 → 스위치와 통일
-    assert "firewalls.map(_fwCardHTML)" in js
+    assert "_fwCardHTML(it.o)" in js     # 서버실 카드뷰(랙 그룹 렌더)
     assert "fws.map(_fwCardHTML)" in js  # 현황판 카드뷰

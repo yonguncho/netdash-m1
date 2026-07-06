@@ -81,6 +81,14 @@ def test_state_injects_room_rack(client):
     assert sw["room_rack"] == "A09" and sw["room_unit"] == 27
 
 
+def test_room_rack_view_letter_rows():
+    """서버실 랙 뷰: 열(A/B) 단위 줄 배치 + 랙 내 U 내림차순."""
+    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert " 열</div>" in js                              # 'A 열' 줄 제목
+    assert "^[A-Za-z]+" in js                             # 랙 이름 앞 글자(열)로 그룹
+    assert "(b.o.room_unit || 0) - (a.o.room_unit" in js  # U 내림차순(상단부터)
+
+
 # ─── UI 요소 존재 ─────────────────────────────
 def test_ui_elements_present():
     html = HTML.read_text(encoding="utf-8")

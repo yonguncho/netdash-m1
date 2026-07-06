@@ -17,6 +17,10 @@ import threading
 from . import db, utils
 from . import collector as _collector
 
+# 청크 스윕 파라미터: ping N개마다 ARP 중간 수집(부분 결과 확보) + ping 간격(부담 완화)
+_SWEEP_CHUNK = 32
+_SWEEP_PING_GAP = 0.05   # 초 — /23(510개) 기준 총 +26초, 제어평면 여유 확보
+
 # 진행 상태(메모리). {"running","subnet","done","total","message"}
 _status = {"running": False, "subnet": None, "done": 0, "total": 0, "message": ""}
 _lock = threading.Lock()
@@ -222,43 +226,24 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
 
     _MAX_RECONNECT = 5
     reconnects = 0
-    arp_out = ""
-    conn = _connect()
-    try:
-        _set(message="대역 ping 중")
-        import time as _t
-        i = 0
-        while i < len(ips):
-            ip = ips[i]
-            try:
-                conn.send_command("ping %s repeat 1 timeout 1" % ip, read_timeout=5)
-            except Exception as e:
-                # 세션 끊김('socket is closed' 등)이면 재접속 후 같은 IP부터 재개.
-                # 그 외 오류(개별 ping 타임아웃 등)는 해당 IP만 건너뛰고 계속.
-                if _is_conn_dead(e) and reconnects < _MAX_RECONNECT:
-                    reconnects += 1
-                    utils.log_event("warning", "facility_session_reconnect",
-                                    subnet=subnet, attempt=reconnects, progress=i)
-                    _set(message="세션 끊김 — 재접속 %d/%d (진행 %d/%d)" % (
-                        reconnects, _MAX_RECONNECT, i, len(ips)))
-                    try:
-                        conn.disconnect()
-                    except Exception:
-                        pass
-                    _t.sleep(3)
-                    conn = _connect()
-                    _set(message="대역 ping 중 (재개)")
-                    continue  # 같은 IP 재시도
-            i += 1
-            if i % 20 == 0:
-                _set(done=i)
-        _set(done=len(ips), message="ARP 수집 중")
+    # ── 청크 스윕: ping 32개마다 그 자리에서 ARP를 중간 수집(부분 결과 즉시 확보) ──
+    #  · /24+ 대규모 대역에서 "완료인데 빈 결과"가 나던 문제의 근본 대책:
+    #    맨 끝 1회 ARP에 전부를 걸지 않고, 청크마다 작게 읽어 누적한다.
+    #  · ping 사이 짧은 간격(pacing)으로 스위치 제어평면 부담 완화.
+    #  · 중간에 복구 불가 오류가 나도 그때까지의 청크 결과는 저장(부분 완료).
+    import time as _t
+    arp_union = {}      # {ip: {ip, mac, interface}} — 청크 ARP 누적(뒤 결과 우선)
+    arp_reads = 0
+    partial_error = None
+
+    def _read_arp():
+        """작게 자주 읽는 ARP — 끊겼으면 1회 재접속 재시도."""
+        nonlocal conn, arp_reads
         try:
-            arp_out = conn.send_command("show ip arp", read_timeout=60)
+            out = conn.send_command("show ip arp", read_timeout=60)
         except Exception as e:
             if not _is_conn_dead(e):
                 raise
-            # ARP 직전에 끊긴 경우 한 번 재접속해 ARP만 재시도(스윕 결과는 유효)
             utils.log_event("warning", "facility_arp_reconnect", subnet=subnet)
             try:
                 conn.disconnect()
@@ -266,14 +251,62 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
                 pass
             _t.sleep(3)
             conn = _connect()
-            arp_out = conn.send_command("show ip arp", read_timeout=60)
+            out = conn.send_command("show ip arp", read_timeout=60)
+        arp_reads += 1
+        for a in cisco_ios._parse_arps(out, switch_id):
+            try:
+                if ipaddress.IPv4Address(a["ip"]) in net:   # 대역 밖 ARP는 제외
+                    arp_union[a["ip"]] = a
+            except (ipaddress.AddressValueError, ValueError):
+                continue
+
+    conn = _connect()
+    try:
+        _set(message="대역 ping 중")
+        i = 0
+        try:
+            while i < len(ips):
+                ip = ips[i]
+                try:
+                    conn.send_command("ping %s repeat 1 timeout 1" % ip, read_timeout=5)
+                except Exception as e:
+                    # 세션 끊김이면 재접속 후 같은 IP부터 재개. 그 외는 해당 IP만 건너뜀.
+                    if _is_conn_dead(e) and reconnects < _MAX_RECONNECT:
+                        reconnects += 1
+                        utils.log_event("warning", "facility_session_reconnect",
+                                        subnet=subnet, attempt=reconnects, progress=i)
+                        _set(message="세션 끊김 — 재접속 %d/%d (진행 %d/%d)" % (
+                            reconnects, _MAX_RECONNECT, i, len(ips)))
+                        try:
+                            conn.disconnect()
+                        except Exception:
+                            pass
+                        _t.sleep(3)
+                        conn = _connect()
+                        _set(message="대역 ping 중 (재개)")
+                        continue  # 같은 IP 재시도
+                i += 1
+                _t.sleep(_SWEEP_PING_GAP)          # 스위치 부담 완화(pacing)
+                if i % _SWEEP_CHUNK == 0:
+                    _set(done=i, message="대역 ping 중 (%d/%d · ARP 중간수집 %d회 · 확보 %d대)"
+                         % (i, len(ips), arp_reads, len(arp_union)))
+                    _read_arp()                    # 청크마다 ARP 중간 수집
+            _set(done=len(ips), message="ARP 최종 수집 중")
+            _read_arp()                            # 마지막 잔여분
+        except Exception as e:
+            # 복구 불가 오류 — 지금까지 확보한 청크 결과라도 저장(부분 완료)
+            if not arp_union:
+                raise
+            partial_error = _collector._sanitize_error_msg(str(e))
+            utils.log_event("warning", "facility_partial", subnet=subnet,
+                            collected=len(arp_union), error=partial_error)
     finally:
         try:
             conn.disconnect()
         except Exception:
             pass
 
-    arp = cisco_ios._parse_arps(arp_out, switch_id)  # [{ip, mac, interface}]
+    arp = list(arp_union.values())  # [{ip, mac, interface}]
     mac_map = db.get_mac_to_switchport(db_path)       # {mac: [(sid, sname, port)]}
     port_counts = db.get_port_mac_counts(db_path)     # {(sid, port_lower): MAC수}
     pc_map = db.get_port_channel_members(db_path)     # {(sid, po_lower): [members]}
@@ -293,10 +326,15 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
 
     saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip)
     utils.log_event("info", "facility_collected", subnet=subnet, pinged=len(ips),
-                    arp=len(arp), saved=saved, new=new_cnt, offline=off_cnt)
-    _set(running=False, message="완료(설비 %d · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt))
+                    arp=len(arp), saved=saved, new=new_cnt, offline=off_cnt,
+                    arp_reads=arp_reads, partial=bool(partial_error))
+    done_msg = "완료(설비 %d · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt)
+    if partial_error:
+        done_msg = "부분 완료(설비 %d 확보 — 중단 사유: %s)" % (len(by_ip), partial_error[:80])
+    _set(running=False, message=done_msg)
     return {"subnet": subnet, "pinged": len(ips), "arp": len(arp),
-            "saved": saved, "new": new_cnt, "offline": off_cnt}
+            "saved": saved, "new": new_cnt, "offline": off_cnt,
+            "partial": bool(partial_error)}
 
 
 _KEEP_COLS = ("subnet", "ip", "mac", "switch_id", "switch_name", "port", "direct", "via")

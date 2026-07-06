@@ -366,6 +366,49 @@ def test_collect_band_reconnects_on_socket_closed(temp_db, monkeypatch):
     assert res["saved"] >= 1                      # ARP 결과 저장까지 완료
 
 
+def test_collect_band_chunked_arp_union(temp_db, monkeypatch):
+    """청크 스윕: ping N개마다 ARP 중간 수집 → 여러 번의 ARP 결과가 합쳐져 저장.
+
+    대규모 대역(/24+)에서 마지막 1회 ARP에 전부를 걸다 빈 결과가 나던 문제의 근본 대책.
+    """
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "TPS11", "10.9.0.11", "cisco")
+    monkeypatch.setattr(facility, "_SWEEP_CHUNK", 4)      # 4개마다 중간 ARP
+    monkeypatch.setattr(facility, "_SWEEP_PING_GAP", 0)
+    state = {"arp_calls": 0}
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            if cmd.startswith("ping") or cmd.startswith("terminal"):
+                return ""
+            if cmd == "show ip arp":
+                state["arp_calls"] += 1
+                # 1차 중간수집엔 .1만, 이후엔 .2만 보임 → 합쳐져 2대가 저장돼야
+                if state["arp_calls"] == 1:
+                    return "Internet  10.9.0.1  0  aabb.cc00.0001  ARPA  Vlan1\n"
+                return ("Internet  10.9.0.2  0  aabb.cc00.0002  ARPA  Vlan1\n"
+                        "Internet  192.168.99.9  0  aabb.cc00.0099  ARPA  Vlan9\n")  # 대역 밖 제외
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    monkeypatch.setattr(facility, "_set", lambda **kw: None)
+
+    res = facility.collect_band(temp_db, sid, "10.9.0.0/29", "u", "p")  # 6 hosts
+    assert state["arp_calls"] >= 2                 # 중간 + 최종
+    hosts = {h["ip"] for h in db.get_facility_hosts(temp_db)}
+    assert "10.9.0.1" in hosts and "10.9.0.2" in hosts   # 청크 결과 합산
+    assert "192.168.99.9" not in hosts             # 대역 밖 ARP 제외
+    assert res["partial"] is False
+
+
 def test_facility_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'data-tab="facility"' in html
@@ -385,3 +428,6 @@ def test_facility_ui_present():
     assert 'id="fac-subnet-filter"' in html
     assert "_facMatchesSearch" in js
     assert "replace(/[^0-9a-f]/g" in js  # MAC 구분자 무시 비교
+    # IP 숫자 정렬(헤더 클릭 토글)
+    assert 'id="fac-sort-ip"' in html
+    assert "_ipToInt" in js and "_facIpSortDir" in js

@@ -559,10 +559,27 @@ function renderRoomGrid(switches, firewalls) {
     grid.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
-  switches = switches.slice().sort(_roomSort);
-  firewalls = firewalls.slice().sort(_roomSort);
-  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, false); }).join("") +
-                   firewalls.map(_fwCardHTML).join("");
+  // 랙별 섹션으로 그룹화: "A09 랙" 제목 아래 U 내림차순(U42→U41→U40) 카드 나열
+  var racks = {};
+  switches.forEach(function (s) { (racks[s.room_rack] = racks[s.room_rack] || []).push({ k: "sw", o: s }); });
+  firewalls.forEach(function (f) { (racks[f.room_rack] = racks[f.room_rack] || []).push({ k: "fw", o: f }); });
+  var rkeys = Object.keys(racks).sort();
+  grid.innerHTML = rkeys.map(function (rk) {
+    var items = racks[rk].slice().sort(function (a, b) {
+      return (b.o.room_unit || 0) - (a.o.room_unit || 0);   // U 큰 번호가 먼저(실제 랙 상단)
+    });
+    var cards = items.map(function (it) {
+      var uBadge = "<div style='font-size:11px;font-weight:700;color:#2563eb;margin-bottom:2px'>U" +
+        escHtml(String(it.o.room_unit)) + "</div>";
+      return "<div style='display:flex;flex-direction:column'>" + uBadge +
+        (it.k === "fw" ? _fwCardHTML(it.o) : swCardHTML(it.o, false)) + "</div>";
+    }).join("");
+    return "<div style='width:100%'>" +
+      "<div style='font-size:15px;font-weight:700;margin:14px 0 8px;color:#1e293b'>🗄 " +
+      escHtml(rk) + " 랙 <span style='font-size:12px;color:#64748b;font-weight:500'>(" +
+      items.length + "대 · U 내림차순)</span></div>" +
+      "<div class='switch-grid'>" + cards + "</div></div>";
+  }).join("");
   switches.forEach(function (sw) {
     var card = document.getElementById("swcard-" + sw.id);
     if (!card) return;
@@ -591,8 +608,17 @@ function renderRoomRackView(switches, firewalls) {
   var racks = {};
   switches.forEach(function (sw) { (racks[sw.room_rack] = racks[sw.room_rack] || []).push({ k: "sw", o: sw }); });
   firewalls.forEach(function (f) { (racks[f.room_rack] = racks[f.room_rack] || []).push({ k: "fw", o: f }); });
-  var rkeys = Object.keys(racks).sort();
-  host.innerHTML = "<div class='rack-row'>" + rkeys.map(function (rk) {
+
+  // 열(A/B/...) 단위로 줄을 나눔: A01 A02...가 한 줄, B01 B02...가 다음 줄.
+  // 각 랙 안은 U 내림차순(U42→U41→U40 — 실제 랙 상단부터).
+  var rows = {};
+  Object.keys(racks).forEach(function (rk) {
+    var m = rk.match(/^[A-Za-z]+/);
+    var letter = m ? m[0].toUpperCase() : "#";
+    (rows[letter] = rows[letter] || []).push(rk);
+  });
+
+  function _rackHtml(rk) {
     var units = racks[rk].slice().sort(function (a, b) { return (b.o.room_unit || 0) - (a.o.room_unit || 0); });
     var unitsHtml = units.map(function (u) {
       if (u.k === "fw") {
@@ -609,9 +635,15 @@ function renderRoomRackView(switches, firewalls) {
         "<span class='rack-unit__name'>" + escHtml(sw.name) + "</span>" +
         "<span class='rack-unit__ip'>" + escHtml(sw.ip) + "</span></div>";
     }).join("");
-    return "<div class='rack'><div class='rack__label'>🗄 " + escHtml(rk) + " 랙</div>" +
+    return "<div class='rack'><div class='rack__label'>🗄 " + escHtml(rk) + "</div>" +
       "<div class='rack__units'>" + unitsHtml + "</div></div>";
-  }).join("") + "</div>";
+  }
+
+  host.innerHTML = Object.keys(rows).sort().map(function (letter) {
+    var racksHtml = rows[letter].sort().map(_rackHtml).join("");
+    return "<div class='rack-group'><div class='rack-group__title'>🗄 " + escHtml(letter) +
+      " 열</div><div class='rack-row'>" + racksHtml + "</div></div>";
+  }).join("");
 }
 
 function renderSwitchGrid(switches) {
@@ -1049,6 +1081,25 @@ function renderFacilityTable(hosts) {
   _renderFacilityRows();
 }
 
+// 설비 IP 정렬 상태(1=오름차순, -1=내림차순) — 헤더 클릭으로 전환
+var _facIpSortDir = 1;
+
+function _ipToInt(ip) {
+  var p = String(ip || "").split(".");
+  if (p.length !== 4) return 0;
+  return ((+p[0]) << 24 >>> 0) + ((+p[1]) << 16) + ((+p[2]) << 8) + (+p[3]);
+}
+
+(function () {
+  var th = document.getElementById("fac-sort-ip");
+  if (th) th.addEventListener("click", function () {
+    _facIpSortDir = -_facIpSortDir;
+    var ar = document.getElementById("fac-sort-arrow");
+    if (ar) ar.textContent = _facIpSortDir === 1 ? "▲" : "▼";
+    _renderFacilityRows();
+  });
+})();
+
 // 설비 검색: IP·대역·연결 스위치·포트는 부분 일치, MAC은 구분자(:.-) 무시 비교
 function _facMatchesSearch(h, q) {
   if (!q) return true;
@@ -1094,6 +1145,11 @@ function _renderFacilityRows() {
 
   var onlyDirect = document.getElementById("fac-only-direct");
   var rows = (onlyDirect && onlyDirect.checked) ? filtered.filter(_facIsDirect) : filtered;
+
+  // IP 숫자 기준 정렬(문자열 정렬로 10 < 2가 되던 것 교정) — 헤더 클릭으로 방향 전환
+  rows = rows.slice().sort(function (a, b) {
+    return _facIpSortDir * (_ipToInt(a.ip) - _ipToInt(b.ip));
+  });
   if (!rows.length) {
     var emptyMsg;
     if (!all.length) emptyMsg = "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.";
