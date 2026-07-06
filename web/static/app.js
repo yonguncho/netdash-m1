@@ -833,14 +833,29 @@ function _refreshColFilterOptions(switches) {
   var clear = document.getElementById("btn-sw-filter-clear");
   if (clear) clear.addEventListener("click", function () {
     document.querySelectorAll(".sw-colf").forEach(function (el) { el.value = ""; });
+    var srch = document.getElementById("loc-filter-sw");
+    if (srch) srch.value = "";
     renderSwitchTable(_switches);
   });
 })();
 
 // ─── 스위치 테이블 (스위치 현황 탭) ─────────────────────────────
+// 스위치 현황 통합 검색(우측 상단 검색창 하나로 전 컬럼 검색)
+function _applySwSearch(list) {
+  var el = document.getElementById("loc-filter-sw");
+  var q = el ? el.value.trim().toLowerCase() : "";
+  if (!q) return list;
+  return (list || []).filter(function (s) {
+    var hay = [s.name, s.ip, s.hostname, s.vendor, s.model, s.os_version,
+               s.device_type, s.location, s.tps_location]
+      .map(function (x) { return x || ""; }).join(" ").toLowerCase();
+    return hay.indexOf(q) >= 0;
+  });
+}
+
 function renderSwitchTable(switches) {
   _refreshColFilterOptions(switches);
-  switches = _applyColFilters(_applyLocFilter(switches, "loc-filter-sw"));
+  switches = _applyColFilters(_applySwSearch(switches));
   var tbody = document.getElementById("switch-table-body");
   if (tbody && !switches.length) {
     tbody.innerHTML = "<tr><td colspan='12' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (필터 '초기화'로 전체 보기)</td></tr>";
@@ -961,6 +976,10 @@ function swStatusClass(sw) {
 
 // ─── VLAN 탭 (VLAN 기준 그룹 + 드롭다운) ─────────────────────────
 function loadVlans() {
+  var host = document.getElementById("vlan-accordion");
+  if (host && !host.children.length) {
+    host.innerHTML = "<p style='color:#64748b'>VLAN 현황 계산 중... (스위치가 많으면 수 초 걸릴 수 있습니다)</p>";
+  }
   fetch("/api/vlans").then(function(r) { return r.json(); }).then(function(data) {
     renderVlanAccordion(data.vlans || []);
   }).catch(function(e) { console.error("vlan load:", e); });

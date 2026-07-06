@@ -54,15 +54,17 @@ def test_bulk_set_type(client):
 
 
 def test_switch_column_filters_ui():
-    """스위치 현황 컬럼별 필터 행(드롭다운+텍스트, AND 조합, 초기화)."""
+    """v3.36.1: 컬럼 필터는 드롭다운만(텍스트칸 제거), 검색은 상단 통합 검색창 하나."""
     html = HTML.read_text(encoding="utf-8")
     assert 'id="sw-filter-row"' in html
-    assert 'data-col="device_type"' in html and 'data-col="ip"' in html
+    assert 'data-col="device_type"' in html
     assert 'data-col="status"' in html and 'data-col="alert"' in html
+    assert 'data-col="ip"' not in html          # 컬럼별 텍스트 검색 제거
+    assert 'data-col="model"' not in html
     assert 'id="btn-sw-filter-clear"' in html
     js = APP_JS.read_text(encoding="utf-8")
     assert "_applyColFilters" in js and "_refreshColFilterOptions" in js
-    assert "sw-colf" in js
+    assert "_applySwSearch" in js               # 상단 검색창 = 전 컬럼 통합 검색
 
 
 def test_device_type_ui():

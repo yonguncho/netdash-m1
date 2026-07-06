@@ -229,7 +229,7 @@
           </select>
           <button id="btn-sw-apply-type" class="btn btn--secondary" style="font-size:12px" disabled>선택 항목에 적용</button>
           <button id="btn-configs-export" class="btn btn--secondary" style="font-size:12px" title="전체 스위치의 최신 running-config 백업을 ZIP으로 다운로드">config 일괄 다운로드</button>
-          <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+          <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·모델·버전·위치...)" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:230px">
         </div>
       </div>
       <div id="switch-table-wrap" class="table-wrap">
@@ -240,16 +240,16 @@
               <th>구분</th><th>IP</th><th>호스트네임</th><th>벤더</th><th>모델</th><th>버전</th>
               <th>위치</th><th>상태</th><th>경보</th><th>마지막 수집</th><th>작업</th>
             </tr>
-            <!-- 컬럼별 필터(조건 AND) — 입력/선택 즉시 리스트 반영 -->
+            <!-- 컬럼 필터(드롭다운, 조건 AND) — 텍스트 검색은 우측 상단 검색창 하나로 통합 -->
             <tr id="sw-filter-row">
               <th></th>
               <th><select class="sw-colf" data-col="device_type" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
-              <th><input class="sw-colf" data-col="ip" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
-              <th><input class="sw-colf" data-col="hostname" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
+              <th></th>
+              <th></th>
               <th><select class="sw-colf" data-col="vendor" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
-              <th><input class="sw-colf" data-col="model" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
-              <th><input class="sw-colf" data-col="os_version" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
-              <th><input class="sw-colf" data-col="location" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
+              <th></th>
+              <th></th>
+              <th></th>
               <th><select class="sw-colf" data-col="status" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
               <th><select class="sw-colf" data-col="alert" style="width:100%;font-size:11px">
                 <option value="">전체</option><option value="__yes__">있음</option><option value="__no__">없음</option>
