@@ -754,91 +754,6 @@ document.addEventListener("change", function (e) {
   });
 })();
 
-// ─── 스위치 현황 컬럼별 필터 ─────────────────────────────────────
-function _swColFilterValues() {
-  var f = {};
-  document.querySelectorAll(".sw-colf").forEach(function (el) {
-    var v = (el.value || "").trim();
-    if (v) f[el.getAttribute("data-col")] = v;
-  });
-  return f;
-}
-
-function _applyColFilters(list) {
-  var f = _swColFilterValues();
-  if (!Object.keys(f).length) return list;
-  return (list || []).filter(function (sw) {
-    for (var col in f) {
-      var want = f[col];
-      if (col === "device_type") {
-        var dv = sw.device_type || "";
-        if (want === "__none__" ? dv !== "" : dv !== want) return false;
-      } else if (col === "vendor" || col === "status") {
-        if ((sw[col] || "") !== want) return false;
-      } else if (col === "alert") {
-        var has = sw.alert && sw.alert !== "none";
-        if (want === "__yes__" ? !has : has) return false;
-      } else {
-        // 텍스트 부분 일치. 위치는 location+TPS 라벨 모두에서 검색
-        var hay = col === "location"
-          ? ((sw.location || "") + " " + (sw.tps_location || ""))
-          : (sw[col] || "");
-        if (String(hay).toLowerCase().indexOf(want.toLowerCase()) < 0) return false;
-      }
-    }
-    return true;
-  });
-}
-
-// 드롭다운 옵션을 현재 데이터 기준으로 갱신(선택값 유지)
-function _refreshColFilterOptions(switches) {
-  function fill(col, values, labelFn) {
-    var sel = document.querySelector(".sw-colf[data-col='" + col + "']");
-    if (!sel) return;
-    var cur = sel.value;
-    var opts = "<option value=''>전체</option>";
-    if (col === "device_type") opts += "<option value='__none__'>미지정</option>";
-    values.forEach(function (v) {
-      opts += "<option value='" + escHtml(v) + "'>" + escHtml(labelFn ? labelFn(v) : v) + "</option>";
-    });
-    sel.innerHTML = opts;
-    sel.value = cur;  // 목록 갱신 후에도 선택 유지(없어진 값이면 자동 '전체')
-  }
-  var uniq = function (key) {
-    var s = {};
-    (switches || []).forEach(function (sw) { if (sw[key]) s[sw[key]] = 1; });
-    return Object.keys(s).sort();
-  };
-  fill("device_type", _DEVICE_TYPES.filter(function (t) {
-    return (switches || []).some(function (s) { return s.device_type === t; });
-  }));
-  fill("vendor", uniq("vendor"));
-  var statusKo = { done: "정상", failed: "실패", collecting: "수집중", "new": "미수집" };
-  fill("status", uniq("status"), function (v) { return statusKo[v] || v; });
-}
-
-(function () {
-  // 필터 입력/선택 → 즉시 재렌더(위임)
-  document.addEventListener("input", function (e) {
-    if (e.target && e.target.classList && e.target.classList.contains("sw-colf")) {
-      renderSwitchTable(_switches);
-    }
-  });
-  document.addEventListener("change", function (e) {
-    if (e.target && e.target.classList && e.target.classList.contains("sw-colf") &&
-        e.target.tagName === "SELECT") {
-      renderSwitchTable(_switches);
-    }
-  });
-  var clear = document.getElementById("btn-sw-filter-clear");
-  if (clear) clear.addEventListener("click", function () {
-    document.querySelectorAll(".sw-colf").forEach(function (el) { el.value = ""; });
-    var srch = document.getElementById("loc-filter-sw");
-    if (srch) srch.value = "";
-    renderSwitchTable(_switches);
-  });
-})();
-
 // ─── 스위치 테이블 (스위치 현황 탭) ─────────────────────────────
 // 스위치 현황 통합 검색(우측 상단 검색창 하나로 전 컬럼 검색)
 function _applySwSearch(list) {
@@ -854,11 +769,10 @@ function _applySwSearch(list) {
 }
 
 function renderSwitchTable(switches) {
-  _refreshColFilterOptions(switches);
-  switches = _applyColFilters(_applySwSearch(switches));
+  switches = _applySwSearch(switches);
   var tbody = document.getElementById("switch-table-body");
   if (tbody && !switches.length) {
-    tbody.innerHTML = "<tr><td colspan='12' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (필터 '초기화'로 전체 보기)</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='12' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
     var allChk0 = document.getElementById("sw-check-all");
     if (allChk0) allChk0.checked = false;
     _updateBulkDeleteBtn();

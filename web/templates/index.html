@@ -240,23 +240,6 @@
               <th>구분</th><th>IP</th><th>호스트네임</th><th>벤더</th><th>모델</th><th>버전</th>
               <th>위치</th><th>상태</th><th>경보</th><th>마지막 수집</th><th>작업</th>
             </tr>
-            <!-- 컬럼 필터(드롭다운, 조건 AND) — 텍스트 검색은 우측 상단 검색창 하나로 통합 -->
-            <tr id="sw-filter-row">
-              <th></th>
-              <th><select class="sw-colf" data-col="device_type" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
-              <th></th>
-              <th></th>
-              <th><select class="sw-colf" data-col="vendor" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th><select class="sw-colf" data-col="status" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
-              <th><select class="sw-colf" data-col="alert" style="width:100%;font-size:11px">
-                <option value="">전체</option><option value="__yes__">있음</option><option value="__no__">없음</option>
-              </select></th>
-              <th></th>
-              <th><button id="btn-sw-filter-clear" class="btn btn--ghost" style="font-size:11px;padding:2px 6px">초기화</button></th>
-            </tr>
           </thead>
           <tbody id="switch-table-body"></tbody>
         </table>

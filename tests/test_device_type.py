@@ -53,17 +53,14 @@ def test_bulk_set_type(client):
     assert r2.status_code == 400
 
 
-def test_switch_column_filters_ui():
-    """v3.36.1: 컬럼 필터는 드롭다운만(텍스트칸 제거), 검색은 상단 통합 검색창 하나."""
+def test_switch_column_filters_removed():
+    """v3.36.2: 컬럼 필터 행 전체 제거(드롭다운·초기화 포함) — 검색은 상단 통합 검색창 하나."""
     html = HTML.read_text(encoding="utf-8")
-    assert 'id="sw-filter-row"' in html
-    assert 'data-col="device_type"' in html
-    assert 'data-col="status"' in html and 'data-col="alert"' in html
-    assert 'data-col="ip"' not in html          # 컬럼별 텍스트 검색 제거
-    assert 'data-col="model"' not in html
-    assert 'id="btn-sw-filter-clear"' in html
+    assert 'id="sw-filter-row"' not in html
+    assert 'sw-colf' not in html
+    assert 'id="btn-sw-filter-clear"' not in html
     js = APP_JS.read_text(encoding="utf-8")
-    assert "_applyColFilters" in js and "_refreshColFilterOptions" in js
+    assert "_applyColFilters" not in js and "sw-colf" not in js
     assert "_applySwSearch" in js               # 상단 검색창 = 전 컬럼 통합 검색
 
 
