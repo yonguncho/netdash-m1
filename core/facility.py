@@ -207,6 +207,46 @@ def detect_subnets(db_path, switch_id, username, password, source_ip=None):
     return subnets
 
 
+def _find_vrf_for_subnet(conn, net):
+    """대상 대역이 어느 VRF에 속하는지 탐지(IOS/IOS-XE). 글로벌이면 None.
+
+    관리 IP와 다른 대역(예: 172.27.x)이 VRF에 있으면 일반 ping은 글로벌로 나가
+    실패하고 show ip arp에도 안 보여 '완료인데 0대'가 된다 → vrf 키워드 필요.
+    """
+    try:
+        vrf_out = conn.send_command("show vrf", read_timeout=15)
+    except Exception:
+        return None
+    names = []
+    for line in (vrf_out or "").splitlines():
+        m = re.match(r"^\s{0,2}(\S+)\s+", line)
+        if not m:
+            continue
+        name = m.group(1)
+        if name.lower() in ("name", "vrf", "%", "---", "") or name.startswith("-"):
+            continue
+        if "invalid" in line.lower():
+            return None
+        names.append(name)
+    for name in names[:10]:
+        try:
+            out = conn.send_command("show ip route vrf %s connected" % name,
+                                    read_timeout=20)
+        except Exception:
+            continue
+        # connected 대역들과 비교 — 수집 대역이 그 안(하위 대역 포함)이면 해당 VRF
+        for m in re.finditer(r"([\d.]+/\d{1,2})\s+is\s+directly\s+connected", out or ""):
+            try:
+                route_net = ipaddress.IPv4Network(m.group(1), strict=False)
+                if net.subnet_of(route_net):
+                    utils.log_event("info", "facility_vrf_detected",
+                                    vrf=name, subnet=str(net))
+                    return name
+            except (ipaddress.AddressValueError, ValueError):
+                continue
+    return None
+
+
 def collect_band(db_path, switch_id, subnet, username, password, source_ip=None):
     """동기 수집(백그라운드 스레드에서 호출). 진행 상태는 _status로 갱신."""
     from netmiko import ConnectHandler
@@ -262,11 +302,15 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     arp_reads = 0
     partial_error = None
 
+    vrf = None            # 대역이 VRF 소속이면 ping/ARP에 vrf 키워드 적용
+    arp_cmd = "show ip arp"
+    last_arp_sample = ""  # 0대 완료 시 진단용 원문 샘플
+
     def _read_arp():
         """작게 자주 읽는 ARP — 끊겼으면 1회 재접속 재시도."""
-        nonlocal conn, arp_reads
+        nonlocal conn, arp_reads, last_arp_sample
         try:
-            out = conn.send_command("show ip arp", read_timeout=60)
+            out = conn.send_command(arp_cmd, read_timeout=60)
         except Exception as e:
             if not _is_conn_dead(e):
                 raise
@@ -277,8 +321,9 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
                 pass
             _t.sleep(3)
             conn = _connect()
-            out = conn.send_command("show ip arp", read_timeout=60)
+            out = conn.send_command(arp_cmd, read_timeout=60)
         arp_reads += 1
+        last_arp_sample = (out or "")[:300]
         for a in cisco_ios._parse_arps(out, switch_id):
             try:
                 if ipaddress.IPv4Address(a["ip"]) in net:   # 대역 밖 ARP는 제외
@@ -288,13 +333,20 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
 
     conn = _connect()
     try:
-        _set(message="대역 ping 중")
+        # 대역이 VRF에 속하면 ping/ARP에 vrf 적용(관리대역≠수집대역 환경 대응)
+        _set(message="VRF 확인 중")
+        vrf = _find_vrf_for_subnet(conn, net)
+        if vrf:
+            arp_cmd = "show ip arp vrf %s" % vrf
+        ping_tpl = ("ping vrf %s %%s repeat 1 timeout 1" % vrf) if vrf \
+                   else "ping %s repeat 1 timeout 1"
+        _set(message="대역 ping 중" + ((" (VRF %s)" % vrf) if vrf else ""))
         i = 0
         try:
             while i < len(ips):
                 ip = ips[i]
                 try:
-                    conn.send_command("ping %s repeat 1 timeout 1" % ip, read_timeout=5)
+                    conn.send_command(ping_tpl % ip, read_timeout=5)
                 except Exception as e:
                     # 세션 끊김이면 재접속 후 같은 IP부터 재개. 그 외는 해당 IP만 건너뜀.
                     if _is_conn_dead(e) and reconnects < _MAX_RECONNECT:
@@ -353,7 +405,12 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip)
     utils.log_event("info", "facility_collected", subnet=subnet, pinged=len(ips),
                     arp=len(arp), saved=saved, new=new_cnt, offline=off_cnt,
-                    arp_reads=arp_reads, partial=bool(partial_error))
+                    arp_reads=arp_reads, vrf=vrf or "(global)",
+                    partial=bool(partial_error))
+    if not by_ip:
+        # 0대 완료 — VRF/ARP 형식 진단을 위해 원문 샘플을 로그로
+        utils.log_event("warning", "facility_zero_result", subnet=subnet,
+                        vrf=vrf or "(global)", arp_sample=last_arp_sample)
     done_msg = "완료(설비 %d · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt)
     if partial_error:
         done_msg = "부분 완료(설비 %d 확보 — 중단 사유: %s)" % (len(by_ip), partial_error[:80])

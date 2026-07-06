@@ -422,6 +422,88 @@ def test_collect_band_chunked_arp_union(temp_db, monkeypatch):
     assert res["partial"] is False
 
 
+def test_collect_band_vrf_detection(temp_db, monkeypatch):
+    """대역이 VRF 소속이면 ping/ARP에 vrf 키워드 적용(관리대역≠수집대역).
+
+    실장비 증상: 172.27.54.0/24 대역 수집 '완료'인데 리스트 0대 —
+    VRF라 글로벌 ping/ARP에 안 잡히던 것.
+    """
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "SW164", "10.92.128.164", "cisco")
+    monkeypatch.setattr(facility, "_SWEEP_PING_GAP", 0)
+    state = {"pings": [], "arp_cmds": []}
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            if cmd == "show vrf":
+                return ("  Name      Default RD  Protocols  Interfaces\n"
+                        "  MGMT      <not set>   ipv4       Vlan10\n"
+                        "  PROD      <not set>   ipv4       Vlan540\n")
+            if cmd.startswith("show ip route vrf"):
+                if "PROD" in cmd:
+                    return "C        172.27.54.0/24 is directly connected, Vlan540\n"
+                return ""
+            if cmd.startswith("ping"):
+                state["pings"].append(cmd)
+                return "!!!!!"
+            if cmd.startswith("show ip arp"):
+                state["arp_cmds"].append(cmd)
+                return "Internet  172.27.54.4  0  aabb.cc00.0054  ARPA  Vlan540\n"
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    monkeypatch.setattr(facility, "_set", lambda **kw: None)
+
+    facility.collect_band(temp_db, sid, "172.27.54.0/29", "u", "p")
+    assert all(p.startswith("ping vrf PROD ") for p in state["pings"])   # VRF ping
+    assert all(c == "show ip arp vrf PROD" for c in state["arp_cmds"])   # VRF ARP
+    hosts = {h["ip"] for h in db.get_facility_hosts(temp_db)}
+    assert "172.27.54.4" in hosts
+
+
+def test_collect_band_global_when_no_vrf(temp_db, monkeypatch):
+    """VRF 미검출이면 기존처럼 글로벌 ping/ARP."""
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "SWG", "10.9.0.11", "cisco")
+    monkeypatch.setattr(facility, "_SWEEP_PING_GAP", 0)
+    state = {"pings": [], "arp_cmds": []}
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            if cmd == "show vrf":
+                return "% Invalid input detected"
+            if cmd.startswith("ping"):
+                state["pings"].append(cmd)
+                return "!!!!!"
+            if cmd.startswith("show ip arp"):
+                state["arp_cmds"].append(cmd)
+                return "Internet  10.9.0.1  0  aabb.cc00.0001  ARPA  Vlan1\n"
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    monkeypatch.setattr(facility, "_set", lambda **kw: None)
+
+    facility.collect_band(temp_db, sid, "10.9.0.0/29", "u", "p")
+    assert all(not p.startswith("ping vrf") for p in state["pings"])
+    assert all(c == "show ip arp" for c in state["arp_cmds"])
+
+
 def test_facility_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'data-tab="facility"' in html
