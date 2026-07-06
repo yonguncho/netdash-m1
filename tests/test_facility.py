@@ -317,6 +317,55 @@ def test_facility_export_endpoint(client):
     assert r.data[:3] == b"\xef\xbb\xbf"
 
 
+def test_collect_band_reconnects_on_socket_closed(temp_db, monkeypatch):
+    """대역 수집 중 'Socket is closed'로 세션이 끊기면 재접속 후 이어서 진행.
+
+    실장비 증상: 긴 ping 스윕 중 세션 종료 → '실패: socket is closed'.
+    """
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "TPS11", "10.9.0.11", "cisco")
+    state = {"conns": 0, "pings": []}
+
+    class FakeConn:
+        def __init__(self, **kw):
+            state["conns"] += 1
+            self.no = state["conns"]
+            self.calls = 0
+
+        def check_enable_mode(self):
+            return True
+
+        def disconnect(self):
+            pass
+
+        def send_command(self, cmd, read_timeout=10):
+            if cmd.startswith("terminal"):
+                return ""
+            if cmd.startswith("ping"):
+                self.calls += 1
+                # 첫 세션은 3번째 ping에서 끊김 → 재접속 후 같은 IP부터 재개돼야
+                if self.no == 1 and self.calls == 3:
+                    raise OSError("Socket is closed")
+                state["pings"].append(cmd.split()[1])
+                return "!!!!!"
+            if cmd == "show ip arp":
+                return ("Internet  10.9.0.1   0  aabb.cc00.0100  ARPA  Vlan1\n")
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    monkeypatch.setattr(facility, "_set", lambda **kw: None)  # 진행 표시 무시
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda s: None)
+
+    res = facility.collect_band(temp_db, sid, "10.9.0.0/29", "u", "p")  # 6 hosts
+    assert state["conns"] == 2                    # 끊김 → 재접속 1회
+    assert len(state["pings"]) == 6               # 모든 IP가 결국 ping됨(누락 없음)
+    assert len(set(state["pings"])) == 6          # 중복 저장 없이 전 IP 커버
+    assert res["saved"] >= 1                      # ARP 결과 저장까지 완료
+
+
 def test_facility_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'data-tab="facility"' in html

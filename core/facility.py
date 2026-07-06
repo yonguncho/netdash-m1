@@ -190,35 +190,88 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     ips = [str(h) for h in net.hosts()]
     _set(running=True, subnet=subnet, done=0, total=len(ips), message="연결 중")
 
+    # keepalive: 긴 ping 스윕(/23=~510회, 15분+) 중 방화벽/장비의 유휴 세션 정리로
+    # TCP가 끊겨 'socket is closed'가 나던 문제 완화.
     device = {
         "device_type": _collector._norm_vendor(sw.get("vendor")),
         "ip": sw["ip"], "username": username, "password": password,
         "secret": password, "conn_timeout": 30, "fast_cli": False,
+        "keepalive": 15,
     }
-    if source_ip:
-        device["sock"] = netbind.bind_socket(sw["ip"], 22, source_ip, 30)
 
+    def _connect():
+        conn_device = dict(device)
+        if source_ip:
+            conn_device["sock"] = netbind.bind_socket(sw["ip"], 22, source_ip, 30)
+        c = ConnectHandler(**conn_device)
+        try:
+            if hasattr(c, "check_enable_mode") and not c.check_enable_mode():
+                c.enable()
+        except Exception:
+            pass
+        try:
+            c.send_command("terminal length 0", read_timeout=10)
+        except Exception:
+            pass
+        return c
+
+    def _is_conn_dead(err):
+        m = str(err).lower()
+        return ("socket" in m and "closed" in m) or "not connected" in m or \
+               isinstance(err, (OSError, EOFError))
+
+    _MAX_RECONNECT = 5
+    reconnects = 0
     arp_out = ""
-    with ConnectHandler(**device) as conn:
-        try:
-            if hasattr(conn, "check_enable_mode") and not conn.check_enable_mode():
-                conn.enable()
-        except Exception:
-            pass
-        try:
-            conn.send_command("terminal length 0", read_timeout=10)
-        except Exception:
-            pass
+    conn = _connect()
+    try:
         _set(message="대역 ping 중")
-        for i, ip in enumerate(ips):
+        import time as _t
+        i = 0
+        while i < len(ips):
+            ip = ips[i]
             try:
                 conn.send_command("ping %s repeat 1 timeout 1" % ip, read_timeout=5)
-            except Exception:
-                pass
+            except Exception as e:
+                # 세션 끊김('socket is closed' 등)이면 재접속 후 같은 IP부터 재개.
+                # 그 외 오류(개별 ping 타임아웃 등)는 해당 IP만 건너뛰고 계속.
+                if _is_conn_dead(e) and reconnects < _MAX_RECONNECT:
+                    reconnects += 1
+                    utils.log_event("warning", "facility_session_reconnect",
+                                    subnet=subnet, attempt=reconnects, progress=i)
+                    _set(message="세션 끊김 — 재접속 %d/%d (진행 %d/%d)" % (
+                        reconnects, _MAX_RECONNECT, i, len(ips)))
+                    try:
+                        conn.disconnect()
+                    except Exception:
+                        pass
+                    _t.sleep(3)
+                    conn = _connect()
+                    _set(message="대역 ping 중 (재개)")
+                    continue  # 같은 IP 재시도
+            i += 1
             if i % 20 == 0:
                 _set(done=i)
         _set(done=len(ips), message="ARP 수집 중")
-        arp_out = conn.send_command("show ip arp", read_timeout=60)
+        try:
+            arp_out = conn.send_command("show ip arp", read_timeout=60)
+        except Exception as e:
+            if not _is_conn_dead(e):
+                raise
+            # ARP 직전에 끊긴 경우 한 번 재접속해 ARP만 재시도(스윕 결과는 유효)
+            utils.log_event("warning", "facility_arp_reconnect", subnet=subnet)
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
+            _t.sleep(3)
+            conn = _connect()
+            arp_out = conn.send_command("show ip arp", read_timeout=60)
+    finally:
+        try:
+            conn.disconnect()
+        except Exception:
+            pass
 
     arp = cisco_ios._parse_arps(arp_out, switch_id)  # [{ip, mac, interface}]
     mac_map = db.get_mac_to_switchport(db_path)       # {mac: [(sid, sname, port)]}
