@@ -504,6 +504,24 @@ def test_collect_band_global_when_no_vrf(temp_db, monkeypatch):
     assert all(c == "show ip arp" for c in state["arp_cmds"])
 
 
+def test_facility_delete_subnet(client):
+    """특정 대역만 삭제 — 다른 대역은 유지."""
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    db.save_facility_hosts(dbp, [
+        {"subnet": "10.92.174.0/23", "ip": "10.92.174.5", "mac": "aa", "switch_id": 1,
+         "switch_name": "SW", "port": "Gi1/0/1", "online": 1, "direct": 1},
+        {"subnet": "10.92.174.0/26", "ip": "10.92.174.9", "mac": "bb", "switch_id": 1,
+         "switch_name": "SW", "port": "Gi1/0/2", "online": 1, "direct": 1}])
+    r = client.post("/api/facility/delete-subnet", json={"subnet": "10.92.174.0/26"})
+    assert r.get_json()["ok"]
+    subnets = {h["subnet"] for h in db.get_facility_hosts(dbp)}
+    assert "10.92.174.0/23" in subnets
+    assert "10.92.174.0/26" not in subnets
+    # 대역 미지정이면 400
+    assert client.post("/api/facility/delete-subnet", json={}).status_code == 400
+
+
 def test_facility_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'data-tab="facility"' in html
@@ -526,3 +544,10 @@ def test_facility_ui_present():
     # IP 숫자 정렬(헤더 클릭 토글)
     assert 'id="fac-sort-ip"' in html
     assert "_ipToInt" in js and "_facIpSortDir" in js
+    # 대역 삭제 버튼 + 삭제 API
+    assert 'id="btn-fac-delete-subnet"' in html
+    assert "/api/facility/delete-subnet" in js
+    # 상태 컬럼 제거(표 헤더에서 '상태' 없음, 오프라인은 행 배경으로만)
+    assert "<th>포트</th></tr>" in html.replace(" ", "").replace("\n", "") or \
+           "포트</th></tr>" in html
+    assert "온라인" not in js   # 상태 배지 텍스트 제거

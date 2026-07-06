@@ -1028,6 +1028,22 @@ def create_app(demo_mode=None):
             log_event("error", "facility_rematch_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/facility/delete-subnet", methods=["POST"])
+    @rate_limit("facility_delete_subnet", max_requests=30, window_seconds=60)
+    def facility_delete_subnet():
+        """설비 현황에서 특정 대역의 수집 결과 전체 삭제."""
+        try:
+            data = request.get_json() or {}
+            subnet = (data.get("subnet") or "").strip()
+            if not subnet:
+                return jsonify({"error": "subnet required"}), 400
+            db.clear_facility_subnet(db_path, subnet)
+            log_event("info", "facility_subnet_deleted", subnet=subnet)
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "facility_delete_subnet_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/facility/detect-subnets", methods=["POST"])
     @rate_limit("facility_detect", max_requests=20, window_seconds=60)
     def facility_detect_subnets():

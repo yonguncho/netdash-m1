@@ -1141,7 +1141,7 @@ function _renderFacilityRows() {
     if (!all.length) emptyMsg = "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.";
     else if (subnet || q) emptyMsg = "필터/검색 조건에 맞는 설비가 없습니다.";
     else emptyMsg = "직접 연결로 확인된 설비가 없습니다. ('직접 연결만' 해제 시 전체 표시)";
-    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>" + emptyMsg + "</td></tr>";
+    tbody.innerHTML = "<tr><td colspan=5 style='color:#64748b'>" + emptyMsg + "</td></tr>";
     return;
   }
   tbody.innerHTML = rows.map(function (h) {
@@ -1161,12 +1161,12 @@ function _renderFacilityRows() {
       swCell = "<span style='color:#b45309;cursor:help'" + tip + ">직접 연결 미확인 ⓘ</span>";
       portCell = "<span style='color:#94a3b8'>—</span>";
     }
-    var on = h.online ? "<span class='status-badge status-badge--ok'>온라인</span>"
-                      : "<span class='status-badge status-badge--critical'>연결 실패</span>";
-    var trStyle = h.online ? "" : " style='background:#fef2f2'";
+    // 상태 컬럼 제거 — 오프라인(연결 실패)은 행 배경(빨강)으로만 신호
+    var trStyle = h.online ? "" : " style='background:#fef2f2'" +
+      " title='마지막 수집에서 응답 없음(오프라인)'";
     return "<tr" + trStyle + "><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
       "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
-      portCell + "</td><td>" + on + "</td></tr>";
+      portCell + "</td></tr>";
   }).join("");
 }
 
@@ -1175,7 +1175,24 @@ function _renderFacilityRows() {
   var only = document.getElementById("fac-only-direct");
   if (only) only.addEventListener("change", _renderFacilityRows);
   var sf = document.getElementById("fac-subnet-filter");
-  if (sf) sf.addEventListener("change", _renderFacilityRows);
+  var delBtn = document.getElementById("btn-fac-delete-subnet");
+  if (sf) sf.addEventListener("change", function () {
+    if (delBtn) delBtn.disabled = !sf.value;   // 특정 대역 선택 시에만 삭제 가능
+    _renderFacilityRows();
+  });
+  if (delBtn) delBtn.addEventListener("click", function () {
+    var subnet = sf ? sf.value : "";
+    if (!subnet) { alert("먼저 삭제할 대역을 선택하세요."); return; }
+    if (!confirm("'" + subnet + "' 대역의 수집 결과를 모두 삭제할까요?")) return;
+    delBtn.disabled = true;
+    fetch("/api/facility/delete-subnet", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ subnet: subnet }),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) { if (sf) sf.value = ""; loadFacility(); }
+      else { alert(res.error || "삭제 실패"); delBtn.disabled = false; }
+    }).catch(function (e) { console.error(e); alert("삭제 오류"); delBtn.disabled = false; });
+  });
   var fs = document.getElementById("fac-search");
   if (fs) fs.addEventListener("input", _renderFacilityRows);
   var ex = document.getElementById("btn-fac-export-xlsx");
