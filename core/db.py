@@ -1178,6 +1178,72 @@ def latest_snapshot_id(db_path, switch_id):
 # (과거 이 위치에 중복 정의가 있어 첫 정의가 사장되던 버그 — Opus 검증에서 제거)
 
 
+def normalize_vendor_values(db_path):
+    """기존 DB의 벤더 별칭(cisco/extreme/nexus...)을 표준 값으로 일괄 정규화.
+
+    자동 학습은 표준 값(extreme_exos 등)으로 저장하는데 수동 등록은 별칭이라
+    화면·수정 모달에서 값이 섞여 보이던 문제 해결. 앱 시작 시 1회 호출.
+    """
+    from .collector import canonical_vendor
+    n = 0
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT DISTINCT vendor FROM switches WHERE vendor IS NOT NULL")
+                for (v,) in cur.fetchall():
+                    canon = canonical_vendor(v)
+                    if canon != v:
+                        cur.execute("UPDATE switches SET vendor=? WHERE vendor=?", (canon, v))
+                        n += cur.rowcount
+            except Exception:
+                pass
+    if n:
+        log_event("info", "vendor_values_normalized", count=n)
+    return n
+
+
+def backfill_versions_from_config(db_path):
+    """버전이 빈 스위치를 기존 config 백업의 'version' 줄로 백필(재수집 불필요).
+
+    IOS/NX-OS running-config 첫머리에 'version 15.2(7)E3' 형식이 있다.
+    이전 버전에서 수집돼 os_version이 비어 있던 장비를 시작 시 채운다.
+    """
+    import re as _re
+    n = 0
+    prefix = {"cisco_ios": "IOS ", "cisco_nxos": "NX-OS "}
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT id, vendor FROM switches "
+                    "WHERE (os_version IS NULL OR os_version='')")
+                targets = cur.fetchall()
+            except Exception:
+                return 0
+            for row in targets:
+                sid, vendor = row["id"], (row["vendor"] or "").lower()
+                if vendor not in prefix:
+                    continue
+                try:
+                    cur.execute("SELECT content FROM config_backups WHERE switch_id=? "
+                                "ORDER BY id DESC LIMIT 1", (sid,))
+                    cb = cur.fetchone()
+                    if not cb or not cb["content"]:
+                        continue
+                    m = _re.search(r"(?m)^version\s+(\S+)", cb["content"][:2000])
+                    if m:
+                        cur.execute("UPDATE switches SET os_version=? WHERE id=?",
+                                    (prefix[vendor] + m.group(1), sid))
+                        n += 1
+                except Exception:
+                    continue
+    if n:
+        log_event("info", "versions_backfilled_from_config", count=n)
+    return n
+
+
 def reset_stale_collecting(db_path):
     """앱 시작 시 '수집중' 고착 상태 복구.
 

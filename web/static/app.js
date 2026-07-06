@@ -60,9 +60,10 @@ function _applyLocFilter(list, inputId) {
   var el = document.getElementById(inputId);
   var q = el ? el.value.trim().toLowerCase() : "";
   if (!q) return list;
-  // 위치(location) + TPS 위치 라벨(건물명/공장/층) + hostname 모두에서 필터
+  // 위치·TPS 라벨·hostname뿐 아니라 IP·이름·모델로도 검색
   return list.filter(function (s) {
-    var hay = ((s.location || "") + " " + (s.tps_location || "") + " " + (s.hostname || "")).toLowerCase();
+    var hay = [s.location, s.tps_location, s.hostname, s.ip, s.host, s.name, s.model]
+      .map(function (x) { return x || ""; }).join(" ").toLowerCase();
     return hay.indexOf(q) >= 0;
   });
 }
@@ -693,7 +694,9 @@ function swCardHTML(sw, withCheck) {
     "</div>" +
     "<div class='sw-card__status'>" +
     "<span class='dot " + dotClass + "'></span>" +
-    "<span>" + escHtml(sw.vendor || "unknown") + " · " + statusLabel + "</span>" +
+    "<span>" + escHtml(sw.model || _vendorLabel(sw.vendor)) +
+    (sw.os_version ? " · " + escHtml(sw.os_version) : "") +
+    " · " + statusLabel + "</span>" +
     "</div>" +
     "<div class='sw-card__actions'>" +
     "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
@@ -717,6 +720,24 @@ function renderMiniPorts(sw) {
 // 장비 구분(유형) — 서버 화이트리스트(DEVICE_TYPES)와 동일
 var _DEVICE_TYPES = ["BackBone", "L3 Switch", "L2 Switch", "L4 Switch",
                      "Server", "Firewall", "AP", "Tablet", "PC", "기타"];
+
+// 벤더 표준 값 ↔ 표시 라벨(표·카드·수정 모달을 하나의 표준으로 통일)
+var _VENDOR_ALIAS = { cisco: "cisco_ios", nexus: "cisco_nxos", cisco_nexus: "cisco_nxos",
+                      arista: "arista_eos", extreme: "extreme_exos", extremexos: "extreme_exos",
+                      exos: "extreme_exos", juniper: "juniper_junos", radware: "alteon" };
+var _VENDOR_LABELS = { cisco_ios: "Cisco IOS/IOS-XE", cisco_nxos: "Cisco NX-OS",
+                       arista_eos: "Arista EOS", extreme_exos: "Extreme EXOS",
+                       juniper_junos: "Juniper JUNOS", alteon: "Radware Alteon",
+                       unknown: "알 수 없음" };
+function _canonVendor(v) {
+  v = (v || "").toLowerCase();
+  if (!v) return "unknown";
+  return _VENDOR_ALIAS[v] || v;
+}
+function _vendorLabel(v) {
+  var c = _canonVendor(v);
+  return _VENDOR_LABELS[c] || c;
+}
 
 // 구분 인라인 변경(위임) — 선택 즉시 저장
 document.addEventListener("change", function (e) {
@@ -794,9 +815,11 @@ function renderSwitchTable(switches) {
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'></td>" +
       "<td>" + typeSel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
-      escHtml(sw.hostname || "-") + "</td><td>" + escHtml(sw.vendor || "-") + "</td><td>" +
-      escHtml(sw.model || "-") + "</td><td>" +
-      escHtml(sw.os_version || "-") + "</td><td>" +
+      escHtml(sw.hostname || "-") + "</td><td>" + escHtml(_vendorLabel(sw.vendor)) + "</td><td>" +
+      (sw.model ? escHtml(sw.model)
+        : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 show version/show switch에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
+      (sw.os_version ? escHtml(sw.os_version)
+        : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
       locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span>" +
       (sw.status === "failed" && sw.last_error
@@ -865,7 +888,8 @@ function editSwitch(sw) {
   document.getElementById("add-name").value = sw.name || "";
   document.getElementById("add-ip").value = sw.ip || "";
   document.getElementById("add-hostname").value = sw.hostname || "";
-  document.getElementById("add-vendor").value = sw.vendor || "unknown";
+  // 저장값이 별칭(cisco/extreme 등)이어도 표준 값으로 매핑해 드롭다운과 일치시킴
+  document.getElementById("add-vendor").value = _canonVendor(sw.vendor);
   var dt = document.getElementById("add-devtype"); if (dt) dt.value = sw.device_type || "";
   document.getElementById("add-location").value = sw.location || "";
   document.getElementById("add-note").value = sw.note || "";

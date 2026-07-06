@@ -93,5 +93,6 @@ def test_nxos_parse_arps():
 
 
 def test_appjs_index_has_nexus_option():
+    """v3.37: 벤더 옵션 값 표준화 — nexus 별칭 대신 cisco_nxos."""
     html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert 'value="nexus"' in html
+    assert 'value="cisco_nxos"' in html

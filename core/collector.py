@@ -132,6 +132,18 @@ def _tcp_precheck(ip, port=22, timeout=4, source_ip=None):
         return False
 
 
+def canonical_vendor(vendor):
+    """저장용 벤더 정규화: 별칭(cisco/extreme/nexus...)을 표준 값으로.
+
+    _norm_vendor와 달리 unknown/빈값은 'unknown' 그대로(자동 학습 대상 유지).
+    UI 드롭다운·DB·표시를 하나의 표준 값(cisco_ios/extreme_exos/...)으로 통일.
+    """
+    v = (vendor or "").strip().lower()
+    if v in ("", "unknown"):
+        return "unknown"
+    return _NETMIKO_VENDOR.get(v, v)
+
+
 def _is_unknown_vendor(vendor):
     return (vendor or "").strip().lower() in ("", "unknown")
 

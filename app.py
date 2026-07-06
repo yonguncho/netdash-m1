@@ -153,6 +153,16 @@ def create_app(demo_mode=None):
         db.reset_stale_collecting(db_path)
     except Exception as e:
         log_event("warning", "stale_reset_failed", error=str(e))
+    # 벤더 별칭(cisco/extreme...) → 표준 값(cisco_ios/extreme_exos...) 일괄 정규화
+    try:
+        db.normalize_vendor_values(db_path)
+    except Exception as e:
+        log_event("warning", "vendor_normalize_failed", error=str(e))
+    # 버전이 빈 스위치를 기존 config 백업의 version 줄로 백필(재수집 불필요)
+    try:
+        db.backfill_versions_from_config(db_path)
+    except Exception as e:
+        log_event("warning", "version_backfill_failed", error=str(e))
 
     collector.init_collector()
     # M14: 하루 N회 자동 수집 스케줄러 시작(설정으로 on/off)
@@ -373,7 +383,8 @@ def create_app(demo_mode=None):
                 name = hostname or validated_ip
 
             rows = [{"name": name, "ip": validated_ip, "hostname": hostname,
-                     "vendor": vendor, "location": location, "note": data.get("note", "")}]
+                     "vendor": collector.canonical_vendor(vendor),
+                     "location": location, "note": data.get("note", "")}]
             ids = db.import_switches_bulk(db_path, rows)
             # 구분(장비 유형) — 선택 입력
             dtype = (data.get("device_type") or "").strip()
@@ -1200,7 +1211,8 @@ def create_app(demo_mode=None):
                     name=(data.get("name") or "").strip() or None,
                     ip=ip or None,
                     hostname=(data.get("hostname") or "").strip() or None,
-                    vendor=(data.get("vendor") or "").strip() or None,
+                    vendor=(collector.canonical_vendor(data.get("vendor"))
+                            if (data.get("vendor") or "").strip() else None),
                     location=(data.get("location") or "").strip() or None,
                     note=(data.get("note") if "note" in data else None),
                     device_type=(data.get("device_type") if "device_type" in data else None),

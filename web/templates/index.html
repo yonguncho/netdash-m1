@@ -118,7 +118,7 @@
           <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#475569;cursor:pointer" title="이 계정을 각 장비에 암호화 저장해 자동 수집에 재사용"><input type="checkbox" id="dash-cred-persist"> 저장</label>
           <button id="btn-bulk-collect" class="btn btn--primary" style="font-size:12px" disabled>정보 수집 (0)</button>
           <button id="btn-dash-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
-          <input id="loc-filter-dash" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+          <input id="loc-filter-dash" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·위치...)" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:180px">
           <button id="btn-add-manual" class="btn btn--secondary">+ 수동 추가</button>
           <button id="btn-import-excel" class="btn btn--primary">엑셀 가져오기</button>
           <button id="btn-import-inventory" class="btn btn--secondary">장비 일괄등록(IP목록)</button>
@@ -418,11 +418,11 @@
         <input id="add-hostname" type="text" placeholder="switch01.local">
         <label>벤더</label>
         <select id="add-vendor">
-          <option value="unknown">알 수 없음</option>
-          <option value="cisco">Cisco IOS</option>
-          <option value="nexus">Cisco Nexus (NX-OS)</option>
-          <option value="arista">Arista</option>
-          <option value="extreme">Extreme (EXOS)</option>
+          <option value="unknown">알 수 없음 (수집 시 자동 인식)</option>
+          <option value="cisco_ios">Cisco IOS / IOS-XE</option>
+          <option value="cisco_nxos">Cisco Nexus (NX-OS)</option>
+          <option value="arista_eos">Arista (EOS)</option>
+          <option value="extreme_exos">Extreme (EXOS)</option>
           <option value="alteon">Radware Alteon (L4)</option>
         </select>
         <label>위치</label>
