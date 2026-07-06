@@ -45,6 +45,7 @@ collector:
       mac: "show fdb"
       arp: "show iparp"
       logging: "show log messages memory-buffer"
+      sysinfo: "show switch"
     cisco_nxos:
       status: "show interface brief"
       description: "show interface description"

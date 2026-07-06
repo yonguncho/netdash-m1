@@ -288,7 +288,8 @@ def _get_default_collector_config() -> dict:
                           "mac": "show mac address-table dynamic", "arp": "show ip arp"},
             "extreme_exos": {"status": "show ports no-refresh", "description": "show ports description",
                             "mac": "show fdb", "arp": "show iparp",
-                            "logging": "show log messages memory-buffer"}
+                            "logging": "show log messages memory-buffer",
+                            "sysinfo": "show switch"}
         }
     }
 

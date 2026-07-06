@@ -10,6 +10,7 @@ COMMANDS = {
     "mac": "show fdb",
     "arp": "show iparp",
     "logging": "show log messages memory-buffer",
+    "sysinfo": "show switch",   # 모델(System Type:)은 show version이 아니라 여기 있음
 }
 
 

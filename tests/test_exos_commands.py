@@ -114,7 +114,7 @@ def test_worker_hard_timeout_moves_to_next(temp_db, monkeypatch):
             return tempfile.mkdtemp(prefix="ndraw_")
     monkeypatch.setattr(collector, "get_config", lambda *a, **k: _Cfg())
     monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
-    monkeypatch.setattr(collector, "_probe_os", lambda *a, **k: None)
+    monkeypatch.setattr(collector, "_probe_os", lambda *a, **k: (None, ""))
 
     hung = _db.save_switch(temp_db, "HUNG-EXOS", "10.98.0.1", "extreme")
     alive = _db.save_switch(temp_db, "NEXT-SW", "10.98.0.2", "cisco")

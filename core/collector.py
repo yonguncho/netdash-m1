@@ -169,7 +169,8 @@ def _parse_os_version(vendor, text):
     v = (vendor or "").lower()
     patterns = {
         "cisco_nxos": [(r"NXOS:\s*version\s+(\S+)", "NX-OS "),
-                       (r"system:\s+version\s+(\S+)", "NX-OS ")],
+                       (r"system:\s+version\s+(\S+)", "NX-OS "),
+                       (r"kickstart:\s*version\s+(\S+)", "NX-OS ")],
         "cisco_ios": [(r"IOS[- ]XE Software.*?Version\s+([\w.():]+)", "IOS-XE "),
                       (r"Cisco IOS Software.*?Version\s+([\w.():]+?)[,\s]", "IOS "),
                       (r"\bVersion\s+([\w.():]+?)[,\s]", "IOS ")],
@@ -197,7 +198,9 @@ def _parse_model(vendor, text):
         return None
     v = (vendor or "").lower()
     patterns = {
-        "cisco_nxos": [r"cisco\s+(Nexus\s?\S+(?:\s+\S+)?)\s+[Cc]hassis"],
+        "cisco_nxos": [r"cisco\s+(Nexus\s?\S+(?:\s+\S+)?)\s+[Cc]hassis",
+                       r"cisco\s+(N[0-9]K-\S+)",
+                       r"Hardware\s*\n\s*cisco\s+(\S+(?:\s+\S+)?)"],
         "cisco_ios": [r"Model Number\s*:\s*(\S+)",
                       r"cisco\s+((?:WS|C|IE|ME|CGR|ASR|ISR)[\w-]+)\s*\("],
         "arista_eos": [r"^\s*Arista\s+(\S+)"],
@@ -419,7 +422,8 @@ def _worker_loop():
                         # netmiko 드라이버가 프롬프트 매칭에 실패하는 장비
                         # (EXOS 증가형 프롬프트 → 'pattern not detected') 폴백:
                         # 드라이버 무관 원시 셸로 OS 탐지 → 올바른 드라이버로 재시도.
-                        probed = _probe_os(switch, username, password, source_ip=source_ip)
+                        probed, probe_ver = _probe_os(switch, username, password,
+                                                      source_ip=source_ip)
                         if not probed or probed == vendor:
                             raise
                         utils.log_event("info", "vendor_probe_retry",
@@ -430,6 +434,9 @@ def _worker_loop():
                             switch, username, password, probed,
                             source_ip=source_ip, detect_vendor=False, max_retries=1)
                         eff_vendor = probed
+                        # 프로브에서 읽은 show version을 버전/모델 파싱에 재활용
+                        if probe_ver and not outputs.get("version"):
+                            outputs["version"] = probe_ver
                 # 실제 OS 판별: 세션 show version 출력 우선, 없으면(원시 셸 프로브
                 # 폴백 경로) eff_vendor. FIX: 예전엔 '정규화된 접속 벤더'와 비교해
                 # unknown→cisco_ios처럼 정규화 결과와 감지가 같으면 DB 갱신을
@@ -455,16 +462,18 @@ def _worker_loop():
             raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
             utils.log_event("info", "raw_outputs_saved", path=str(raw_outputs_path))
 
-            # show version 출력에서 OS 버전/모델명 추출 → 스위치 현황 표기
+            # show version(+EXOS는 show switch) 출력에서 OS 버전/모델명 추출
             ver_out = outputs.get("version", "")
-            if ver_out:
-                osv = _parse_os_version(vendor, ver_out)
-                model = _parse_model(vendor, ver_out)
-                if osv or model:
-                    try:
-                        db.update_switch(db_path, switch_id, os_version=osv, model=model)
-                    except Exception:
-                        pass
+            osv = _parse_os_version(vendor, ver_out) if ver_out else None
+            model = _parse_model(vendor, ver_out) if ver_out else None
+            if not model and outputs.get("sysinfo"):
+                # EXOS 모델(System Type:)은 show version이 아니라 show switch에 있음
+                model = _parse_model(vendor, outputs.get("sysinfo", ""))
+            if osv or model:
+                try:
+                    db.update_switch(db_path, switch_id, os_version=osv, model=model)
+                except Exception:
+                    pass
 
             parsed_data = _parse_outputs(vendor, outputs, switch_id)
 
@@ -762,7 +771,7 @@ def _probe_os(switch, username, password, source_ip=None):
     netmiko 드라이버가 프롬프트 매칭에 실패하는 장비(대표: EXOS는 명령마다
     프롬프트 번호가 증가 'SW.1 #'→'SW.2 #' → cisco 드라이버로는 'pattern not
     detected')에서도 동작한다. 프롬프트 형식을 전혀 가정하지 않고 유휴까지 읽는다.
-    반환: 감지된 device_type 또는 None.
+    반환: (감지된 device_type 또는 None, show version 원문) — 원문은 버전/모델 파싱 재활용.
     """
     import paramiko
     import time as _t
@@ -785,11 +794,11 @@ def _probe_os(switch, username, password, source_ip=None):
         detected = _detect_vendor_from_version(out)
         utils.log_event("info", "os_probe", switch=switch.get("name"),
                         detected=detected or "unknown")
-        return detected
+        return detected, out
     except Exception as e:
         utils.log_event("warning", "os_probe_failed", switch=switch.get("name"),
                         error=_sanitize_error_msg(str(e)))
-        return None
+        return None, ""
     finally:
         try:
             client.close()

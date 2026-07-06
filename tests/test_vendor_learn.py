@@ -44,6 +44,23 @@ def test_parse_model():
     assert m("cisco_ios", "no model here at all") is None
 
 
+def test_parse_nxos_exos_variants():
+    """v3.36.4: NX-OS kickstart/N9K 표기 + EXOS 모델은 show switch에서."""
+    p, m = collector._parse_os_version, collector._parse_model
+    # 구형 NX-OS(kickstart 표기만 있는 경우)
+    old_nxos = "  kickstart: version 6.0(2)A8(11b)\n  system:    version 6.0(2)A8(11b)"
+    assert p("cisco_nxos", old_nxos) == "NX-OS 6.0(2)A8(11b)"
+    # N9K식 모델 표기
+    assert m("cisco_nxos", "Hardware\n  cisco N9K-C93180YC-EX  supervisor") == "N9K-C93180YC-EX"
+    # EXOS 모델: show switch의 System Type
+    show_switch = ("SysName:          X460-STACK\n"
+                   "System Type:      X460G2-24t-10G4\n"
+                   "SysHealth check:  Enabled\n")
+    assert m("extreme_exos", show_switch) == "X460G2-24t-10G4"
+    # EXOS show version에는 모델이 없어도 크래시 없이 None
+    assert m("extreme_exos", "Image : ExtremeXOS version 22.4.1.4 by release-manager") is None
+
+
 def test_update_switch_version_model(temp_db):
     sid = db.save_switch(temp_db, "SW-V", "10.0.0.5", "cisco_ios")
     db.update_switch(temp_db, sid, os_version="IOS-XE 17.3.5", model="C9300-48P")
@@ -179,7 +196,7 @@ def test_worker_probe_fallback_on_driver_mismatch(temp_db, monkeypatch):
         return ({"status": "", "mac": "", "arp": ""}, "extreme_exos")
     monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
     monkeypatch.setattr(collector, "_probe_os",
-                        lambda switch, u, p, source_ip=None: "extreme_exos")
+                        lambda switch, u, p, source_ip=None: ("extreme_exos", "ExtremeXOS version 22.7.1.2"))
 
     collector.init_collector()
     collector.collect_switch(temp_db, sid, "admin", "pw")
