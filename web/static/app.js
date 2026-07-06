@@ -714,6 +714,46 @@ function renderMiniPorts(sw) {
   return html;
 }
 
+// 장비 구분(유형) — 서버 화이트리스트(DEVICE_TYPES)와 동일
+var _DEVICE_TYPES = ["BackBone", "L3 Switch", "L2 Switch", "L4 Switch",
+                     "Server", "Firewall", "AP", "Tablet", "PC", "기타"];
+
+// 구분 인라인 변경(위임) — 선택 즉시 저장
+document.addEventListener("change", function (e) {
+  var t = e.target;
+  if (!t || !t.classList || !t.classList.contains("sw-type-sel")) return;
+  var id = parseInt(t.getAttribute("data-id"), 10);
+  fetch("/api/switches/" + id, {
+    method: "PUT", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({device_type: t.value}),
+  }).then(function (r) { return r.json(); }).then(function (res) {
+    if (!res.ok) alert(res.error || "구분 변경 실패");
+    else pollState();
+  }).catch(function (err) { console.error(err); });
+});
+
+// 구분 일괄 변경(체크된 항목에 적용)
+(function () {
+  var sel = document.getElementById("sw-bulk-type");
+  var btn = document.getElementById("btn-sw-apply-type");
+  if (!sel || !btn) return;
+  sel.addEventListener("change", function () { btn.disabled = !sel.value; });
+  btn.addEventListener("click", function () {
+    var ids = Array.prototype.map.call(
+      document.querySelectorAll("#switch-table-body .sw-check:checked"),
+      function (c) { return parseInt(c.value, 10); });
+    if (!ids.length) { alert("먼저 변경할 스위치를 체크하세요."); return; }
+    if (!sel.value) return;
+    fetch("/api/switches/bulk-set-type", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ids: ids, device_type: sel.value}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) { alert(res.updated + "대 구분을 '" + sel.value + "'로 변경했습니다."); pollState(); }
+      else alert(res.error || "일괄 변경 실패");
+    }).catch(function (e) { console.error(e); alert("일괄 변경 오류"); });
+  });
+})();
+
 // ─── 스위치 테이블 (스위치 현황 탭) ─────────────────────────────
 function renderSwitchTable(switches) {
   switches = _applyLocFilter(switches, "loc-filter-sw");
@@ -724,15 +764,19 @@ function renderSwitchTable(switches) {
       ? "<span style='color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" +
         (sw.location ? "<br><span style='font-size:11px;color:#64748b'>" + escHtml(sw.location) + "</span>" : "")
       : escHtml(sw.location || "-");
-    // 모델/버전(수집 시 show version에서 자동 추출) — 2줄 스택
-    var mv = (sw.model ? "<div>" + escHtml(sw.model) + "</div>" : "") +
-             (sw.os_version ? "<div style='font-size:11px;color:#64748b'>" + escHtml(sw.os_version) + "</div>" : "");
-    if (!mv) mv = "<span style='color:#94a3b8'>-</span>";
+    // 구분(장비 유형) — 인라인 드롭다운(변경 즉시 저장). 이름은 카드/검색에서 사용.
+    var typeSel = "<select class='sw-type-sel' data-id='" + sw.id + "' style='font-size:12px;padding:3px'>" +
+      "<option value=''" + (!sw.device_type ? " selected" : "") + ">미지정</option>" +
+      _DEVICE_TYPES.map(function (t) {
+        return "<option" + (sw.device_type === t ? " selected" : "") + ">" + escHtml(t) + "</option>";
+      }).join("") + "</select>";
+    // 모델·버전(수집 시 show version에서 자동 추출) — 별도 컬럼
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'></td>" +
-      "<td>" + escHtml(sw.name) + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
+      "<td>" + typeSel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(sw.vendor || "-") + "</td><td>" +
-      mv + "</td><td>" +
+      escHtml(sw.model || "-") + "</td><td>" +
+      escHtml(sw.os_version || "-") + "</td><td>" +
       locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span>" +
       (sw.status === "failed" && sw.last_error
@@ -802,6 +846,7 @@ function editSwitch(sw) {
   document.getElementById("add-ip").value = sw.ip || "";
   document.getElementById("add-hostname").value = sw.hostname || "";
   document.getElementById("add-vendor").value = sw.vendor || "unknown";
+  var dt = document.getElementById("add-devtype"); if (dt) dt.value = sw.device_type || "";
   document.getElementById("add-location").value = sw.location || "";
   document.getElementById("add-note").value = sw.note || "";
   openModal("modal-add-switch");
@@ -1541,6 +1586,7 @@ document.getElementById("btn-add-manual").addEventListener("click", function() {
     document.getElementById(id).value = "";
   });
   document.getElementById("add-vendor").value = "unknown";
+  var _dt = document.getElementById("add-devtype"); if (_dt) _dt.value = "";
   openModal("modal-add-switch");
 });
 
@@ -1558,6 +1604,7 @@ document.getElementById("btn-add-confirm").addEventListener("click", function() 
       ip: ip,
       hostname: document.getElementById("add-hostname").value.trim(),
       vendor: document.getElementById("add-vendor").value,
+      device_type: (document.getElementById("add-devtype") || {value: ""}).value,
       location: document.getElementById("add-location").value.trim(),
       note: document.getElementById("add-note").value,
     }),

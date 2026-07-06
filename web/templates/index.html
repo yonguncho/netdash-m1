@@ -218,6 +218,13 @@
         <span class="pane-toolbar__title">스위치 현황</span>
         <div class="pane-toolbar__actions">
           <button id="btn-sw-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
+          <select id="sw-bulk-type" style="font-size:12px;padding:4px" title="선택한 장비들의 구분(유형)을 일괄 변경">
+            <option value="">구분 일괄변경…</option>
+            <option>BackBone</option><option>L3 Switch</option><option>L2 Switch</option>
+            <option>L4 Switch</option><option>Server</option><option>Firewall</option>
+            <option>AP</option><option>Tablet</option><option>PC</option><option>기타</option>
+          </select>
+          <button id="btn-sw-apply-type" class="btn btn--secondary" style="font-size:12px" disabled>선택 항목에 적용</button>
           <button id="btn-configs-export" class="btn btn--secondary" style="font-size:12px" title="전체 스위치의 최신 running-config 백업을 ZIP으로 다운로드">config 일괄 다운로드</button>
           <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="위치로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
         </div>
@@ -227,7 +234,7 @@
           <thead>
             <tr>
               <th style="width:34px;text-align:center"><input type="checkbox" id="sw-check-all" title="전체 선택"></th>
-              <th>구분</th><th>IP</th><th>호스트네임</th><th>벤더</th><th>모델 / 버전</th>
+              <th>구분</th><th>IP</th><th>호스트네임</th><th>벤더</th><th>모델</th><th>버전</th>
               <th>위치</th><th>상태</th><th>경보</th><th>마지막 수집</th><th>작업</th>
             </tr>
           </thead>
@@ -395,6 +402,13 @@
       <div class="modal__body">
         <label>이름 (선택)</label>
         <input id="add-name" type="text" placeholder="TPS-SW-01">
+        <label>구분 (장비 유형)</label>
+        <select id="add-devtype">
+          <option value="">미지정</option>
+          <option>BackBone</option><option>L3 Switch</option><option>L2 Switch</option>
+          <option>L4 Switch</option><option>Server</option><option>Firewall</option>
+          <option>AP</option><option>Tablet</option><option>PC</option><option>기타</option>
+        </select>
         <label>IP <span class="required">*</span></label>
         <input id="add-ip" type="text" placeholder="192.168.1.1">
         <label>호스트네임</label>

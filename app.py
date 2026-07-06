@@ -375,6 +375,13 @@ def create_app(demo_mode=None):
             rows = [{"name": name, "ip": validated_ip, "hostname": hostname,
                      "vendor": vendor, "location": location, "note": data.get("note", "")}]
             ids = db.import_switches_bulk(db_path, rows)
+            # 구분(장비 유형) — 선택 입력
+            dtype = (data.get("device_type") or "").strip()
+            if dtype:
+                try:
+                    db.update_switch(db_path, ids[0], device_type=dtype)
+                except Exception:
+                    pass
             return jsonify({"ok": True, "switch_id": ids[0]}), 201
         except Exception as e:
             sanitized = collector._sanitize_error_msg(str(e))
@@ -1196,6 +1203,7 @@ def create_app(demo_mode=None):
                     vendor=(data.get("vendor") or "").strip() or None,
                     location=(data.get("location") or "").strip() or None,
                     note=(data.get("note") if "note" in data else None),
+                    device_type=(data.get("device_type") if "device_type" in data else None),
                 )
             except sqlite3.IntegrityError:
                 return jsonify({"error": "이미 사용 중인 이름 또는 IP입니다"}), 409
@@ -1219,6 +1227,35 @@ def create_app(demo_mode=None):
             return jsonify({"ok": True})
         except Exception as e:
             log_event("error", "delete_switch_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    # 장비 구분(유형) 화이트리스트 — 스위치 현황 '구분' 드롭다운과 동일
+    DEVICE_TYPES = {"BackBone", "L3 Switch", "L2 Switch", "L4 Switch",
+                    "Server", "Firewall", "AP", "Tablet", "PC", "기타"}
+
+    @app.route("/api/switches/bulk-set-type", methods=["POST"])
+    @rate_limit("bulk_set_type", max_requests=30, window_seconds=60)
+    def bulk_set_device_type():
+        """선택된 스위치들의 구분(장비 유형)을 일괄 변경. body {ids:[...], device_type}"""
+        try:
+            data = request.get_json() or {}
+            ids = data.get("ids", [])
+            dtype = (data.get("device_type") or "").strip()
+            if not isinstance(ids, list) or not ids:
+                return jsonify({"error": "ids required"}), 400
+            if dtype and dtype not in DEVICE_TYPES:
+                return jsonify({"error": "허용되지 않는 구분 값"}), 400
+            n = 0
+            for raw in ids[:1000]:
+                try:
+                    if db.update_switch(db_path, int(raw), device_type=dtype):
+                        n += 1
+                except (TypeError, ValueError):
+                    continue
+            log_event("info", "bulk_set_type", count=n, device_type=dtype or "(비움)")
+            return jsonify({"ok": True, "updated": n})
+        except Exception as e:
+            log_event("error", "bulk_set_type_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/bulk-delete", methods=["POST"])
