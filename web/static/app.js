@@ -754,10 +754,101 @@ document.addEventListener("change", function (e) {
   });
 })();
 
+// ─── 스위치 현황 컬럼별 필터 ─────────────────────────────────────
+function _swColFilterValues() {
+  var f = {};
+  document.querySelectorAll(".sw-colf").forEach(function (el) {
+    var v = (el.value || "").trim();
+    if (v) f[el.getAttribute("data-col")] = v;
+  });
+  return f;
+}
+
+function _applyColFilters(list) {
+  var f = _swColFilterValues();
+  if (!Object.keys(f).length) return list;
+  return (list || []).filter(function (sw) {
+    for (var col in f) {
+      var want = f[col];
+      if (col === "device_type") {
+        var dv = sw.device_type || "";
+        if (want === "__none__" ? dv !== "" : dv !== want) return false;
+      } else if (col === "vendor" || col === "status") {
+        if ((sw[col] || "") !== want) return false;
+      } else if (col === "alert") {
+        var has = sw.alert && sw.alert !== "none";
+        if (want === "__yes__" ? !has : has) return false;
+      } else {
+        // 텍스트 부분 일치. 위치는 location+TPS 라벨 모두에서 검색
+        var hay = col === "location"
+          ? ((sw.location || "") + " " + (sw.tps_location || ""))
+          : (sw[col] || "");
+        if (String(hay).toLowerCase().indexOf(want.toLowerCase()) < 0) return false;
+      }
+    }
+    return true;
+  });
+}
+
+// 드롭다운 옵션을 현재 데이터 기준으로 갱신(선택값 유지)
+function _refreshColFilterOptions(switches) {
+  function fill(col, values, labelFn) {
+    var sel = document.querySelector(".sw-colf[data-col='" + col + "']");
+    if (!sel) return;
+    var cur = sel.value;
+    var opts = "<option value=''>전체</option>";
+    if (col === "device_type") opts += "<option value='__none__'>미지정</option>";
+    values.forEach(function (v) {
+      opts += "<option value='" + escHtml(v) + "'>" + escHtml(labelFn ? labelFn(v) : v) + "</option>";
+    });
+    sel.innerHTML = opts;
+    sel.value = cur;  // 목록 갱신 후에도 선택 유지(없어진 값이면 자동 '전체')
+  }
+  var uniq = function (key) {
+    var s = {};
+    (switches || []).forEach(function (sw) { if (sw[key]) s[sw[key]] = 1; });
+    return Object.keys(s).sort();
+  };
+  fill("device_type", _DEVICE_TYPES.filter(function (t) {
+    return (switches || []).some(function (s) { return s.device_type === t; });
+  }));
+  fill("vendor", uniq("vendor"));
+  var statusKo = { done: "정상", failed: "실패", collecting: "수집중", "new": "미수집" };
+  fill("status", uniq("status"), function (v) { return statusKo[v] || v; });
+}
+
+(function () {
+  // 필터 입력/선택 → 즉시 재렌더(위임)
+  document.addEventListener("input", function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains("sw-colf")) {
+      renderSwitchTable(_switches);
+    }
+  });
+  document.addEventListener("change", function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains("sw-colf") &&
+        e.target.tagName === "SELECT") {
+      renderSwitchTable(_switches);
+    }
+  });
+  var clear = document.getElementById("btn-sw-filter-clear");
+  if (clear) clear.addEventListener("click", function () {
+    document.querySelectorAll(".sw-colf").forEach(function (el) { el.value = ""; });
+    renderSwitchTable(_switches);
+  });
+})();
+
 // ─── 스위치 테이블 (스위치 현황 탭) ─────────────────────────────
 function renderSwitchTable(switches) {
-  switches = _applyLocFilter(switches, "loc-filter-sw");
+  _refreshColFilterOptions(switches);
+  switches = _applyColFilters(_applyLocFilter(switches, "loc-filter-sw"));
   var tbody = document.getElementById("switch-table-body");
+  if (tbody && !switches.length) {
+    tbody.innerHTML = "<tr><td colspan='12' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (필터 '초기화'로 전체 보기)</td></tr>";
+    var allChk0 = document.getElementById("sw-check-all");
+    if (allChk0) allChk0.checked = false;
+    _updateBulkDeleteBtn();
+    return;
+  }
   tbody.innerHTML = switches.map(function(sw) {
     var sc = swStatusClass(sw);
     var locCell = sw.tps_location
@@ -986,7 +1077,34 @@ function _facIsDirect(h) {
 
 function renderFacilityTable(hosts) {
   _facHosts = hosts || [];
+  // 대역 필터 드롭다운 옵션 갱신(선택 유지)
+  var sel = document.getElementById("fac-subnet-filter");
+  if (sel) {
+    var cur = sel.value;
+    var subnets = {};
+    _facHosts.forEach(function (h) { if (h.subnet) subnets[h.subnet] = (subnets[h.subnet] || 0) + 1; });
+    sel.innerHTML = "<option value=''>전체 대역</option>" +
+      Object.keys(subnets).sort().map(function (s) {
+        return "<option value='" + escHtml(s) + "'>" + escHtml(s) + " (" + subnets[s] + ")</option>";
+      }).join("");
+    sel.value = cur;
+  }
   _renderFacilityRows();
+}
+
+// 설비 검색: IP·대역·연결 스위치·포트는 부분 일치, MAC은 구분자(:.-) 무시 비교
+function _facMatchesSearch(h, q) {
+  if (!q) return true;
+  var ql = q.toLowerCase();
+  var hay = [(h.ip || ""), (h.subnet || ""), (h.switch_name || ""), (h.port || ""), (h.via || "")]
+    .join(" ").toLowerCase();
+  if (hay.indexOf(ql) >= 0) return true;
+  var qhex = ql.replace(/[^0-9a-f]/g, "");
+  if (qhex.length >= 4) {
+    var machex = (h.mac || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+    if (machex.indexOf(qhex) >= 0) return true;
+  }
+  return (h.mac || "").toLowerCase().indexOf(ql) >= 0;
 }
 
 function _renderFacilityRows() {
@@ -995,22 +1113,36 @@ function _renderFacilityRows() {
   var all = _facHosts;
   var directCount = all.filter(_facIsDirect).length;
 
+  // 대역 필터 + 통합 검색(IP/대역/MAC/연결 스위치)
+  var subnetSel = document.getElementById("fac-subnet-filter");
+  var subnet = subnetSel ? subnetSel.value : "";
+  var searchEl = document.getElementById("fac-search");
+  var q = searchEl ? searchEl.value.trim() : "";
+  var filtered = all.filter(function (h) {
+    if (subnet && h.subnet !== subnet) return false;
+    return _facMatchesSearch(h, q);
+  });
+
   var sum = document.getElementById("fac-summary");
   if (sum) {
-    sum.innerHTML = all.length
+    var base = all.length
       ? ("전체 <b>" + all.length + "</b>건 · 직접 연결 <b style='color:#15803d'>" + directCount +
-         "</b>건 · 미확인 <b style='color:#b45309'>" + (all.length - directCount) + "</b>건" +
-         "  <span style='color:#94a3b8'>(미확인 = 업링크 Po/Vl 경유로만 관측 — 직접 연결된 액세스 스위치 미수집일 수 있음)</span>")
+         "</b>건 · 미확인 <b style='color:#b45309'>" + (all.length - directCount) + "</b>건")
       : "";
+    if (base && (subnet || q)) base += " · 필터 결과 <b style='color:#2563eb'>" + filtered.length + "</b>건";
+    sum.innerHTML = base + (base
+      ? "  <span style='color:#94a3b8'>(미확인 = 업링크 Po/Vl 경유로만 관측 — 직접 연결된 액세스 스위치 미수집일 수 있음)</span>"
+      : "");
   }
 
   var onlyDirect = document.getElementById("fac-only-direct");
-  var rows = (onlyDirect && onlyDirect.checked) ? all.filter(_facIsDirect) : all;
+  var rows = (onlyDirect && onlyDirect.checked) ? filtered.filter(_facIsDirect) : filtered;
   if (!rows.length) {
-    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>" +
-      (all.length ? "직접 연결로 확인된 설비가 없습니다. ('직접 연결만' 해제 시 전체 표시)"
-                  : "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.") +
-      "</td></tr>";
+    var emptyMsg;
+    if (!all.length) emptyMsg = "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.";
+    else if (subnet || q) emptyMsg = "필터/검색 조건에 맞는 설비가 없습니다.";
+    else emptyMsg = "직접 연결로 확인된 설비가 없습니다. ('직접 연결만' 해제 시 전체 표시)";
+    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>" + emptyMsg + "</td></tr>";
     return;
   }
   tbody.innerHTML = rows.map(function (h) {
@@ -1039,10 +1171,14 @@ function _renderFacilityRows() {
   }).join("");
 }
 
-// "직접 연결만" 토글 + "새로고침(재매칭)" 버튼
+// "직접 연결만" 토글 + 대역 필터 + 통합 검색 + "새로고침(재매칭)" 버튼
 (function () {
   var only = document.getElementById("fac-only-direct");
   if (only) only.addEventListener("change", _renderFacilityRows);
+  var sf = document.getElementById("fac-subnet-filter");
+  if (sf) sf.addEventListener("change", _renderFacilityRows);
+  var fs = document.getElementById("fac-search");
+  if (fs) fs.addEventListener("input", _renderFacilityRows);
   var ex = document.getElementById("btn-fac-export-xlsx");
   if (ex) ex.addEventListener("click", function () { window.location = "/api/facility/export?format=xlsx"; });
   var et = document.getElementById("btn-fac-export-txt");

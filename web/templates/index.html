@@ -166,7 +166,10 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">설비 현황</span>
         <div class="pane-toolbar__actions">
-          <input id="fac-search" class="tbl-search" data-target="facility-table-body" placeholder="IP/MAC/스위치 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+          <select id="fac-subnet-filter" style="font-size:13px;padding:5px" title="대역별로 리스트 필터">
+            <option value="">전체 대역</option>
+          </select>
+          <input id="fac-search" placeholder="IP·대역·MAC·연결 스위치 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:210px">
           <select id="fac-switch" style="font-size:13px;padding:5px"></select>
           <button id="btn-fac-detect" class="btn btn--secondary">대역 자동 찾기</button>
           <input id="fac-subnet" type="text" placeholder="10.92.174.0/23" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:150px">
@@ -236,6 +239,23 @@
               <th style="width:34px;text-align:center"><input type="checkbox" id="sw-check-all" title="전체 선택"></th>
               <th>구분</th><th>IP</th><th>호스트네임</th><th>벤더</th><th>모델</th><th>버전</th>
               <th>위치</th><th>상태</th><th>경보</th><th>마지막 수집</th><th>작업</th>
+            </tr>
+            <!-- 컬럼별 필터(조건 AND) — 입력/선택 즉시 리스트 반영 -->
+            <tr id="sw-filter-row">
+              <th></th>
+              <th><select class="sw-colf" data-col="device_type" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
+              <th><input class="sw-colf" data-col="ip" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
+              <th><input class="sw-colf" data-col="hostname" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
+              <th><select class="sw-colf" data-col="vendor" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
+              <th><input class="sw-colf" data-col="model" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
+              <th><input class="sw-colf" data-col="os_version" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
+              <th><input class="sw-colf" data-col="location" placeholder="검색" style="width:100%;font-size:11px;padding:2px 4px"></th>
+              <th><select class="sw-colf" data-col="status" style="width:100%;font-size:11px"><option value="">전체</option></select></th>
+              <th><select class="sw-colf" data-col="alert" style="width:100%;font-size:11px">
+                <option value="">전체</option><option value="__yes__">있음</option><option value="__no__">없음</option>
+              </select></th>
+              <th></th>
+              <th><button id="btn-sw-filter-clear" class="btn btn--ghost" style="font-size:11px;padding:2px 6px">초기화</button></th>
             </tr>
           </thead>
           <tbody id="switch-table-body"></tbody>

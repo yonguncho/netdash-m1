@@ -332,3 +332,7 @@ def test_facility_ui_present():
     assert "_renderFacilityRows" in js
     assert 'id="btn-fac-export-xlsx"' in html
     assert "/api/facility/export?format=txt" in js
+    # 대역 필터 + IP/대역/MAC(형식무관)/연결스위치 통합 검색
+    assert 'id="fac-subnet-filter"' in html
+    assert "_facMatchesSearch" in js
+    assert "replace(/[^0-9a-f]/g" in js  # MAC 구분자 무시 비교

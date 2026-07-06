@@ -53,6 +53,18 @@ def test_bulk_set_type(client):
     assert r2.status_code == 400
 
 
+def test_switch_column_filters_ui():
+    """스위치 현황 컬럼별 필터 행(드롭다운+텍스트, AND 조합, 초기화)."""
+    html = HTML.read_text(encoding="utf-8")
+    assert 'id="sw-filter-row"' in html
+    assert 'data-col="device_type"' in html and 'data-col="ip"' in html
+    assert 'data-col="status"' in html and 'data-col="alert"' in html
+    assert 'id="btn-sw-filter-clear"' in html
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "_applyColFilters" in js and "_refreshColFilterOptions" in js
+    assert "sw-colf" in js
+
+
 def test_device_type_ui():
     html = HTML.read_text(encoding="utf-8")
     assert 'id="sw-bulk-type"' in html and 'id="btn-sw-apply-type"' in html
