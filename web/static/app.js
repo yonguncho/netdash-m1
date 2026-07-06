@@ -561,27 +561,11 @@ function renderRoomGrid(switches, firewalls) {
     grid.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
-  // 랙별 섹션으로 그룹화: "A09 랙" 제목 아래 U 내림차순(U42→U41→U40) 카드 나열
-  var racks = {};
-  switches.forEach(function (s) { (racks[s.room_rack] = racks[s.room_rack] || []).push({ k: "sw", o: s }); });
-  firewalls.forEach(function (f) { (racks[f.room_rack] = racks[f.room_rack] || []).push({ k: "fw", o: f }); });
-  var rkeys = Object.keys(racks).sort();
-  grid.innerHTML = rkeys.map(function (rk) {
-    var items = racks[rk].slice().sort(function (a, b) {
-      return (b.o.room_unit || 0) - (a.o.room_unit || 0);   // U 큰 번호가 먼저(실제 랙 상단)
-    });
-    var cards = items.map(function (it) {
-      var uBadge = "<div style='font-size:11px;font-weight:700;color:#2563eb;margin-bottom:2px'>U" +
-        escHtml(String(it.o.room_unit)) + "</div>";
-      return "<div style='display:flex;flex-direction:column'>" + uBadge +
-        (it.k === "fw" ? _fwCardHTML(it.o) : swCardHTML(it.o, false)) + "</div>";
-    }).join("");
-    return "<div style='width:100%'>" +
-      "<div style='font-size:15px;font-weight:700;margin:14px 0 8px;color:#1e293b'>🗄 " +
-      escHtml(rk) + " 랙 <span style='font-size:12px;color:#64748b;font-weight:500'>(" +
-      items.length + "대 · U 내림차순)</span></div>" +
-      "<div class='switch-grid'>" + cards + "</div></div>";
-  }).join("");
+  // 현황판 카드뷰와 동일한 평면 그리드(랙 오름차순 → U 내림차순 정렬만 적용)
+  switches = switches.slice().sort(_roomSort);
+  firewalls = firewalls.slice().sort(_roomSort);
+  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, false); }).join("") +
+                   firewalls.map(_fwCardHTML).join("");
   switches.forEach(function (sw) {
     var card = document.getElementById("swcard-" + sw.id);
     if (!card) return;
