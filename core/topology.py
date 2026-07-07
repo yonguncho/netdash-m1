@@ -8,6 +8,7 @@
   4) 루트(백본) = 링크가 가장 많은 노드 → BFS 계층 배치용 depth 부여
 """
 import logging
+import ipaddress
 
 from . import db
 
@@ -172,18 +173,38 @@ def build_topology(db_path):
             "device_type": "Firewall", "interfaces": fw_ifaces[:12],
             "group": fw.get("location") or "", "depth": None,
         })
+        linked_switches = set()
         mac = ip_macs.get(fw.get("host"))
-        if not mac:
-            continue
-        cands = mac_map.get(mac, [])
-        # 물리 포트 우선(Po/Vl 등 논리 포트는 업링크 경유 관측)
+        cands = mac_map.get(mac, []) if mac else []
+        # 물리 포트 관측(Po/Vl 논리포트는 업링크 경유) — 스위치별 1개로 다중 연결
         phys = [c for c in cands
                 if not (c[2] or "").lower().startswith(("po", "vl", "port-channel"))]
-        pick = (phys or cands)[:1]
-        if pick:
-            sid, _name, port = pick[0]
+        for sid, _name, port in (phys or cands):
+            if sid in linked_switches:
+                continue
+            linked_switches.add(sid)
             link_list.append({"a": sid, "b": fw_id,
                               "a_port": _resolve_port(sid, port),
-                              "b_port": None, "mutual": False})
+                              "b_port": None, "mutual": True})   # 관측된 직결 = 실선
+        # L3 인접 폴백: MAC으로 못 잡은 스위치 중, 그 스위치가 라우팅하는 대역에
+        # 방화벽 IP가 포함되면(= 방화벽이 그 스위치에 L3로 붙음) 링크 추가.
+        # FABB(백본)↔방화벽처럼 L2 MAC이 안 보이는 직결을 그려준다.
+        try:
+            fw_ip = ipaddress.IPv4Address(fw.get("host"))
+            for sid, subs in subnet_map.items():
+                if sid in linked_switches:
+                    continue
+                for net_str in subs:
+                    try:
+                        if fw_ip in ipaddress.IPv4Network(net_str, strict=False):
+                            linked_switches.add(sid)
+                            link_list.append({"a": sid, "b": fw_id, "a_port": None,
+                                              "b_port": None, "mutual": True,
+                                              "l3": True})    # L3 인접(대역 기반)
+                            break
+                    except (ipaddress.AddressValueError, ValueError):
+                        continue
+        except (ipaddress.AddressValueError, ValueError):
+            pass
 
     return {"nodes": nodes, "links": link_list}

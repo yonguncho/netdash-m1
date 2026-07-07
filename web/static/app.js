@@ -2125,6 +2125,24 @@ function _renderCoreMap(host) {
              " preserveAspectRatio='xMidYMid meet' viewBox='0 0 " + width + " " + height +
              "' style='cursor:grab;display:block'>"];
 
+  // 세그먼트(구역) 컨테이너 — 첨부 구성도처럼 계층별 라운드 박스 + 라벨
+  var _RANK_SEG = { 0: { t: "방화벽 (Gateway)", c: "#ef4444" }, 1: { t: "코어 / 백본 · L3", c: "#a855f7" },
+                    2: { t: "L4 (로드밸런서)", c: "#f59e0b" }, 3: { t: "L2 / 액세스", c: "#14b8a6" } };
+  ranks.forEach(function (r, ri) {
+    var row = layout[r].ordered;
+    if (!row.length) return;
+    var xs = row.map(function (n) { return pos[n.id].x; });
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs) + _CARD_W;
+    var y = 30 + ri * (_CARD_H + GAP_Y);
+    var seg = _RANK_SEG[r] || { t: "", c: "#64748b" };
+    var padX = 22, padY = 16;
+    svg.push("<rect x='" + (minX - padX) + "' y='" + (y - padY) + "' width='" + (maxX - minX + padX * 2) +
+      "' height='" + (_CARD_H + padY * 2) + "' rx='16' fill='" + seg.c + "' fill-opacity='0.06' stroke='" +
+      seg.c + "' stroke-opacity='0.45' stroke-width='1.5' stroke-dasharray='2 4'/>");
+    svg.push("<text x='" + (minX - padX + 4) + "' y='" + (y - padY - 6) + "' fill='" + seg.c +
+      "' font-size='12' font-weight='700'>" + escHtml(seg.t) + "</text>");
+  });
+
   links.forEach(function (l) {
     var a = pos[l.a], b = pos[l.b];
     if (!a || !b) return;
@@ -2145,11 +2163,15 @@ function _renderCoreMap(host) {
     var pa = (top === l.a) ? l.a_port : l.b_port;
     var pb = (top === l.a) ? l.b_port : l.a_port;
     var tip = ((byId[top] || {}).name || "") + (pa ? " [" + pa + "]" : "") + "  ↕  " +
-      ((byId[bot] || {}).name || "") + (pb ? " [" + pb + "]" : "") + (l.mutual ? "  (양방향)" : "");
+      ((byId[bot] || {}).name || "") + (pb ? " [" + pb + "]" : "") +
+      (l.l3 ? "  (L3 대역 인접)" : l.mutual ? "  (양방향)" : "");
+    // L3 인접 링크(대역 기반)는 파란 점선, 관측 링크는 실선
+    var lstroke = l.l3 ? "#38bdf8" : (l.mutual ? "#94a3b8" : "#475569");
+    var lwidth = l.l3 ? "2" : (l.mutual ? "2.5" : "1.5");
+    var ldash = l.l3 ? " stroke-dasharray='7 4'" : (l.mutual ? "" : " stroke-dasharray='6 4'");
     svg.push("<path class='topo-edge' data-ea='" + l.a + "' data-eb='" + l.b + "' data-tip=\"" + escHtml(tip) +
       "\" d='M" + x1 + "," + y1 + " C" + x1 + "," + mid + " " + x2 + "," + mid + " " + x2 + "," + y2 +
-      "' fill='none' stroke='" + (l.mutual ? "#94a3b8" : "#475569") + "' stroke-width='" + (l.mutual ? "2.5" : "1.5") + "'" +
-      (l.mutual ? "" : " stroke-dasharray='6 4'") + "/>");
+      "' fill='none' stroke='" + lstroke + "' stroke-width='" + lwidth + "'" + ldash + "/>");
     if (pa) {
       svg.push("<text x='" + ((x1 + x2) / 2) + "' y='" + (mid - 3) + "' fill='#7dd3fc' font-size='9' text-anchor='middle'>" +
         escHtml((pa || "").split("(")[0].slice(0, 12)) + "</text>");
@@ -2158,7 +2180,7 @@ function _renderCoreMap(host) {
   core.forEach(function (n) { var pp = pos[n.id]; if (pp) _drawNode(svg, n, pp.x, pp.y, {}); });
   svg.push("</svg>");
 
-  host.innerHTML = _legendHTML("<span style='color:#22d3ee'>═ 이중화</span><span style='color:#e2e8f0;font-weight:600'>· 서버실 구성도</span>") +
+  host.innerHTML = _legendHTML("<span style='color:#22d3ee'>═ 이중화</span><span style='color:#38bdf8'>┄ L3 대역 인접</span><span style='color:#e2e8f0;font-weight:600'>· 서버실 구성도</span>") +
     "<div class='topo-stage'>" + svg.join("") + "</div>" +
     "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
     "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:460px;white-space:pre-line'></div>";

@@ -101,6 +101,38 @@ def test_topology_firewall_interfaces_in_node(temp_db):
     assert any("10.92.170.1/23" in s for s in fwn["interfaces"])
 
 
+def test_topology_firewall_l3_adjacency_link(temp_db):
+    """FABB↔방화벽처럼 MAC이 안 잡혀도, 스위치 라우팅 대역에 방화벽 IP가
+    포함되면 L3 인접 링크를 그린다(첨부 구성도 케이스)."""
+    bb = db.save_switch(temp_db, "FABB", "10.92.0.1", "cisco_nxos")
+    db.update_switch(temp_db, bb, device_type="BackBone")
+    # FABB가 10.92.186.0/24를 라우팅(config)
+    db.save_config_backup(temp_db, bb,
+        "hostname FABB\ninterface Vlan186\n ip address 10.92.186.2 255.255.255.0\n")
+    # 방화벽 IP가 그 대역 안(10.92.186.1) — MAC 관측은 없음
+    fid = db.save_firewall(temp_db, "F1_FA_FW", "fortigate", "10.92.186.1", port=443)
+    topo = topology.build_topology(temp_db)
+    fw_links = [l for l in topo["links"] if str(l["b"]) == "f%d" % fid]
+    assert len(fw_links) == 1
+    assert fw_links[0]["a"] == bb and fw_links[0].get("l3") is True
+
+
+def test_topology_firewall_multi_homed(temp_db):
+    """방화벽이 여러 스위치에 물리 관측되면 각각 링크(다중 연결)."""
+    a = db.save_switch(temp_db, "SW-A", "10.0.0.1", "cisco_ios")
+    b = db.save_switch(temp_db, "SW-B", "10.0.0.2", "cisco_ios")
+    fid = db.save_firewall(temp_db, "FW", "fortigate", "10.0.0.99", port=443)
+    for sid in (a, b):
+        snap = db.save_snapshot(temp_db, sid)
+        db.save_arp_entries(temp_db, snap, sid, [
+            {"ip": "10.0.0.99", "mac": "cc:cc:cc:00:00:99", "interface": "Vlan1"}])
+        db.save_mac_entries(temp_db, snap, sid, [
+            {"vlan": 1, "mac": "cc:cc:cc:00:00:99", "port": "Gi1/0/1", "type": "dynamic"}])
+    topo = topology.build_topology(temp_db)
+    fw_links = [l for l in topo["links"] if str(l["b"]) == "f%d" % fid]
+    assert {l["a"] for l in fw_links} == {a, b}   # 두 스위치 모두 연결
+
+
 def test_topology_two_tab_ui():
     """토폴로지 2탭(서버실 구성도/TPS 구역도) + 중간 카드 + 종류 아이콘."""
     html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
@@ -112,6 +144,8 @@ def test_topology_two_tab_ui():
     assert "_drawNode" in js                     # 중간 카드
     assert "_deviceSymbol" in js                 # 실제 장비 심볼(SVG)
     assert "이중화 링크" in js                   # 이중화 쌍 인식
+    assert "_RANK_SEG" in js                     # 세그먼트(구역) 컨테이너 박스
+    assert "L3 대역 인접" in js                  # L3 링크 구분
     assert "방화벽" in js and "백본/L3" in js     # 범례 종류 구분
 
 
