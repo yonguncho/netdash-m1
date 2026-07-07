@@ -148,6 +148,16 @@ def _is_unknown_vendor(vendor):
     return (vendor or "").strip().lower() in ("", "unknown")
 
 
+def _prompt_looks_alteon(text):
+    """Alteon 메뉴형 CLI 프롬프트('>> ... Main#' 또는 '>>'로 시작) 판별.
+
+    netmiko는 send_command 결과에서 프롬프트를 잘라내므로 '출력 텍스트'에는
+    시그니처가 남지 않는다 → 접속 직후 '프롬프트 자체'를 검사하는 것이 확실하다.
+    """
+    t = (text or "").strip()
+    return bool(t.startswith(">>") or re.search(r">>\s?[\w\s.-]*Main#?\s*$", t))
+
+
 def _looks_like_alteon(outputs):
     """수집 출력에서 Alteon(메뉴형 CLI) 시그니처 탐지.
 
@@ -455,11 +465,18 @@ def _worker_loop():
                         utils.log_event("info", "vendor_probe_retry",
                                         switch_id=switch_id, probed=probed,
                                         first_error=_sanitize_error_msg(str(first_err)))
-                        outputs, eff_vendor = _run_with_timeout(
-                            _ssh_collect, hard_to,
-                            switch, username, password, probed,
-                            source_ip=source_ip, detect_vendor=False, max_retries=1)
-                        eff_vendor = probed
+                        if probed == "alteon":
+                            # Alteon은 netmiko 드라이버가 없음 → 전용 메뉴 CLI 수집
+                            outputs = _run_with_timeout(
+                                _alteon_collect, hard_to,
+                                switch, username, password, source_ip=source_ip)
+                            eff_vendor = "alteon"
+                        else:
+                            outputs, eff_vendor = _run_with_timeout(
+                                _ssh_collect, hard_to,
+                                switch, username, password, probed,
+                                source_ip=source_ip, detect_vendor=False, max_retries=1)
+                            eff_vendor = probed
                         # 프로브에서 읽은 show version을 버전/모델 파싱에 재활용
                         if probe_ver and not outputs.get("version"):
                             outputs["version"] = probe_ver
@@ -687,6 +704,12 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                         conn.send_command(paging, read_timeout=read_timeout)
                     except Exception:
                         pass
+                # Alteon 메뉴형 CLI는 프롬프트('>> ... Main#')가 '#'로 끝나 cisco
+                # 접속이 '성공'해 버린다. netmiko는 출력에서 프롬프트를 잘라내므로
+                # 출력 텍스트로는 못 잡음 → 접속 직후 '프롬프트 자체'를 검사.
+                if detect_vendor and _prompt_looks_alteon(getattr(conn, "base_prompt", "")):
+                    utils.log_event("info", "alteon_prompt_detected", switch=switch["name"])
+                    raise _DriverMismatchError("alteon 메뉴형 프롬프트 감지")
                 # 벤더 미지정이면 show version으로 실제 벤더 학습 → 명령/파서 그에 맞춤
                 if detect_vendor:
                     try:
@@ -832,6 +855,11 @@ def _probe_os(switch, username, password, source_ip=None):
         shell.send("show version\n")
         out = _alteon_read(shell, timeout=12)
         detected = _detect_vendor_from_version(out)
+        # 키워드로 못 잡았어도 원시 셸 출력엔 프롬프트가 남는다 → Alteon 판별
+        if not detected and _prompt_looks_alteon(out.strip().splitlines()[-1] if out.strip() else ""):
+            detected = "alteon"
+        if not detected and re.search(r">>\s?[\w\s.-]*Main#", out or ""):
+            detected = "alteon"
         utils.log_event("info", "os_probe", switch=switch.get("name"),
                         detected=detected or "unknown")
         return detected, out

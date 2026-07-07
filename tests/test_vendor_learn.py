@@ -143,6 +143,54 @@ def test_worker_always_verifies_vendor(temp_db, monkeypatch):
     assert seen.get("detect") is True
 
 
+def test_prompt_looks_alteon():
+    assert collector._prompt_looks_alteon(">> Standalone SLB - Main")
+    assert collector._prompt_looks_alteon(">> Main#")
+    assert collector._prompt_looks_alteon(">>ASw5224 - Main#")
+    assert not collector._prompt_looks_alteon("SW-A09#")
+    assert not collector._prompt_looks_alteon("X460.1 #")
+    assert not collector._prompt_looks_alteon("")
+
+
+def test_worker_alteon_prompt_fallback(temp_db, monkeypatch):
+    """netmiko 접속 시 Alteon 프롬프트 감지 → 프로브 → 전용 수집 폴백.
+
+    실장비 증상: v3.39.0에서도 '알 수 없음' — netmiko가 출력에서 프롬프트를
+    잘라내 시그니처가 안 남았음 → 프롬프트 자체 검사 + 프로브 프롬프트 판별.
+    """
+    monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    sid = db.save_switch(temp_db, "L4-PROMPT", "10.0.0.25", "unknown")
+    credentials.save_credential(sid, "admin", "pw")
+
+    def fake_ssh(switch, username, password, vendor, source_ip=None,
+                 detect_vendor=False, max_retries=3):
+        # 접속 직후 프롬프트 검사에서 Alteon으로 판정된 상황
+        raise collector._DriverMismatchError("alteon 메뉴형 프롬프트 감지")
+    monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
+    monkeypatch.setattr(collector, "_probe_os",
+                        lambda switch, u, p, source_ip=None:
+                        ("alteon", "Error: unknown command\n>> Standalone SLB - Main#"))
+    monkeypatch.setattr(collector, "_alteon_collect",
+                        lambda switch, u, p, source_ip=None: {
+                            "status": "", "mac": "", "arp": "",
+                            "version": "Alteon Application Switch 5224\n"
+                                       "Software Version 29.0.3.0"})
+
+    collector.init_collector()
+    collector.collect_switch(temp_db, sid, "admin", "pw")
+    import time
+    for _ in range(100):
+        sw = db.get_switch(temp_db, sid)
+        if sw["status"] in ("done", "failed") and sw["vendor"] == "alteon":
+            break
+        time.sleep(0.1)
+    sw = db.get_switch(temp_db, sid)
+    assert sw["vendor"] == "alteon" and sw["status"] == "done"
+    assert sw["model"] == "5224"
+    assert (sw["os_version"] or "").startswith("Alteon 29")
+
+
 def test_looks_like_alteon():
     assert collector._looks_like_alteon(
         {"status": "Error: unknown command\n>> Standalone SLB - Main#"})
