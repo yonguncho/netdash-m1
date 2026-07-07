@@ -38,6 +38,31 @@ def _switch_mgmt_macs(db_path, switches, ip_macs=None):
             for s in switches if s.get("ip") and s["ip"] in ip_macs}
 
 
+def _connected_subnets_by_switch(db_path, switch_ids):
+    """{switch_id: [대역, ...]} — 각 스위치 최신 config 백업의 'ip address' 줄에서 도출.
+
+    추가 장비 접근 없이 이미 저장된 running-config를 재활용. 백본/L3 노드에
+    '이 스위치가 라우팅하는 대역'을 태그로 보여주기 위함.
+    """
+    from . import facility
+    out = {}
+    with db.get_db(db_path) as conn:
+        cur = conn.cursor()
+        for sid in switch_ids:
+            try:
+                cur.execute("SELECT content FROM config_backups WHERE switch_id=? "
+                            "ORDER BY id DESC LIMIT 1", (sid,))
+                row = cur.fetchone()
+                if not row or not row["content"]:
+                    continue
+                subs = facility._parse_connected_subnets("", "", row["content"])
+                if subs:
+                    out[sid] = subs[:12]         # 노드 태그 과밀 방지
+            except Exception:
+                continue
+    return out
+
+
 def build_topology(db_path):
     """토폴로지 그래프 계산.
 
@@ -102,6 +127,9 @@ def build_topology(db_path):
                     depth[nxt] = depth[cur] + 1
                     queue.append(nxt)
 
+    # 스위치별 최신 config 백업에서 directly-connected 대역 도출(추가 명령 없음)
+    subnet_map = _connected_subnets_by_switch(db_path, [s["id"] for s in switches])
+
     nodes = []
     for s in switches:
         try:
@@ -114,6 +142,8 @@ def build_topology(db_path):
             "id": s["id"], "kind": "sw", "name": s.get("name"), "ip": s.get("ip"),
             "vendor": s.get("vendor"), "status": s.get("status"),
             "alert": s.get("alert") or "none",
+            "device_type": s.get("device_type") or "",
+            "subnets": subnet_map.get(s["id"], []),
             "group": group or (s.get("location") or ""),
             "depth": depth.get(s["id"], None),
         })
@@ -126,10 +156,20 @@ def build_topology(db_path):
         firewalls = []
     for fw in firewalls:
         fw_id = "f%d" % fw["id"]
+        # 방화벽 인터페이스 IP 요약(서버실 구성도 노드 태그용)
+        fw_ifaces = []
+        try:
+            for it in db.get_firewall_interfaces(db_path, fw["id"]):
+                if it.get("ip"):
+                    pfx = ("/" + str(it["mask"])) if it.get("mask") else ""
+                    fw_ifaces.append("%s %s%s" % (it.get("name") or "", it["ip"], pfx))
+        except Exception:
+            pass
         nodes.append({
             "id": fw_id, "kind": "fw", "name": fw.get("name"),
             "ip": fw.get("host"), "vendor": fw.get("vendor"),
             "status": fw.get("status"), "alert": "none",
+            "device_type": "Firewall", "interfaces": fw_ifaces[:12],
             "group": fw.get("location") or "", "depth": None,
         })
         mac = ip_macs.get(fw.get("host"))

@@ -264,14 +264,12 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">네트워크 토폴로지</span>
         <div class="pane-toolbar__actions">
+          <button class="btn btn--primary topo-mode" data-mode="core" style="font-size:12px">🏢 서버실 구성도</button>
+          <button class="btn btn--secondary topo-mode" data-mode="tps" style="font-size:12px">🏭 TPS 구역도</button>
+          <select id="topo-zone-select" style="font-size:12px;padding:5px;display:none"></select>
           <button id="btn-topo-refresh" class="btn btn--secondary" style="font-size:12px">↻ 새로고침</button>
         </div>
       </div>
-      <p style="margin:4px 0 10px;font-size:12px;color:#64748b">
-        수집된 ARP·MAC 테이블로 스위치 간 연결을 자동 추론해 <b>백본 → 업링크 → 액세스</b> 계층 트리로
-        그립니다(장비 추가 접근 없음). 휠=확대/축소, 드래그=이동, 링크/노드에 마우스를 올리면 포트·장비
-        정보, 클릭=상세보기. 스위치들을 수집할수록 정확해집니다.
-      </p>
       <div id="topology-canvas" style="overflow:auto;background:#0f172a;border-radius:8px;min-height:480px"></div>
     </div>
   </main>

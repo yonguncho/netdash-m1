@@ -75,14 +75,42 @@ def test_topology_firewall_node_and_link(temp_db):
     assert all(n.get("kind") in ("sw", "fw") for n in topo["nodes"])
 
 
-def test_topology_zone_ui():
-    """구역 집계 맵 ↔ 구역 상세 2단계 + 검색 UI."""
+def test_topology_nodes_have_device_type_and_subnets(temp_db):
+    """노드에 device_type + config 백업 기반 연결 대역(subnets) 포함."""
+    bb, tps = _seed_link(temp_db)
+    db.update_switch(temp_db, bb, device_type="BackBone")
+    db.save_config_backup(temp_db, bb,
+        "hostname BB\ninterface Vlan100\n ip address 10.92.174.1 255.255.254.0\n"
+        "interface Vlan200\n ip address 10.92.176.1 255.255.255.0\n")
+    topo = topology.build_topology(temp_db)
+    bbn = [n for n in topo["nodes"] if n["id"] == bb][0]
+    assert bbn["device_type"] == "BackBone"
+    assert "10.92.174.0/23" in bbn["subnets"]
+    assert "10.92.176.0/24" in bbn["subnets"]
+
+
+def test_topology_firewall_interfaces_in_node(temp_db):
+    """방화벽 노드에 인터페이스 IP 요약 포함(서버실 구성도 태그용)."""
+    db.save_switch(temp_db, "SW", "10.0.0.1", "cisco_ios")   # switches 있어야 build 진행
+    fid = db.save_firewall(temp_db, "FW-1", "fortigate", "10.0.0.99", port=443)
+    db.save_firewall_interfaces(temp_db, fid, [
+        {"name": "port1", "ip": "10.92.170.1", "mask": "23", "vdom_zone": "root"}])
+    topo = topology.build_topology(temp_db)
+    fwn = [n for n in topo["nodes"] if n.get("kind") == "fw"][0]
+    assert fwn["device_type"] == "Firewall"
+    assert any("10.92.170.1/23" in s for s in fwn["interfaces"])
+
+
+def test_topology_two_tab_ui():
+    """토폴로지 2탭(서버실 구성도/TPS 구역도) + 중간 카드 + 종류 아이콘."""
+    html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert 'data-mode="core"' in html and 'data-mode="tps"' in html
+    assert 'id="topo-zone-select"' in html
     js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "_renderZoneMap" in js and "_renderZoneDetail" in js
-    assert "_topoZoneOf" in js and "🏢 백본" in js
-    assert "topo-search" in js                  # 장비 검색
-    assert "data-ghost" in js                   # 타 구역 직결(고스트) 노드
-    assert "링크</text>" in js                  # 구역 간 링크 집계 라벨
+    assert "_renderCoreMap" in js and "_renderTpsMap" in js
+    assert "_isCoreDevice" in js and "_topoKindOf" in js
+    assert "_drawNode" in js                     # 중간 카드
+    assert "방화벽" in js and "백본/L3" in js     # 범례 종류 구분
 
 
 def test_topology_api(client):
@@ -146,10 +174,10 @@ def test_new_ui_present():
 
 
 def test_topology_tree_ui_features():
-    """v3.32: Meraki/UniFi식 트리 배치 + 호버 툴팁 + 줌/팬 + 미연결 분리."""
+    """v3.45: 2탭 계층 배치 + 호버 툴팁 + 줌/팬 + 카드 노드."""
     js = APP_JS.read_text(encoding="utf-8")
-    assert "assignX" in js                 # tidy tree(부모=자식 중앙)
+    assert "_layoutLayered" in js          # 종류별 계층 배치
     assert "topo-tip" in js                # 호버 툴팁
     assert "viewBox" in js and "wheel" in js  # 줌/팬
-    assert "topo-orphan" in js             # 미연결 장비 하단 분리
     assert "topo-edge" in js               # 베지어 링크 + 노드 호버 강조
+    assert "_drawNode" in js               # 중간 카드 노드
