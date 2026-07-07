@@ -1068,11 +1068,12 @@ def create_app(demo_mode=None):
                                 (res.get("banner_head") or "")
                     osv = collector._parse_os_version(guess, diag_text)
                     model = collector._parse_model(guess, diag_text)
-                    if osv or model:
+                    serial = collector._parse_serial(guess, diag_text)
+                    if osv or model or serial:
                         db.update_switch(db_path, switch_id,
-                                         os_version=osv, model=model)
-                        res["model_version_filled"] = "%s / %s" % (
-                            model or "-", osv or "-")
+                                         os_version=osv, model=model, serial=serial)
+                        res["model_version_filled"] = "%s / %s / SN:%s" % (
+                            model or "-", osv or "-", serial or "-")
                 except Exception:
                     pass
             log_event("info", "switch_diagnosed", switch_id=switch_id,

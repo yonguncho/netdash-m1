@@ -393,6 +393,7 @@ def init_schema(db_path):
                 ("model", "TEXT"),
                 ("last_error", "TEXT"),
                 ("device_type", "TEXT"),
+                ("serial", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")
@@ -1165,7 +1166,7 @@ def get_switch(db_path, switch_id):
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, name, ip, hostname, vendor, model, os_version, device_type, location, status, alert, note, last_error, last_collected FROM switches WHERE id = ?",
+            "SELECT id, name, ip, hostname, vendor, model, os_version, serial, device_type, location, status, alert, note, last_error, last_collected FROM switches WHERE id = ?",
             (switch_id,)
         )
         row = cursor.fetchone()
@@ -1653,14 +1654,15 @@ def get_switch_credential(db_path, switch_id):
 
 
 def update_switch(db_path, switch_id, name=None, ip=None, hostname=None, vendor=None,
-                  location=None, note=None, os_version=None, model=None, device_type=None):
+                  location=None, note=None, os_version=None, model=None, device_type=None,
+                  serial=None):
     """스위치 등록 정보 수정(제공된 필드만, 존재 컬럼만). 반환: 성공 여부.
 
     note/device_type는 빈 문자열("")도 유효(비우기). None이면 변경하지 않음.
     """
     fields = {"name": name, "ip": ip, "hostname": hostname, "vendor": vendor,
               "location": location, "note": note, "os_version": os_version,
-              "model": model, "device_type": device_type}
+              "model": model, "device_type": device_type, "serial": serial}
     fields = {k: v for k, v in fields.items() if v is not None}
     with _db_lock:
         with get_db(db_path) as conn:

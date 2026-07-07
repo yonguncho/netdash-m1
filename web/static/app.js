@@ -803,7 +803,7 @@ function _applySwSearch(list) {
   if (!q) return list;
   return (list || []).filter(function (s) {
     var hay = [s.name, s.ip, s.hostname, s.vendor, s.model, s.os_version,
-               s.device_type, s.location, s.tps_location]
+               s.serial, s.device_type, s.location, s.tps_location]
       .map(function (x) { return x || ""; }).join(" ").toLowerCase();
     return hay.indexOf(q) >= 0;
   });
@@ -813,7 +813,7 @@ function renderSwitchTable(switches) {
   switches = _applySwSearch(switches);
   var tbody = document.getElementById("switch-table-body");
   if (tbody && !switches.length) {
-    tbody.innerHTML = "<tr><td colspan='12' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='13' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
     var allChk0 = document.getElementById("sw-check-all");
     if (allChk0) allChk0.checked = false;
     _updateBulkDeleteBtn();
@@ -840,6 +840,8 @@ function renderSwitchTable(switches) {
         : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 show version/show switch에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.os_version ? escHtml(sw.os_version)
         : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
+      (sw.serial ? "<code style='font-size:11px'>" + escHtml(sw.serial) + "</code>"
+        : "<span style='color:#94a3b8' title='재수집하면 show version/inventory에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
       locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span>" +
       (sw.status === "failed" && sw.last_error

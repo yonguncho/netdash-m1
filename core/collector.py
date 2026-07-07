@@ -224,7 +224,9 @@ def _parse_os_version(vendor, text):
         "extreme_exos": [(r"ExtremeXOS\s+version\s+(\S+)", "EXOS "),
                          (r"IMG:\s*(\S+)", "EXOS ")],
         "juniper_junos": [(r"Junos:\s*(\S+)", "JUNOS ")],
-        "alteon": [(r"Software\s+Version\s+(\S+)", "Alteon ")],
+        "alteon": [(r"[Ss]oftware\s+[Vv]ersion:?\s*(\d[\w.]+)", "Alteon "),
+                   (r"booted\s+software\s+version\s*:?\s*(\d[\w.]+)", "Alteon "),
+                   (r"[Vv]ersion\s*:?\s*(\d+\.\d[\w.]*)", "Alteon ")],
     }
     for pat, prefix in patterns.get(v, []):
         m = re.search(pat, t, re.IGNORECASE)
@@ -261,6 +263,35 @@ def _parse_model(vendor, text):
         if m:
             return m.group(1).strip().rstrip(",")[:60]
     m = re.search(r"Model(?:\s*Number)?\s*[:=]\s*(\S+)", t, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()[:60]
+    return None
+
+
+def _parse_serial(vendor, text):
+    """show version/inventory 출력에서 시리얼 번호 추출. 못 찾으면 None."""
+    t = text or ""
+    if not t:
+        return None
+    v = (vendor or "").lower()
+    patterns = {
+        "cisco_ios": [r"System [Ss]erial [Nn]umber\s*:?\s*([A-Z0-9]+)",
+                      r"Processor board ID\s+([A-Z0-9]+)"],
+        "cisco_nxos": [r"SN:\s*([A-Z0-9]+)",
+                       r"Processor Board ID\s+([A-Z0-9]+)"],
+        "arista_eos": [r"Serial number:\s*(\S+)"],
+        "extreme_exos": [r"^Switch\s*:\s*\S+\s+([0-9A-Za-z-]+)\s+Rev",
+                         r"^Slot-\d+\s*:\s*\S+\s+([0-9A-Za-z-]+)\s+Rev"],
+        "juniper_junos": [r"[Cc]hassis\s+serial\s+number\s*:?\s*(\S+)",
+                          r"Serial [Nn]umber\s*:?\s*(\S+)"],
+        "alteon": [r"Serial\s*(?:Number|No\.?)?\s*[:#]?\s*([A-Z0-9-]{5,})",
+                   r"Switch\s+Serial\s+No[.:]*\s*(\S+)"],
+    }
+    for pat in patterns.get(v, []):
+        m = re.search(pat, t, re.MULTILINE)
+        if m:
+            return m.group(1).strip().rstrip(",")[:60]
+    m = re.search(r"[Ss]erial\s*(?:[Nn]umber|[Nn]o\.?)?\s*[:#]\s*([A-Za-z0-9-]{4,})", t)
     if m:
         return m.group(1).strip()[:60]
     return None
@@ -553,6 +584,9 @@ def _worker_loop():
             # show version(+EXOS는 show switch) 출력에서 OS 버전/모델명 추출
             ver_out = outputs.get("version", "")
             osv = _parse_os_version(vendor, ver_out) if ver_out else None
+            if not osv and outputs.get("boot"):
+                # Alteon 일부 장비: 버전이 /info/sys/general이 아니라 /boot/cur에
+                osv = _parse_os_version(vendor, outputs.get("boot", ""))
             model = _parse_model(vendor, ver_out) if ver_out else None
             if not model and outputs.get("sysinfo"):
                 # EXOS 모델(System Type:)은 show version이 아니라 show switch에 있음
@@ -560,9 +594,15 @@ def _worker_loop():
             if not model and outputs.get("inventory"):
                 # NX-OS 모델은 show inventory의 PID가 가장 확실(표기 변형 무관)
                 model = _parse_model(vendor, outputs.get("inventory", ""))
-            if osv or model:
+            # 시리얼 번호: show version → inventory → sysinfo 순으로 시도
+            serial = _parse_serial(vendor, ver_out) if ver_out else None
+            for _src in ("inventory", "sysinfo"):
+                if not serial and outputs.get(_src):
+                    serial = _parse_serial(vendor, outputs.get(_src, ""))
+            if osv or model or serial:
                 try:
-                    db.update_switch(db_path, switch_id, os_version=osv, model=model)
+                    db.update_switch(db_path, switch_id, os_version=osv,
+                                     model=model, serial=serial)
                 except Exception:
                     pass
 
@@ -947,13 +987,18 @@ def diagnose_switch(switch, username, password, source_ip=None):
         # Alteon(메뉴형 CLI)은 show가 아니라 /info 경로 명령을 쓴다 —
         # 프롬프트가 Alteon이면 진단도 /info/sys/general로 실제 버전을 확인.
         if _prompt_looks_alteon(res["prompt"]) or _prompt_looks_alteon(banner):
-            probe_cmd = "/info/sys/general"
+            probe_cmd = "/info/sys/general + /boot/cur"
+            shell.send("/info/sys/general\n")
+            out = _alteon_read(shell, timeout=10)
+            # 일부 Alteon은 버전이 /info/sys/general에 없음 → /boot/cur 병행
+            shell.send("/boot/cur\n")
+            out = (out or "") + "\n" + (_alteon_read(shell, timeout=10) or "")
         else:
             probe_cmd = "show version"
+            shell.send(probe_cmd + "\n")
+            out = _alteon_read(shell, timeout=10)
         res["probe_cmd"] = probe_cmd
-        shell.send(probe_cmd + "\n")
-        out = _alteon_read(shell, timeout=10)
-        res["version_head"] = (out or "")[:800]
+        res["version_head"] = (out or "")[:1200]
         res["guess"] = (_detect_vendor_from_version(out)
                         or _detect_vendor_from_version(banner)
                         or ("alteon" if (_prompt_looks_alteon(res["prompt"])

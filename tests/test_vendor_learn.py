@@ -247,8 +247,9 @@ def test_diagnose_uses_info_cmd_for_alteon(monkeypatch):
     monkeypatch.setattr(_time, "sleep", lambda s: None)
 
     res = collector.diagnose_switch({"ip": "10.0.0.30", "name": "L4-A"}, "u", "p")
-    assert res["probe_cmd"] == "/info/sys/general"
+    assert "/info/sys/general" in res["probe_cmd"]
     assert "/info/sys/general" in sent
+    assert "/boot/cur" in sent          # 버전이 boot에만 있는 장비 대응
     assert res["guess"] == "alteon"
 
 
@@ -344,6 +345,34 @@ def test_looks_like_alteon():
         {"version": "Alteon Application Switch 5224"})
     assert not collector._looks_like_alteon(
         {"status": "Gi1/0/1 connected 1 a-full a-1000"})
+
+
+def test_parse_serial():
+    s = collector._parse_serial
+    assert s("cisco_ios", "Processor board ID FDO2233A0BC") == "FDO2233A0BC"
+    assert s("cisco_ios", "System Serial Number            : FCW1122B3CD") == "FCW1122B3CD"
+    assert s("cisco_nxos", "PID: N9K-C93180YC-EX ,  VID: V02 ,  SN: FDO12345ABC") == "FDO12345ABC"
+    assert s("extreme_exos", "Switch          : 800392-00-04 1633N-41599 Rev 04") == "1633N-41599"
+    assert s("arista_eos", "Serial number: JPE17471234") == "JPE17471234"
+    assert s("alteon", "Serial Number: ALT5224XYZ01") == "ALT5224XYZ01"
+    assert s("cisco_ios", "no serial here") is None
+
+
+def test_parse_alteon_version_from_boot():
+    p = collector._parse_os_version
+    assert p("alteon", "Currently booted software version: 32.4.15.0") == "Alteon 32.4.15.0"
+    assert p("alteon", "Software Version 29.0.3.0 (FLASH image2)") == "Alteon 29.0.3.0"
+    assert p("alteon", "version: 32.6.2.0, image2") == "Alteon 32.6.2.0"
+
+
+def test_serial_roundtrip_and_ui(temp_db):
+    sid = db.save_switch(temp_db, "SW-SN", "10.0.0.7", "cisco_ios")
+    db.update_switch(temp_db, sid, serial="FDO2233A0BC")
+    assert db.get_switch(temp_db, sid)["serial"] == "FDO2233A0BC"
+    html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert "<th>시리얼</th>" in html
+    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "sw.serial" in js
 
 
 def test_parse_nxos_model_from_inventory():

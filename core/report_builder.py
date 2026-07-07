@@ -144,7 +144,7 @@ def _build_summary_sheet(wb, db_path, switches, fac_hosts):
 
 def _build_switch_sheet(wb, db_path, switches):
     ws = wb.create_sheet("스위치 현황")
-    ws.append(["구분", "IP", "호스트네임", "벤더", "모델", "버전", "위치", "상태", "경보",
+    ws.append(["구분", "IP", "호스트네임", "벤더", "모델", "버전", "시리얼", "위치", "상태", "경보",
                "포트(사용/전체)", "사용률", "MAC 수", "마지막 수집"])
     _style_header_row(ws)
 
@@ -164,6 +164,7 @@ def _build_switch_sheet(wb, db_path, switches):
             sw.get("vendor") or "",
             sw.get("model") or "",
             sw.get("os_version") or "",
+            sw.get("serial") or "",
             _switch_location(sw),
             _STATUS_KO.get(status, status),
             _ALERT_KO.get(sw.get("alert") or "none", sw.get("alert") or ""),
@@ -172,14 +173,14 @@ def _build_switch_sheet(wb, db_path, switches):
             mac_count or "",
             (sw.get("last_collected") or "").replace("T", " ")[:16],
         ])
-        # 상태 색상(모델/버전 추가로 8번째 컬럼)
-        cell = ws.cell(row=ws.max_row, column=8)
+        # 상태 색상(시리얼 추가로 9번째 컬럼)
+        cell = ws.cell(row=ws.max_row, column=9)
         if status == "done":
             cell.fill = _FILL_OK
         elif status == "failed":
             cell.fill = _FILL_BAD
         if (sw.get("alert") or "none") != "none":
-            ws.cell(row=ws.max_row, column=9).fill = _FILL_WARN
+            ws.cell(row=ws.max_row, column=10).fill = _FILL_WARN
 
     ws.freeze_panes = "A2"
     _auto_col_width(ws)

@@ -1,5 +1,18 @@
 # NetDash 릴리스 노트
 
+## v3.40.0 (2026-07-07) — 시리얼 번호 수집·표기 + Alteon 버전 소스 보강
+
+- **시리얼 번호 자동 수집.** 수집 시 벤더별 소스에서 추출해 저장:
+  - Cisco IOS/IOS-XE: show version `Processor board ID`/`System Serial Number`
+  - Cisco NX-OS: show inventory `SN:` · ExtremeXOS: show version 시리얼 필드
+  - Arista `Serial number:` · Alteon Serial 표기 + 범용 패턴
+- **스위치 현황에 '시리얼' 컬럼 추가**(버전 옆). 통합 검색에도 시리얼 포함 —
+  시리얼로 장비 검색 가능. 엑셀 보고서 스위치 시트에도 시리얼 컬럼.
+- **Alteon 버전 미수집 장비 수정.** 일부 장비는 버전이 `/info/sys/general`에
+  없음 → **`/boot/cur`을 수집·진단에 추가**하고 booted software version 패턴
+  파싱. 진단은 두 명령을 연속 실행해 원문 표시.
+- 진단(자동 교정)도 시리얼까지 저장: "→ 모델/버전 저장: 5224 / Alteon 32.4.15.0 / SN:..."
+
 ## v3.39.5 (2026-07-07) — 진단이 모델·버전까지 저장(장비 간 표기 불일치 해소)
 
 - **같은 Alteon인데 어떤 장비는 '5224 / Alteon 32.4.15.0', 어떤 장비는 벤더

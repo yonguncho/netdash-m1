@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 COMMANDS = {
     "version": "/info/sys/general",
+    "boot": "/boot/cur",   # 일부 장비는 버전이 /info/sys/general에 없고 여기 있음
     "mac": "/info/l2/fdb/dump",
     "arp": "/info/l3/arp/dump",
     "status": "/info/link",
