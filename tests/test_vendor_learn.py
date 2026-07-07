@@ -276,6 +276,28 @@ def test_diagnose_autocorrects_vendor(client, monkeypatch):
     assert _db.get_switch(dbp, sid)["vendor"] == "alteon"
 
 
+def test_diagnose_fills_model_version(client, monkeypatch):
+    """진단 응답 원문에서 모델/버전까지 파싱해 저장(수집 전 공백 해소)."""
+    from core import collector as _col, db as _db
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    sid = client.post("/api/switches/manual",
+                      json={"ip": "10.88.0.6", "name": "L4-MV", "vendor": "unknown"}).get_json()["switch_id"]
+    monkeypatch.setattr(_col, "diagnose_switch",
+                        lambda sw, u, p, source_ip=None: {
+                            "tcp": True, "ssh_login": True,
+                            "prompt": ">> L4 - Standard ADC - Main#",
+                            "banner_head": "Alteon Application Switch 5224",
+                            "version_head": "Software Version 32.4.15.0",
+                            "guess": "alteon", "error": ""})
+    r = client.post("/api/switches/%d/diagnose" % sid,
+                    json={"username": "u", "password": "p"})
+    assert "5224" in r.get_json()["diag"]["model_version_filled"]
+    sw = _db.get_switch(dbp, sid)
+    assert sw["model"] == "5224"
+    assert sw["os_version"] == "Alteon 32.4.15.0"
+
+
 def test_worker_alteon_prompt_fallback(temp_db, monkeypatch):
     """netmiko 접속 시 Alteon 프롬프트 감지 → 프로브 → 전용 수집 폴백.
 

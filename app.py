@@ -1060,6 +1060,21 @@ def create_app(demo_mode=None):
                               switch_id=switch_id, vendor=guess)
                 except Exception:
                     pass
+            # 진단 응답 원문에서 모델/버전까지 파싱해 저장 — 진단만 눌러도
+            # 표에 모델·버전이 채워지도록(수집 전 임시 공백 해소)
+            if guess:
+                try:
+                    diag_text = (res.get("version_head") or "") + "\n" + \
+                                (res.get("banner_head") or "")
+                    osv = collector._parse_os_version(guess, diag_text)
+                    model = collector._parse_model(guess, diag_text)
+                    if osv or model:
+                        db.update_switch(db_path, switch_id,
+                                         os_version=osv, model=model)
+                        res["model_version_filled"] = "%s / %s" % (
+                            model or "-", osv or "-")
+                except Exception:
+                    pass
             log_event("info", "switch_diagnosed", switch_id=switch_id,
                       guess=guess or "unknown", error=res.get("error") or "")
             return jsonify({"ok": True, "diag": res})
