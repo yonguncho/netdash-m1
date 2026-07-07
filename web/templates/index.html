@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NetDash{% if demo_mode %} [DEMO]{% endif %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/vendor/xterm.css">
 </head>
 <body>
   <!-- 헤더 -->
@@ -538,7 +539,10 @@
         <span id="detail-title" class="detail-panel__title">스위치 상세</span>
         <span id="detail-subtitle" class="detail-panel__subtitle"></span>
       </div>
-      <button id="detail-close" class="btn btn--ghost">&times; 닫기</button>
+      <div style="display:flex;gap:8px">
+        <button id="detail-terminal" class="btn btn--primary" style="font-size:12px" title="이 장비에 SSH 터미널로 직접 접속">💻 SSH 터미널</button>
+        <button id="detail-close" class="btn btn--ghost">&times; 닫기</button>
+      </div>
     </div>
     <div id="detail-summary" class="detail-summary"></div>
     <div class="detail-panel__tabs">
@@ -559,6 +563,25 @@
     </div>
   </div>
 
+  <!-- 웹 SSH 터미널 모달 -->
+  <div id="modal-terminal" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box" style="max-width:960px;width:92%">
+      <div class="modal__header">
+        <span id="term-title">SSH 터미널</span>
+        <button class="modal__close" data-close="modal-terminal" id="term-close-btn">&times;</button>
+      </div>
+      <div class="modal__body">
+        <div id="term-status" style="font-size:12px;color:#64748b;margin-bottom:6px"></div>
+        <div id="terminal" style="height:460px;background:#000;border-radius:6px;padding:6px"></div>
+        <p style="font-size:11px;color:#64748b;margin-top:6px">
+          저장된 계정으로 접속합니다. 실제 장비에 직접 명령이 전달되니 주의하세요. 세션은 감사 로그에 기록됩니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/xterm.js"></script>
+  <script src="/static/vendor/xterm-addon-fit.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

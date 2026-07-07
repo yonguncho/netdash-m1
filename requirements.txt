@@ -6,6 +6,9 @@ netmiko==4.3.0
 # (core/ssh_compat.py가 이 알고리즘을 폴백 선호목록에 재추가)
 paramiko==3.5.1
 pyyaml==6.0.1
+# 웹 SSH 터미널(WebSocket) — Werkzeug 위에서 동작하는 경량 WS 확장
+flask-sock==0.7.0
+simple-websocket==1.0.0
 openpyxl==3.1.2
 requests==2.31.0
 pywin32==312 ; sys_platform == "win32"

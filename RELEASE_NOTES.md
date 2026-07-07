@@ -1,5 +1,16 @@
 # NetDash 릴리스 노트
 
+## v3.49.0 (2026-07-07) — 웹 SSH 터미널(PuTTY형) 추가
+
+- **브라우저에서 장비에 직접 SSH 접속.** 스위치 현황의 💻 버튼 또는 상세 패널의
+  "SSH 터미널" 버튼으로 xterm.js 기반 실시간 터미널을 열어 `show run`·`ping`·
+  `show log` 등 수집 정보 외 명령을 직접 확인.
+  - 저장된 계정(세션/DPAPI) 자동 사용, 실시간 입출력(WebSocket), 창 크기 반영.
+  - 보안: 등록 IP만(SSRF 재검증), 원격 접속은 토큰 필요(로컬은 면제),
+    세션 open/close 감사 로그, 유휴 10분·최대 1시간 자동 종료.
+  - ※ 실제 장비에 명령이 직접 전달되니 주의. (빌드 PC에 flask-sock·
+    simple-websocket 필요 — requirements.txt 반영)
+
 ## v3.48.0 (2026-07-07) — NX-OS VLAN·속도·CRC/오류 수집 수정
 
 - **Cisco NX-OS 포트의 VLAN·속도·CRC·IN/OUT 오류 수집 안 되던 문제 수정.**

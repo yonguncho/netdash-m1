@@ -220,6 +220,9 @@ def create_app(demo_mode=None):
         bind_host = config.app.get("host", "127.0.0.1")
         if bind_host in ("127.0.0.1", "localhost", "::1") and request.remote_addr in ("127.0.0.1", "::1"):
             return
+        # 웹 SSH 터미널(WebSocket)은 핸들러 내부에서 자체 토큰 검증(쿼리 파라미터)
+        if request.path.startswith("/ws/"):
+            return
         # Enforce API authentication in production mode (all /api/* routes)
         if request.path.startswith("/api/"):
             token = request.headers.get("X-API-Token")
@@ -1892,6 +1895,49 @@ def create_app(demo_mode=None):
         log_event("error", "internal_error", error_type=type(e).__name__, error=sanitized_error)
         return jsonify({"error": "Internal server error"}), 500
 
+    # ── 웹 SSH 터미널(WebSocket) — 장비 클릭 → 브라우저에서 PuTTY처럼 CLI ──
+    try:
+        from flask_sock import Sock
+        from core import webshell
+        sock = Sock(app)
+
+        def _ws_authorized(token):
+            """WS 인증: 로컬 루프백은 면제, 원격은 토큰 검증(before_request와 동일 정책)."""
+            if config.app.get("demo_mode"):
+                return True
+            bind_host = config.app.get("host", "127.0.0.1")
+            if bind_host in ("127.0.0.1", "localhost", "::1") and request.remote_addr in ("127.0.0.1", "::1"):
+                return True
+            expected = config.api_token
+            return bool(expected and token and hmac.compare_digest(token, expected))
+
+        @sock.route("/ws/shell/<int:switch_id>")
+        def ws_shell(ws, switch_id):
+            token = request.args.get("token", "")
+            if not _ws_authorized(token):
+                try:
+                    ws.send("\r\n[NetDash] 인증 실패(토큰).\r\n")
+                except Exception:
+                    pass
+                return
+            # 계정: 쿼리로 전달되면 사용, 아니면 저장된 자격증명(webshell 내부 처리)
+            username = request.args.get("u", "")
+            password = request.args.get("p", "")
+            src = db.get_setting(db_path, "source_ip") or None
+            ranges = config.collector.get("allowed_ip_ranges")
+
+            def _vip(ip):
+                return validate_ipv4(ip, allowed_ip_ranges=ranges)
+            try:
+                webshell.run_shell(ws, db_path, switch_id, username, password, src,
+                                   validate_ip=_vip, client_ip=_client_ip())
+            except Exception as e:
+                log_event("error", "webshell_error", error=collector._sanitize_error_msg(str(e)))
+        log_event("info", "webshell_enabled")
+    except Exception as e:
+        # flask-sock 미설치 등 → 터미널 비활성(나머지 기능은 정상)
+        log_event("warning", "webshell_unavailable", error=str(e))
+
     return app
 
 
@@ -1970,7 +2016,8 @@ if __name__ == "__main__":
         )
         browser_thread.start()
 
-        app.run(host=host, port=port, debug=debug)
+        # threaded=True: 웹 SSH 터미널(WebSocket)이 요청당 스레드를 점유하므로 필수
+        app.run(host=host, port=port, debug=debug, threaded=True)
     except Exception:
         # console=False(windowed) exe에서는 콘솔에 트레이스백이 보이지 않으므로
         # 작업 디렉터리에 에러 로그를 남겨 진단을 가능하게 한다.

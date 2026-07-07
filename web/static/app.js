@@ -22,6 +22,7 @@ document.addEventListener("click", function (e) {
     case "detail-switch": e.stopPropagation(); openDetailPanel(obj); break;
     case "edit-switch": editSwitch(obj); break;
     case "diagnose-switch": diagnoseSwitch(nid); break;
+    case "terminal-switch": openTerminal(nid); break;
     case "delete-switch": deleteSwitch(nid); break;
     case "collect-fw":
       // 저장된 자격증명이 있으면 모달 없이 바로 수집(매번 토큰 재입력 방지)
@@ -222,6 +223,87 @@ function closeModal(id) { document.getElementById(id).classList.add("hidden"); }
 // ─── 상세 패널 ───────────────────────────────────────────────────
 document.getElementById("detail-close").addEventListener("click", closeDetailPanel);
 document.getElementById("detail-overlay").addEventListener("click", closeDetailPanel);
+
+// ─── 웹 SSH 터미널 (xterm.js + WebSocket) ────────────────────────
+var _term = null, _termFit = null, _termWs = null;
+(function () {
+  var btn = document.getElementById("detail-terminal");
+  if (btn) btn.addEventListener("click", function () {
+    if (_currentSwitchId != null) openTerminal(_currentSwitchId);
+  });
+  var closeBtn = document.getElementById("term-close-btn");
+  if (closeBtn) closeBtn.addEventListener("click", closeTerminal);
+})();
+
+function openTerminal(switchId) {
+  var sw = (_switches || []).find(function (s) { return s.id === switchId; });
+  var title = document.getElementById("term-title");
+  if (title) title.textContent = "💻 SSH 터미널 — " + (sw ? (sw.name + " (" + sw.ip + ")") : ("#" + switchId));
+  var statusEl = document.getElementById("term-status");
+  openModal("modal-terminal");
+
+  if (typeof Terminal === "undefined") {
+    if (statusEl) statusEl.textContent = "터미널 라이브러리를 불러오지 못했습니다.";
+    return;
+  }
+  // 이전 세션 정리
+  closeTerminal(true);
+
+  _term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: "#000000" },
+                         fontFamily: "Consolas, 'Courier New', monospace" });
+  try { _termFit = new FitAddon.FitAddon(); _term.loadAddon(_termFit); } catch (e) { _termFit = null; }
+  _term.open(document.getElementById("terminal"));
+  try { if (_termFit) _termFit.fit(); } catch (e) {}
+
+  // 토큰(원격 접속 시 필요) — 로컬은 서버가 면제
+  var token = (window._API_TOKEN || "");
+  var proto = location.protocol === "https:" ? "wss" : "ws";
+  var url = proto + "://" + location.host + "/ws/shell/" + switchId +
+    (token ? "?token=" + encodeURIComponent(token) : "");
+  if (statusEl) statusEl.textContent = "연결 중...";
+  try {
+    _termWs = new WebSocket(url);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "WebSocket 연결 실패: " + e;
+    return;
+  }
+  _termWs.onopen = function () {
+    if (statusEl) statusEl.textContent = "연결됨 · 세션은 감사 로그에 기록됩니다.";
+    _sendResize();
+  };
+  _termWs.onmessage = function (ev) { _term.write(ev.data); };
+  _termWs.onclose = function () {
+    if (statusEl) statusEl.textContent = "연결 종료됨.";
+    if (_term) _term.write("\r\n\x1b[33m[연결이 종료되었습니다]\x1b[0m\r\n");
+  };
+  _termWs.onerror = function () {
+    if (statusEl) statusEl.textContent = "연결 오류.";
+  };
+  // 입력 → 서버
+  _term.onData(function (d) {
+    if (_termWs && _termWs.readyState === 1) _termWs.send(d);
+  });
+  // 리사이즈 반영
+  window.addEventListener("resize", _termResizeHandler);
+}
+
+function _sendResize() {
+  try {
+    if (_termFit) _termFit.fit();
+    if (_term && _termWs && _termWs.readyState === 1) {
+      _termWs.send("\x00resize:" + _term.cols + "," + _term.rows);
+    }
+  } catch (e) {}
+}
+function _termResizeHandler() { _sendResize(); }
+
+function closeTerminal(silent) {
+  window.removeEventListener("resize", _termResizeHandler);
+  if (_termWs) { try { _termWs.close(); } catch (e) {} _termWs = null; }
+  if (_term) { try { _term.dispose(); } catch (e) {} _term = null; }
+  _termFit = null;
+  if (!silent) closeModal("modal-terminal");
+}
 
 function openDetailPanel(sw) {
   _currentSwitchId = sw.id;
@@ -860,6 +942,8 @@ function renderSwitchTable(switches) {
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
       "title='실제 배너/프롬프트/show version 응답을 확인(벤더 미인식 원인 파악)' " +
       "data-action='diagnose-switch' data-id='" + sw.id + "'>진단</button> " +
+      "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+      "title='SSH 터미널로 직접 접속' data-action='terminal-switch' data-id='" + sw.id + "'>💻</button> " +
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
       "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button></td></tr>";
   }).join("");

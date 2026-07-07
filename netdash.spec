@@ -5,6 +5,8 @@ hiddenimports = []
 hiddenimports += collect_submodules('flask')
 hiddenimports += collect_submodules('werkzeug')
 hiddenimports += ['requests']
+# 웹 SSH 터미널(WebSocket)
+hiddenimports += ['flask_sock', 'simple_websocket', 'wsproto']
 # DPAPI 자격증명 암호화(win32crypt). 미번들 시 암호화가 None→자격증명 저장 실패.
 hiddenimports += ['win32crypt', 'win32api', 'pywintypes']
 
