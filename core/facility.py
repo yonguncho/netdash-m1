@@ -388,6 +388,7 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     mac_map = db.get_mac_to_switchport(db_path)       # {mac: [(sid, sname, port)]}
     port_counts = db.get_port_mac_counts(db_path)     # {(sid, port_lower): MAC수}
     pc_map = db.get_port_channel_members(db_path)     # {(sid, po_lower): [members]}
+    port_descs = db.get_port_descriptions(db_path)    # {(sid, port_lower): Description}
 
     # IP별 1행: 같은 MAC이 여러 스위치/포트에 보일 때 "직접 연결된 스위치"를 가려낸다.
     #  - Po(포트채널)·Vl(VLAN/SVI) 등 논리 인터페이스는 업링크 경유 → 직접 연결 아님
@@ -400,7 +401,8 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
         by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
                           "switch_id": sid, "switch_name": sname, "port": port,
                           "online": 1, "direct": 1 if direct else 0,
-                          "via": "; ".join(via) if via else None}
+                          "via": "; ".join(via) if via else None,
+                          "port_desc": port_descs.get((sid, (port or "").lower()))}
 
     saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip)
     utils.log_event("info", "facility_collected", subnet=subnet, pinged=len(ips),
@@ -420,7 +422,7 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
             "partial": bool(partial_error)}
 
 
-_KEEP_COLS = ("subnet", "ip", "mac", "switch_id", "switch_name", "port", "direct", "via")
+_KEEP_COLS = ("subnet", "ip", "mac", "switch_id", "switch_name", "port", "direct", "via", "port_desc")
 
 
 def _apply_scan(db_path, subnet, by_ip):
@@ -475,7 +477,7 @@ def _apply_scan(db_path, subnet, by_ip):
     return len(merged), new_cnt, off_cnt
 
 
-_EXPORT_COLS = ["대역", "IP", "MAC", "연결 스위치", "포트", "직접연결", "그 외 관측", "상태"]
+_EXPORT_COLS = ["대역", "IP", "MAC", "연결 스위치", "포트", "포트 설명", "직접연결", "그 외 관측", "상태"]
 
 
 def _export_rows(db_path):
@@ -497,6 +499,7 @@ def _export_rows(db_path):
             "MAC": h.get("mac") or "",
             "연결 스위치": (h.get("switch_name") or "") if direct else "직접 연결 미확인",
             "포트": (h.get("port") or "") if direct else "",
+            "포트 설명": (h.get("port_desc") or "") if direct else "",
             "직접연결": label,
             "그 외 관측": h.get("via") or "",
             "상태": "온라인" if online else "연결 실패",
@@ -541,6 +544,7 @@ def rematch(db_path):
     mac_map = db.get_mac_to_switchport(db_path)
     port_counts = db.get_port_mac_counts(db_path)
     pc_map = db.get_port_channel_members(db_path)
+    port_descs = db.get_port_descriptions(db_path)
     updated = []
     for h in hosts:
         mac = (h.get("mac") or "").lower()
@@ -550,7 +554,8 @@ def rematch(db_path):
             "subnet": h.get("subnet"), "ip": h.get("ip"), "mac": h.get("mac"),
             "switch_id": sid, "switch_name": sname, "port": port,
             "online": h.get("online", 1), "direct": 1 if direct else 0,
-            "via": "; ".join(via) if via else None})
+            "via": "; ".join(via) if via else None,
+            "port_desc": port_descs.get((sid, (port or "").lower()))})
     db.save_facility_hosts(db_path, updated)  # subnet+ip UNIQUE → 제자리 갱신
     utils.log_event("info", "facility_rematched", count=len(updated))
     return len(updated)

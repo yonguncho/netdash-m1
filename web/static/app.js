@@ -1128,8 +1128,8 @@ function _ipToInt(ip) {
 function _facMatchesSearch(h, q) {
   if (!q) return true;
   var ql = q.toLowerCase();
-  var hay = [(h.ip || ""), (h.subnet || ""), (h.switch_name || ""), (h.port || ""), (h.via || "")]
-    .join(" ").toLowerCase();
+  var hay = [(h.ip || ""), (h.subnet || ""), (h.switch_name || ""), (h.port || ""),
+             (h.port_desc || ""), (h.via || "")].join(" ").toLowerCase();
   if (hay.indexOf(ql) >= 0) return true;
   var qhex = ql.replace(/[^0-9a-f]/g, "");
   if (qhex.length >= 4) {
@@ -1179,32 +1179,38 @@ function _renderFacilityRows() {
     if (!all.length) emptyMsg = "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.";
     else if (subnet || q) emptyMsg = "필터/검색 조건에 맞는 설비가 없습니다.";
     else emptyMsg = "직접 연결로 확인된 설비가 없습니다. ('직접 연결만' 해제 시 전체 표시)";
-    tbody.innerHTML = "<tr><td colspan=5 style='color:#64748b'>" + emptyMsg + "</td></tr>";
+    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>" + emptyMsg + "</td></tr>";
     return;
   }
   tbody.innerHTML = rows.map(function (h) {
-    var swCell, portCell;
+    var swCell, portCell, descCell;
     if (_facIsDirect(h) && !h.online) {
       // 오프라인이지만 마지막 관측 위치는 유지 — '직접'처럼 보이지 않게 회색 표기
       swCell = "<span style='color:#94a3b8'>" + escHtml(h.switch_name) +
         "</span> <span class='status-badge status-badge--new' title='연결이 끊기기 전 마지막으로 관측된 위치'>마지막 관측</span>";
       portCell = "<code style='color:#94a3b8'>" + escHtml(h.port || "-") + "</code>";
+      descCell = "<span style='color:#94a3b8'>" + escHtml(h.port_desc || "-") + "</span>";
     } else if (_facIsDirect(h)) {
       swCell = "<span style='font-weight:600'>" + escHtml(h.switch_name) +
         "</span> <span class='status-badge status-badge--ok'>직접</span>";
       portCell = "<code>" + escHtml(h.port || "-") + "</code>";
+      // 연결 스위치가 수집한 포트 Description — 설비 정체 파악용
+      descCell = h.port_desc
+        ? "<span title='연결 스위치에서 수집한 포트 설명'>" + escHtml(h.port_desc) + "</span>"
+        : "<span style='color:#cbd5e1'>-</span>";
     } else {
       // Po/Vl 등 업링크 경유 상세는 툴팁으로만(표는 깔끔하게)
       var tip = h.via ? " title='업링크 경유 관측: " + escHtml(h.via) + "'" : "";
       swCell = "<span style='color:#b45309;cursor:help'" + tip + ">직접 연결 미확인 ⓘ</span>";
       portCell = "<span style='color:#94a3b8'>—</span>";
+      descCell = "<span style='color:#94a3b8'>—</span>";
     }
     // 상태 컬럼 제거 — 오프라인(연결 실패)은 행 배경(빨강)으로만 신호
     var trStyle = h.online ? "" : " style='background:#fef2f2'" +
       " title='마지막 수집에서 응답 없음(오프라인)'";
     return "<tr" + trStyle + "><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
       "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
-      portCell + "</td></tr>";
+      portCell + "</td><td>" + descCell + "</td></tr>";
   }).join("");
 }
 
@@ -1450,7 +1456,12 @@ function showFirewallDetail(fid) {
       var ifHtml = ifaces.length
         ? "<table class='data-table'><thead><tr><th>인터페이스</th><th>IP</th><th>마스크</th><th>VDOM/Zone</th></tr></thead><tbody>" +
           ifaces.map(function(i) {
-            return "<tr><td>" + escHtml(i.name) + "</td><td>" + escHtml(i.ip || "-") + "</td><td>" +
+            // secondary IP 행은 파란 뱃지로 구분(2nd)
+            var isSec = i.type === "secondary" || /\(2nd\)/.test(i.name || "");
+            var nameCell = escHtml(i.name) + (isSec
+              ? " <span class='status-badge status-badge--new' style='font-size:10px'>2nd</span>" : "");
+            return "<tr" + (isSec ? " style='background:#f0f9ff'" : "") + "><td>" + nameCell +
+              "</td><td><code>" + escHtml(i.ip || "-") + "</code></td><td>" +
               escHtml(i.mask || "-") + "</td><td>" + escHtml(i.vdom_zone || "-") + "</td></tr>";
           }).join("") + "</tbody></table>"
         : "<p style='color:#64748b'>인터페이스 정보 없음</p>";

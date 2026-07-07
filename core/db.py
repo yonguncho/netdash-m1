@@ -425,10 +425,11 @@ def init_schema(db_path):
                 cursor.execute("ALTER TABLE firewalls ADD COLUMN location TEXT")
             except Exception:
                 pass
-            # 설비 현황: 직접연결 여부(direct) + 업링크 경유 관측(via) 컬럼 마이그레이션
+            # 설비 현황: 직접연결(direct) + 업링크 경유(via) + 연결 포트 설명(port_desc)
             for col, definition in [
                 ("direct", "INTEGER DEFAULT 1"),
                 ("via", "TEXT"),
+                ("port_desc", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE facility_hosts ADD COLUMN {col} {definition}")
@@ -675,6 +676,28 @@ def get_port_mac_counts(db_path):
         except Exception:
             pass
     return counts
+
+
+def get_port_descriptions(db_path):
+    """최신 스냅샷 기준 (switch_id, 소문자 포트) → 포트 Description.
+
+    설비 현황에서 '연결 스위치 포트가 실제로 무엇인지'를 스위치가 수집한
+    포트 설명으로 보여주기 위함(예: 'AP-3F-회의실', 'CCTV-정문').
+    Returns: {(switch_id, port_lower): description}
+    """
+    descs = {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """SELECT switch_id, name, description FROM ports
+                   WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id)
+                     AND description IS NOT NULL AND description != ''""")
+            for r in cur.fetchall():
+                descs[(r["switch_id"], (r["name"] or "").lower())] = r["description"]
+        except Exception:
+            pass
+    return descs
 
 
 def save_port_channels(db_path, snapshot_id, switch_id, port_channels):
@@ -958,19 +981,35 @@ def get_port_channel_members(db_path):
 
 def save_facility_hosts(db_path, hosts):
     """설비 현황 저장(subnet+ip 기준 upsert).
-    hosts=[{subnet,ip,mac,switch_id,switch_name,port,online,direct,via}]."""
+    hosts=[{subnet,ip,mac,switch_id,switch_name,port,online,direct,via,port_desc}]."""
     with _db_lock:
         with get_db(db_path) as conn:
             cur = conn.cursor()
+            # port_desc 컬럼 유무에 따라 SQL 분기(구버전 DB 호환)
+            has_desc = False
+            try:
+                cols = {r[1] for r in cur.execute("PRAGMA table_info(facility_hosts)").fetchall()}
+                has_desc = "port_desc" in cols
+            except Exception:
+                pass
             for h in hosts:
                 try:
-                    cur.execute(
-                        """INSERT OR REPLACE INTO facility_hosts
-                           (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, updated)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                        (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
-                         h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
-                         1 if h.get("direct", 1) else 0, h.get("via")))
+                    if has_desc:
+                        cur.execute(
+                            """INSERT OR REPLACE INTO facility_hosts
+                               (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, port_desc, updated)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                            (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
+                             h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
+                             1 if h.get("direct", 1) else 0, h.get("via"), h.get("port_desc")))
+                    else:
+                        cur.execute(
+                            """INSERT OR REPLACE INTO facility_hosts
+                               (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, updated)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                            (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
+                             h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
+                             1 if h.get("direct", 1) else 0, h.get("via")))
                 except Exception as e:
                     log_event("warning", "save_facility_skipped", error=str(e))
 

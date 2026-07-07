@@ -143,33 +143,74 @@ def _parse_monitor_interfaces(results):
     return ifaces
 
 
+def _cmdb_secondaries(results):
+    """cmdb 인터페이스 결과에서 secondary IP 행 추출.
+
+    FortiGate는 인터페이스당 secondaryip 목록을 가질 수 있다 —
+    [{"name":"port1 (2nd)","ip":...,"mask":...,"type":"secondary"}] 형태로 반환.
+    """
+    rows = []
+    for e in (results or []):
+        if not isinstance(e, dict):
+            continue
+        for sec in (e.get("secondaryip") or []):
+            if not isinstance(sec, dict):
+                continue
+            ip, mask = _split_ip_mask(sec.get("ip", ""))
+            if ip and ip != "0.0.0.0":
+                rows.append({
+                    "name": "%s (2nd)" % e.get("name", ""),
+                    "ip": ip, "mask": mask,
+                    "vdom_zone": e.get("vdom", "root"),
+                    "type": "secondary",
+                })
+    return rows
+
+
 def _fetch_interfaces(s, base, host):
-    """열린 세션으로 인터페이스 조회(monitor 우선 + cmdb 폴백 + 429 재시도)."""
+    """열린 세션으로 인터페이스 조회(monitor 우선 + cmdb 폴백 + 429 재시도).
+
+    secondary IP까지 포함: monitor에는 secondary가 없으므로 cmdb에서
+    secondaryip 목록을 병합해 '(2nd)' 행으로 추가한다.
+    """
+    ifaces = None
     # 1) monitor: 실제 유효 IP
     try:
         r = _get_with_retry(s, f"{base}/api/v2/monitor/system/interface")
         if r.status_code == 200:
-            ifaces = _parse_monitor_interfaces(r.json().get("results"))
-            if ifaces:
-                logger.info("fortigate_interfaces(monitor) host=%s count=%d", host, len(ifaces))
-                return ifaces
+            parsed = _parse_monitor_interfaces(r.json().get("results"))
+            if parsed:
+                logger.info("fortigate_interfaces(monitor) host=%s count=%d", host, len(parsed))
+                ifaces = parsed
     except Exception as e:
         logger.warning("fortigate monitor interface failed host=%s err=%s", host, e)
 
-    # 2) cmdb: 설정값 폴백
-    r = _get_with_retry(s, f"{base}/api/v2/cmdb/system/interface")
-    r.raise_for_status()
-    ifaces = []
-    for e in r.json().get("results", []):
-        ip, mask = _split_ip_mask(e.get("ip", "0.0.0.0 0.0.0.0"))
-        if ip and ip != "0.0.0.0":
-            ifaces.append({
-                "name": e.get("name", ""),
-                "ip": ip, "mask": mask,
-                "vdom_zone": e.get("vdom", "root"),
-                "type": e.get("type", ""),
-            })
-    logger.info("fortigate_interfaces(cmdb) host=%s count=%d", host, len(ifaces))
+    # 2) cmdb: (monitor 실패 시) 기본 IP + (항상) secondary IP 병합
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/cmdb/system/interface")
+        if ifaces is None:
+            r.raise_for_status()
+        results = r.json().get("results", []) if r.status_code == 200 else []
+        if ifaces is None:
+            ifaces = []
+            for e in results:
+                ip, mask = _split_ip_mask(e.get("ip", "0.0.0.0 0.0.0.0"))
+                if ip and ip != "0.0.0.0":
+                    ifaces.append({
+                        "name": e.get("name", ""),
+                        "ip": ip, "mask": mask,
+                        "vdom_zone": e.get("vdom", "root"),
+                        "type": e.get("type", ""),
+                    })
+            logger.info("fortigate_interfaces(cmdb) host=%s count=%d", host, len(ifaces))
+        secs = _cmdb_secondaries(results)
+        if secs:
+            ifaces.extend(secs)
+            logger.info("fortigate_secondary_ips host=%s count=%d", host, len(secs))
+    except Exception as e:
+        if ifaces is None:
+            raise
+        logger.warning("fortigate cmdb secondary fetch failed host=%s err=%s", host, e)
     return ifaces
 
 

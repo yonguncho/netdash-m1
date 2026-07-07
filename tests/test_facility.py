@@ -548,6 +548,6 @@ def test_facility_ui_present():
     assert 'id="btn-fac-delete-subnet"' in html
     assert "/api/facility/delete-subnet" in js
     # 상태 컬럼 제거(표 헤더에서 '상태' 없음, 오프라인은 행 배경으로만)
-    assert "<th>포트</th></tr>" in html.replace(" ", "").replace("\n", "") or \
-           "포트</th></tr>" in html
+    # 마지막 컬럼은 '포트 설명'(연결 스위치 포트 Description)
+    assert "<th>포트 설명</th></tr>" in html
     assert "온라인" not in js   # 상태 배지 텍스트 제거
