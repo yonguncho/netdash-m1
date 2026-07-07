@@ -51,8 +51,41 @@ Address         Age       MAC Address     Interface       Flags
 """
 
 
+SH_INT_STATUS = """
+--------------------------------------------------------------------------------
+Port          Name               Status    Vlan      Duplex  Speed   Type
+--------------------------------------------------------------------------------
+Eth1/1        SERVER-WEB-01      connected trunk     full    10G     10Gbase-SR
+Eth1/2                           notconnec 200       auto    auto    --
+Eth1/3        routed-uplink      connected routed    full    40G     QSFP-40G
+"""
+
+SH_INT_COUNTERS_ERR = """
+--------------------------------------------------------------------------------
+Port          Align-Err    FCS-Err   Xmit-Err    Rcv-Err  UnderSize OutDiscards
+--------------------------------------------------------------------------------
+Eth1/1                0         12          3          7          0          0
+Eth1/2                0          0          0          0          0          0
+"""
+
+
 def _outputs():
-    return {"status": SH_INT_BRIEF, "description": SH_INT_DESC, "mac": SH_MAC, "arp": SH_IP_ARP}
+    return {"status": SH_INT_STATUS, "brief": SH_INT_BRIEF, "description": SH_INT_DESC,
+            "mac": SH_MAC, "arp": SH_IP_ARP, "errors": SH_INT_COUNTERS_ERR}
+
+
+def test_nxos_parse_vlan_speed_errors():
+    """show interface status의 VLAN·속도 + counters errors의 CRC/IN/OUT 수집."""
+    r = cisco_nxos.parse(_outputs(), 1)
+    by = {p["name"]: p for p in r["ports"]}
+    e11 = next(p for p in r["ports"] if "1/1" in p["name"])
+    assert e11["speed"] == "10G"
+    assert e11["crc_errors"] == 12      # FCS-Err
+    assert e11["out_errors"] == 3       # Xmit-Err
+    assert e11["in_errors"] == 7        # Rcv-Err
+    e2 = next(p for p in r["ports"] if "1/2" in p["name"])
+    assert e2["vlan"] == 200            # 액세스 VLAN 숫자
+    assert e2["speed"] in ("auto", "unknown")
 
 
 def test_get_parser_nxos():

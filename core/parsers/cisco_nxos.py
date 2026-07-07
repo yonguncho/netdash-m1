@@ -15,12 +15,14 @@ from . import utils
 logger = logging.getLogger(__name__)
 
 COMMANDS = {
-    "status": "show interface brief",
+    "status": "show interface status",       # vlan/speed 표(brief보다 정확)
+    "brief": "show interface brief",          # up/down 폴백
     "description": "show interface description",
     "mac": "show mac address-table dynamic",
     "arp": "show ip arp",
     "port_channel": "show port-channel summary",
     "inventory": "show inventory",   # 모델명(PID) — show version에 없는 표기 변형 대응
+    "errors": "show interface counters errors",   # CRC/IN/OUT 오류(표 형식)
 }
 
 _IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
@@ -29,7 +31,11 @@ _IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
 def parse(outputs, switch_id):
     utils.log_event("info", "parse_cisco_nxos", switch_id=switch_id)
     descriptions = _parse_descriptions(outputs.get("description", ""))
-    ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id)
+    errors = _parse_counters_errors(outputs.get("errors", ""))
+    # status(show interface status)에서 vlan/speed, 없으면 brief에서 up/down 폴백
+    ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id, errors)
+    if not ports and outputs.get("brief"):
+        ports = _parse_brief(outputs.get("brief", ""), descriptions, switch_id, errors)
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
     from . import cisco_ios  # show vlan brief 파싱은 IOS와 동일 형식
@@ -89,8 +95,58 @@ def _parse_descriptions(desc_output):
     return descriptions
 
 
-def _parse_ports(status_output, descriptions, switch_id):
-    """show interface brief → 포트 상태."""
+def _map_status(word):
+    """show interface status 키워드 → 표준 상태(connected=up 등)."""
+    w = (word or "").lower()
+    if w.startswith("connect") or w == "up":
+        return "up"
+    if w.startswith("notconnec") or w in ("down", "sfpabsent", "xcvrabsen", "nooprmem", "noopermem"):
+        return "down"
+    if "disabled" in w:
+        return "error-disabled"
+    if "err" in w or "flap" in w:
+        return "err-disabled"
+    return "unknown"
+
+
+def _parse_counters_errors(err_output):
+    """show interface counters errors → {port: {in_errors, crc, out_errors}}.
+
+    NX-OS 표 형식:
+      Port          Align-Err    FCS-Err   Xmit-Err    Rcv-Err  UnderSize OutDiscards
+      Eth1/1                0          0          0          0          0          0
+    매핑: FCS-Err=CRC, Rcv-Err=input(수신) 오류, Xmit-Err=output(송신) 오류.
+    """
+    result = {}
+    if not err_output or len(err_output) > 5_000_000:
+        return result
+    for i, line in enumerate(err_output.split("\n")):
+        if i > 20000 or len(line) > 500:
+            continue
+        # 포트 + 정수 6개(Align FCS Xmit Rcv UnderSize OutDiscards)
+        m = re.match(
+            r"^\s*(Eth\S+|mgmt\d+|Po\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+            line)
+        if m:
+            port = utils.normalize_port(m.group(1))
+            if port:
+                result[port] = {
+                    "crc": int(m.group(3)),        # FCS-Err
+                    "out_errors": int(m.group(4)),  # Xmit-Err
+                    "in_errors": int(m.group(5)),   # Rcv-Err
+                }
+    return result
+
+
+def _parse_ports(status_output, descriptions, switch_id, errors=None):
+    """show interface status → 포트 상태 + VLAN + 속도 + 오류.
+
+    형식(NX-OS):
+      Port          Name               Status    Vlan      Duplex  Speed   Type
+      Eth1/1        uplink-to-core     connected trunk     full    10G     10Gbase-SR
+      Eth1/2                           notconnec 200       auto    auto    --
+    """
+    errors = errors or {}
     ports = []
     if len(status_output) > 1_000_000:
         utils.log_event("warning", "parse_ports_input_too_large", switch_id=switch_id)
@@ -98,21 +154,75 @@ def _parse_ports(status_output, descriptions, switch_id):
     for i, line in enumerate(status_output.split("\n")):
         if i > 10000 or len(line) > 500:
             continue
-        # 인터페이스명 + (행 어딘가의) 첫 up/down 상태
+        if re.match(r"^\s*Port\s+Name", line):     # 헤더 스킵
+            continue
+        m = re.match(r"^" + _IFACE + r"\s+(.*)$", line)
+        if not m:
+            continue
+        port_name = utils.normalize_port(m.group(1))
+        if not port_name:
+            continue
+        rest = m.group(2)
+        # 상태 키워드(뒤쪽에서 vlan/duplex/speed 앞) — connected/notconnec/disabled/...
+        sm = re.search(r"\b(connected|notconnec\w*|disabled|err-?disabled|"
+                       r"noOperMem|sfpAbsent|linkFlapE|xcvrAbsen|up|down)\b", rest, re.IGNORECASE)
+        status = _map_status(sm.group(1)) if sm else "unknown"
+        # 상태 뒤 토큰: Vlan Duplex Speed Type
+        tail = rest[sm.end():].split() if sm else rest.split()
+        vlan = 1
+        if tail:
+            v = utils.normalize_vlan(tail[0])       # 'trunk'/'routed'는 None → 1 유지
+            vlan = v if v else 1
+        spd = ""
+        if len(tail) >= 3:
+            spd = tail[2]
+        elif len(tail) >= 2:
+            spd = tail[1]
+        speed = spd if spd and spd not in ("--", "auto") else (spd or "unknown")
+        err = errors.get(port_name, {})
+        ports.append({
+            "switch_id": switch_id, "name": port_name, "status": status,
+            "vlan": vlan, "speed": speed or "unknown",
+            "description": descriptions.get(port_name, ""),
+            "crc_errors": err.get("crc", 0),
+            "in_errors": err.get("in_errors", 0),
+            "out_errors": err.get("out_errors", 0),
+        })
+    return utils.deduplicate_list(ports, lambda p: p["name"])
+
+
+def _parse_brief(status_output, descriptions, switch_id, errors=None):
+    """show interface brief → up/down 폴백(status 출력이 없을 때). VLAN/speed 일부."""
+    errors = errors or {}
+    ports = []
+    if len(status_output) > 1_000_000:
+        return []
+    for i, line in enumerate(status_output.split("\n")):
+        if i > 10000 or len(line) > 500:
+            continue
         m = re.match(r"^" + _IFACE + r"\s+.*?\b(up|down)\b", line, re.IGNORECASE)
         if m:
             port_name, status_word = m.groups()
-            status = utils.parse_interface_status(status_word)
             port_name = utils.normalize_port(port_name)
-            if port_name:
-                ports.append({
-                    "switch_id": switch_id,
-                    "name": port_name,
-                    "status": status,
-                    "vlan": 1,
-                    "speed": "unknown",
-                    "description": descriptions.get(port_name, ""),
-                })
+            if not port_name:
+                continue
+            # brief: Eth1/1  VLAN  Type Mode Status Reason Speed Port
+            mv = re.match(r"^" + _IFACE + r"\s+(\S+)\s", line)
+            vlan = 1
+            if mv:
+                v = utils.normalize_vlan(mv.group(2))   # group1=iface, group2=vlan
+                vlan = v if v else 1
+            ms = re.search(r"\b(\d+G|\d+g|auto|10M|100M|1000M)\b", line)
+            err = errors.get(port_name, {})
+            ports.append({
+                "switch_id": switch_id, "name": port_name,
+                "status": utils.parse_interface_status(status_word),
+                "vlan": vlan, "speed": ms.group(1) if ms else "unknown",
+                "description": descriptions.get(port_name, ""),
+                "crc_errors": err.get("crc", 0),
+                "in_errors": err.get("in_errors", 0),
+                "out_errors": err.get("out_errors", 0),
+            })
     return utils.deduplicate_list(ports, lambda p: p["name"])
 
 

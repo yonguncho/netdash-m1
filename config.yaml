@@ -47,7 +47,8 @@ collector:
       logging: "show log messages memory-buffer"
       sysinfo: "show switch"
     cisco_nxos:
-      status: "show interface brief"
+      status: "show interface status"
+      brief: "show interface brief"
       description: "show interface description"
       mac: "show mac address-table dynamic"
       arp: "show ip arp"
@@ -55,6 +56,7 @@ collector:
       logging: "show logging last 100"
       port_channel: "show port-channel summary"
       inventory: "show inventory"
+      errors: "show interface counters errors"
 
 correlator:
   uplink_mac_threshold: 4

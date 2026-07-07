@@ -1,5 +1,14 @@
 # NetDash 릴리스 노트
 
+## v3.48.0 (2026-07-07) — NX-OS VLAN·속도·CRC/오류 수집 수정
+
+- **Cisco NX-OS 포트의 VLAN·속도·CRC·IN/OUT 오류 수집 안 되던 문제 수정.**
+  - 원인: NX-OS 파서가 `show interface brief`만 쓰면서 **VLAN=1·속도=unknown으로
+    하드코딩**하고 오류 카운터는 수집조차 안 했음.
+  - 수정: 수집 명령에 **`show interface status`**(VLAN·속도 표)와
+    **`show interface counters errors`**(FCS=CRC, Rcv=수신오류, Xmit=송신오류)
+    추가하고 파서가 실제 값을 추출. brief는 up/down 폴백으로 유지.
+
 ## v3.47.0 (2026-07-07) — 방화벽 L3 링크 인식 + 세그먼트 구역 박스
 
 - **방화벽↔스위치 링크 누락 수정(FABB↔F1_FA_FW 케이스).**
