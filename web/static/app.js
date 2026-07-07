@@ -1877,40 +1877,218 @@ function doSearch() {
     .catch(function(e) { console.error(e); alert("검색 오류"); });
 }
 
-// ─── 토폴로지(스위치 연결 관계 SVG) ──────────────────────────────
+// ─── 토폴로지(구역 집계 맵 ↔ 구역 상세 — 스위치·방화벽 전용) ─────────
+var _topoData = null;    // {nodes, links} 서버 응답 보관
+var _topoZone = null;    // null=구역 맵, "구역명"=해당 구역 상세
+var _topoFocus = null;   // 검색으로 지정한 노드 id(상세에서 주황 링 강조)
+
 function loadTopology() {
-  var host = document.getElementById("topology-canvas");
-  if (host) host.innerHTML = "<p style='color:#94a3b8;padding:20px'>토폴로지 계산 중...</p>";
   fetch("/api/topology").then(function (r) { return r.json(); }).then(function (data) {
-    renderTopology(data.nodes || [], data.links || []);
+    _topoData = { nodes: data.nodes || [], links: data.links || [] };
+    renderTopology();
   }).catch(function (e) { console.error("topology:", e); });
 }
 
-// Meraki/UniFi식 토폴로지: 백본→업링크→액세스 트리 배치(부모 아래 자식),
-// 세로 베지어 링크, 링크 정보는 호버 툴팁, 줌/팬, 미연결 장비 하단 분리.
-function renderTopology(nodes, links) {
+function _topoZoneOf(n) {
+  if (n.depth === 0) return "🏢 백본";      // 링크 최다 루트 = 백본 구역
+  return (n.group || "").trim() || "미지정";
+}
+
+function _topoColor(n) {
+  if (!n) return "#64748b";
+  if (n.alert === "critical" || n.status === "failed" || n.reachable === false) return "#ef4444";
+  if (n.alert === "warning") return "#f59e0b";
+  if (n.status === "done") return "#22c55e";
+  return "#64748b";
+}
+
+// 공통 툴바(빵부스러기 + 검색) — 두 뷰 모두 상단에 표시
+function _topoToolbarHTML() {
+  var crumb = _topoZone
+    ? "<a href='#' id='topo-crumb-root' style='color:#38bdf8;text-decoration:none'>전체</a>" +
+      "<span style='color:#475569'> &gt; </span><b style='color:#e2e8f0'>" + escHtml(_topoZone) + "</b>"
+    : "<b style='color:#e2e8f0'>전체 구역</b> <span style='color:#64748b;font-size:11px'>(구역 클릭 = 내부 장비 보기)</span>";
+  return "<div style='display:flex;gap:12px;align-items:center;padding:8px 14px;border-bottom:1px solid #1e293b'>" +
+    "<span style='font-size:13px'>" + crumb + "</span>" +
+    "<input id='topo-search' placeholder='장비 검색 (이름·IP) 후 Enter' " +
+    "style='margin-left:auto;padding:4px 10px;border:1px solid #334155;border-radius:4px;" +
+    "background:#0f172a;color:#e2e8f0;font-size:12px;width:220px'>" +
+    "</div>";
+}
+
+function _topoBindToolbar(host) {
+  var crumbRoot = host.querySelector("#topo-crumb-root");
+  if (crumbRoot) crumbRoot.addEventListener("click", function (e) {
+    e.preventDefault(); _topoZone = null; _topoFocus = null; renderTopology();
+  });
+  var search = host.querySelector("#topo-search");
+  if (search) search.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    var q = search.value.trim().toLowerCase();
+    if (!q || !_topoData) return;
+    var hit = _topoData.nodes.find(function (n) {
+      return ((n.name || "") + " " + (n.ip || "")).toLowerCase().indexOf(q) >= 0;
+    });
+    if (!hit) { alert("'" + q + "' 장비를 찾지 못했습니다."); return; }
+    _topoZone = _topoZoneOf(hit);
+    _topoFocus = hit.id;
+    renderTopology();
+  });
+}
+
+function renderTopology() {
   var host = document.getElementById("topology-canvas");
-  if (!host) return;
+  if (!host || !_topoData) return;
+  var nodes = _topoData.nodes, links = _topoData.links;
   if (!nodes.length) {
-    host.innerHTML = "<p style='color:#94a3b8;padding:20px'>표시할 스위치가 없습니다. 스위치를 수집하면 연결 관계가 그려집니다.</p>";
+    host.innerHTML = "<p style='color:#94a3b8;padding:20px'>표시할 장비가 없습니다. 스위치를 수집하면 연결 관계가 그려집니다.</p>";
     return;
   }
+  if (_topoZone === null) _renderZoneMap(host, nodes, links);
+  else _renderZoneDetail(host, nodes, links, _topoZone);
+}
 
+// ── 1단계: 구역 집계 맵 — 구역 카드 + 구역 간 링크 수 ──────────────
+function _renderZoneMap(host, nodes, links) {
   var byId = {};
   nodes.forEach(function (n) { byId[n.id] = n; });
+  var zones = {};   // {zone: {sw,fw,bad,warn,ok,total}}
+  nodes.forEach(function (n) {
+    var z = _topoZoneOf(n);
+    var e = zones[z] = zones[z] || { sw: 0, fw: 0, bad: 0, warn: 0, ok: 0, total: 0 };
+    e.total++;
+    if (n.kind === "fw") e.fw++; else e.sw++;
+    var c = _topoColor(n);
+    if (c === "#ef4444") e.bad++;
+    else if (c === "#f59e0b") e.warn++;
+    else if (c === "#22c55e") e.ok++;
+  });
+  // 구역 간 링크 집계(호버 시 실제 장비 쌍 표시)
+  var inter = {};   // {"A||B": {count, pairs[]}}
+  links.forEach(function (l) {
+    var za = _topoZoneOf(byId[l.a] || {}), zb = _topoZoneOf(byId[l.b] || {});
+    if (za === zb) return;
+    var key = [za, zb].sort().join("||");
+    var e = inter[key] = inter[key] || { count: 0, pairs: [] };
+    e.count++;
+    if (e.pairs.length < 6) {
+      e.pairs.push(((byId[l.a] || {}).name || "?") + " ↔ " + ((byId[l.b] || {}).name || "?"));
+    }
+  });
 
-  // 인접 리스트
+  var zkeys = Object.keys(zones).sort(function (a, b) {
+    if (a === "🏢 백본") return -1;
+    if (b === "🏢 백본") return 1;
+    return a.localeCompare(b);
+  });
+  var CARD_W = 200, CARD_H = 84, GX = 40, GY = 90;
+  var others = zkeys.filter(function (z) { return z !== "🏢 백본"; });
+  var cols = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(others.length || 1)) + 1));
+  var rows = Math.ceil(others.length / cols) || 1;
+  var width = Math.max(940, cols * (CARD_W + GX) + 80);
+  var height = 160 + rows * (CARD_H + GY) + 20;
+
+  var pos = {};
+  if (zones["🏢 백본"]) pos["🏢 백본"] = { x: width / 2 - CARD_W / 2, y: 30 };
+  others.forEach(function (z, i) {
+    var r = Math.floor(i / cols), c = i % cols;
+    var rowCount = (r === rows - 1) ? (others.length - r * cols) : cols;
+    var rowW = rowCount * (CARD_W + GX) - GX;
+    pos[z] = { x: (width - rowW) / 2 + c * (CARD_W + GX), y: 190 + r * (CARD_H + GY) };
+  });
+
+  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='" +
+             Math.max(420, Math.min(height, 720)) + "' viewBox='0 0 " + width + " " + height + "'>"];
+
+  // 구역 간 링크(집계 라벨)
+  Object.keys(inter).forEach(function (key) {
+    var zs = key.split("||");
+    var pa = pos[zs[0]], pb = pos[zs[1]];
+    if (!pa || !pb) return;
+    var top = (pa.y <= pb.y) ? pa : pb;
+    var bot = (top === pa) ? pb : pa;
+    var x1 = top.x + CARD_W / 2, y1 = top.y + CARD_H;
+    var x2 = bot.x + CARD_W / 2, y2 = bot.y;
+    var mid = (y1 + y2) / 2;
+    var tip = zs[0] + " ↔ " + zs[1] + " · 링크 " + inter[key].count + "개\n" +
+              inter[key].pairs.join("\n");
+    svg.push("<path class='topo-zedge' data-tip=\"" + escHtml(tip) + "\" d='M" + x1 + "," + y1 +
+      " C" + x1 + "," + mid + " " + x2 + "," + mid + " " + x2 + "," + y2 +
+      "' fill='none' stroke='#64748b' stroke-width='2'/>");
+    svg.push("<rect x='" + ((x1 + x2) / 2 - 18) + "' y='" + (mid - 9) + "' width='36' height='16' rx='8' fill='#1e293b'/>" +
+      "<text x='" + ((x1 + x2) / 2) + "' y='" + (mid + 3) + "' fill='#94a3b8' font-size='10' text-anchor='middle'>" +
+      inter[key].count + "링크</text>");
+  });
+
+  // 구역 카드
+  zkeys.forEach(function (z) {
+    var p = pos[z], e = zones[z];
+    if (!p) return;
+    var border = e.bad ? "#ef4444" : e.warn ? "#f59e0b" : e.ok ? "#22c55e" : "#64748b";
+    var tip = z + " · 스위치 " + e.sw + (e.fw ? " · 방화벽 " + e.fw : "") +
+      (e.bad ? " · 문제 " + e.bad + "대" : "") + "\n클릭하면 내부 장비 연결이 열립니다";
+    svg.push("<g class='topo-zone' data-zone=\"" + escHtml(z) + "\" data-tip=\"" + escHtml(tip) + "\" style='cursor:pointer'>");
+    svg.push("<rect x='" + p.x + "' y='" + p.y + "' width='" + CARD_W + "' height='" + CARD_H +
+      "' rx='10' fill='" + (z === "🏢 백본" ? "#27314a" : "#1e293b") + "' stroke='" + border + "' stroke-width='2.5'/>");
+    svg.push("<text x='" + (p.x + CARD_W / 2) + "' y='" + (p.y + 26) +
+      "' fill='#e2e8f0' font-size='13' font-weight='700' text-anchor='middle'>" +
+      escHtml(z.slice(0, 20)) + "</text>");
+    svg.push("<text x='" + (p.x + CARD_W / 2) + "' y='" + (p.y + 46) +
+      "' fill='#94a3b8' font-size='11' text-anchor='middle'>스위치 " + e.sw +
+      (e.fw ? " · 🛡 " + e.fw : "") + "</text>");
+    var badge = e.bad ? ("🔴 문제 " + e.bad) : e.warn ? ("⚠ 경보 " + e.warn) : "✅ 정상";
+    svg.push("<text x='" + (p.x + CARD_W / 2) + "' y='" + (p.y + 66) +
+      "' fill='" + border + "' font-size='11' font-weight='600' text-anchor='middle'>" + badge + "</text>");
+    svg.push("</g>");
+  });
+  svg.push("</svg>");
+
+  host.innerHTML = _topoToolbarHTML() + svg.join("") +
+    "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
+    "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:420px;white-space:pre-line'></div>";
+  _topoBindToolbar(host);
+  _topoBindTips(host);
+  host.querySelectorAll(".topo-zone").forEach(function (g) {
+    g.addEventListener("click", function () {
+      _topoZone = g.getAttribute("data-zone");
+      _topoFocus = null;
+      renderTopology();
+    });
+  });
+}
+
+// ── 2단계: 구역 상세 — 그 구역 장비 + 외부 직결(고스트) 트리 ─────────
+function _renderZoneDetail(host, allNodes, allLinks, zone) {
+  var byId = {};
+  allNodes.forEach(function (n) { byId[n.id] = n; });
+  var inZone = {};
+  allNodes.forEach(function (n) { if (_topoZoneOf(n) === zone) inZone[n.id] = true; });
+  // 구역 밖이지만 직결된 이웃 = 고스트(업링크 방향 표시용)
+  var ghost = {};
+  allLinks.forEach(function (l) {
+    if (inZone[l.a] && !inZone[l.b]) ghost[l.b] = true;
+    if (inZone[l.b] && !inZone[l.a]) ghost[l.a] = true;
+  });
+  var nodes = allNodes.filter(function (n) { return inZone[n.id] || ghost[n.id]; });
+  var links = allLinks.filter(function (l) {
+    return (inZone[l.a] || inZone[l.b]) && (inZone[l.a] || ghost[l.a]) && (inZone[l.b] || ghost[l.b]);
+  });
+
   var adj = {};
   links.forEach(function (l) {
     (adj[l.a] = adj[l.a] || []).push(l.b);
     (adj[l.b] = adj[l.b] || []).push(l.a);
   });
 
-  // 스패닝 트리(BFS): 컴포넌트별 루트 = 링크 수 최다(백본)
+  // 스패닝 트리(BFS): 루트 = 고스트(외부 업링크) 우선, 없으면 링크 최다
   var parent = {}, children = {}, depth = {}, roots = [], visited = {};
-  var connectedIds = Object.keys(adj).map(Number);
-  connectedIds.sort(function (a, b) { return (adj[b] || []).length - (adj[a] || []).length; });
-  connectedIds.forEach(function (rid) {
+  var ids = Object.keys(adj);
+  ids.sort(function (a, b) {
+    var ga = ghost[a] ? 1 : 0, gb = ghost[b] ? 1 : 0;
+    if (ga !== gb) return gb - ga;
+    return (adj[b] || []).length - (adj[a] || []).length;
+  });
+  ids.forEach(function (rid) {
     if (visited[rid]) return;
     roots.push(rid);
     visited[rid] = true; depth[rid] = 0;
@@ -1918,7 +2096,7 @@ function renderTopology(nodes, links) {
     while (q.length) {
       var cur = q.shift();
       var nbrs = (adj[cur] || []).slice().sort(function (a, b) {
-        return ((byId[a] || {}).name || "").localeCompare((byId[b] || {}).name || "");
+        return ((byId[a] || {}).name || "").localeCompare(((byId[b] || {}).name || ""));
       });
       nbrs.forEach(function (nx) {
         if (visited[nx]) return;
@@ -1930,9 +2108,8 @@ function renderTopology(nodes, links) {
       });
     }
   });
-  var orphans = nodes.filter(function (n) { return !(n.id in visited); });
+  var orphans = nodes.filter(function (n) { return !(String(n.id) in visited) && inZone[n.id]; });
 
-  // tidy tree 레이아웃: 리프에 순차 슬롯, 부모는 자식 중앙
   var NODE_W = 160, NODE_H = 46, GAP_X = 26, GAP_Y = 110;
   var slot = { v: 0 };
   var xIndex = {};
@@ -1943,7 +2120,7 @@ function renderTopology(nodes, links) {
     xIndex[id] = (xs[0] + xs[xs.length - 1]) / 2;
     return xIndex[id];
   }
-  roots.forEach(function (r) { assignX(r); slot.v += 0.6; });  // 컴포넌트 간 간격
+  roots.forEach(function (r) { assignX(r); slot.v += 0.6; });
 
   var maxDepth = 0;
   Object.keys(depth).forEach(function (k) { if (depth[k] > maxDepth) maxDepth = depth[k]; });
@@ -1955,26 +2132,11 @@ function renderTopology(nodes, links) {
     pos[k] = { x: 30 + xIndex[k] * (NODE_W + GAP_X), y: 40 + depth[k] * (NODE_H + GAP_Y) };
   });
 
-  function statusColor(n) {
-    if (!n) return "#64748b";
-    if (n.alert === "critical" || n.status === "failed" || n.reachable === false) return "#ef4444";
-    if (n.alert === "warning") return "#f59e0b";
-    if (n.status === "done") return "#22c55e";
-    return "#64748b";
-  }
-
-  var treeEdge = {};
-  Object.keys(parent).forEach(function (c) {
-    var p = parent[c];
-    treeEdge[Math.min(c, p) + "-" + Math.max(c, p)] = true;
-  });
-
   var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='" +
              Math.max(520, Math.min(height, 760)) + "' viewBox='0 0 " + width + " " + height +
              "' style='cursor:grab'>"];
 
-  // 링크(세로 베지어) — 트리 링크 실선, 보조/편방향 링크 점선
-  links.forEach(function (l, i) {
+  links.forEach(function (l) {
     var a = pos[l.a], b = pos[l.b];
     if (!a || !b) return;
     var top = (depth[l.a] <= depth[l.b]) ? l.a : l.b;
@@ -1982,125 +2144,125 @@ function renderTopology(nodes, links) {
     var x1 = pos[top].x + NODE_W / 2, y1 = pos[top].y + NODE_H;
     var x2 = pos[bot].x + NODE_W / 2, y2 = pos[bot].y;
     var mid = (y1 + y2) / 2;
-    var isTree = treeEdge[Math.min(l.a, l.b) + "-" + Math.max(l.a, l.b)];
-    var stroke = l.mutual ? "#64748b" : "#475569";
-    var dash = (isTree && l.mutual) ? "" : " stroke-dasharray='6,4'";
-    var portA = l.a === top ? l.a_port : l.b_port;
-    var portB = l.a === top ? l.b_port : l.a_port;
+    var portA = (top === l.a) ? l.a_port : l.b_port;
+    var portB = (top === l.a) ? l.b_port : l.a_port;
     var tip = escHtml((byId[top] || {}).name || "") + (portA ? " [" + escHtml(portA) + "]" : "") +
       "  ↕  " + escHtml((byId[bot] || {}).name || "") + (portB ? " [" + escHtml(portB) + "]" : "") +
       (l.mutual ? "  (양방향 확인)" : "  (한쪽만 관측)");
     svg.push("<path class='topo-edge' data-ea='" + l.a + "' data-eb='" + l.b + "' data-tip=\"" + tip + "\" d='M" +
       x1 + "," + y1 + " C" + x1 + "," + mid + " " + x2 + "," + mid + " " + x2 + "," + y2 +
-      "' fill='none' stroke='" + stroke + "' stroke-width='2'" + dash + "/>");
+      "' fill='none' stroke='#64748b' stroke-width='2'" + (l.mutual ? "" : " stroke-dasharray='6 4'") + "/>");
   });
 
-  // 노드: 백본(루트)은 강조, 상태색 테두리 + 상태점
   nodes.forEach(function (n) {
     var p = pos[n.id];
     if (!p) return;
-    var isRoot = roots.indexOf(n.id) >= 0;
+    var isGhost = !!ghost[n.id];
+    var isFocus = _topoFocus != null && String(_topoFocus) === String(n.id);
     var tip = escHtml(n.name || "") + " · " + escHtml(n.ip || "") +
-      " · " + escHtml(n.vendor || "") + (n.group ? " · " + escHtml(n.group) : "");
-    svg.push("<g class='topo-node' data-swid='" + n.id + "' data-tip=\"" + tip + "\" style='cursor:pointer'>");
-    svg.push("<rect x='" + p.x + "' y='" + p.y + "' width='" + NODE_W + "' height='" + NODE_H +
-      "' rx='8' fill='" + (isRoot ? "#27314a" : "#1e293b") + "' stroke='" + statusColor(n) +
-      "' data-basestroke='" + statusColor(n) + "' stroke-width='" + (isRoot ? 3 : 2) + "'/>");
-    if (isRoot) {
-      svg.push("<text x='" + (p.x + 10) + "' y='" + (p.y + 20) + "' font-size='13'>🏢</text>");
+      " · " + escHtml(n.vendor || "") + (n.group ? " · " + escHtml(n.group) : "") +
+      (isGhost ? "\n(다른 구역 장비 — 클릭하면 그 구역으로 이동)" : "");
+    svg.push("<g class='topo-node' data-swid='" + n.id + "' data-kind='" + (n.kind || "sw") +
+      "' data-ghost='" + (isGhost ? 1 : 0) + "' data-tip=\"" + tip + "\" style='cursor:pointer'" +
+      (isGhost ? " opacity='0.65'" : "") + ">");
+    if (isFocus) {
+      svg.push("<rect x='" + (p.x - 5) + "' y='" + (p.y - 5) + "' width='" + (NODE_W + 10) +
+        "' height='" + (NODE_H + 10) + "' rx='11' fill='none' stroke='#f59e0b' stroke-width='3'/>");
     }
+    svg.push("<rect x='" + p.x + "' y='" + p.y + "' width='" + NODE_W + "' height='" + NODE_H +
+      "' rx='8' fill='" + (isGhost ? "#111827" : "#1e293b") + "' stroke='" + _topoColor(n) +
+      "' data-basestroke='" + _topoColor(n) + "' stroke-width='2'" +
+      (isGhost ? " stroke-dasharray='5 4'" : "") + "/>");
     svg.push("<circle cx='" + (p.x + NODE_W - 12) + "' cy='" + (p.y + 12) + "' r='4' fill='" +
-      statusColor(n) + "'/>");
+      _topoColor(n) + "'/>");
     svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 19) +
       "' fill='#e2e8f0' font-size='11' font-weight='700' text-anchor='middle'>" +
-      escHtml((n.name || "").slice(0, 22)) + "</text>");
+      (n.kind === "fw" ? "🛡 " : "") + escHtml((n.name || "").slice(0, 20)) + "</text>");
     svg.push("<text x='" + (p.x + NODE_W / 2) + "' y='" + (p.y + 35) +
       "' fill='#94a3b8' font-size='10' text-anchor='middle'>" + escHtml(n.ip || "") + "</text>");
     svg.push("</g>");
   });
   svg.push("</svg>");
 
-  // 범례 + 미연결 장비 하단 분리
   var legend =
-    "<div style='display:flex;gap:16px;align-items:center;padding:8px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +
-    "<span>🏢 백본(연결 최다)</span>" +
-    "<span><span style='display:inline-block;width:18px;border-top:2px solid #64748b;vertical-align:middle'></span> 링크(양방향 확인)</span>" +
-    "<span><span style='display:inline-block;width:18px;border-top:2px dashed #475569;vertical-align:middle'></span> 보조/편방향</span>" +
+    "<div style='display:flex;gap:16px;align-items:center;padding:6px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +
+    "<span>점선 테두리 = 다른 구역 장비(클릭=그 구역으로)</span>" +
     "<span style='color:#22c55e'>● 정상</span><span style='color:#ef4444'>● 실패/도달불가</span><span style='color:#f59e0b'>● 경보</span>" +
-    "<span style='margin-left:auto'>휠=확대/축소 · 드래그=이동 · 링크/노드에 마우스=상세 · 클릭=상세보기</span></div>";
+    "<span style='margin-left:auto'>휠=확대/축소 · 드래그=이동 · 호버=직결 하이라이트</span></div>";
   var orphanHtml = "";
   if (orphans.length) {
     orphanHtml = "<div style='border-top:1px solid #1e293b;padding:8px 14px'>" +
-      "<span style='color:#94a3b8;font-size:11px'>연결 미발견 " + orphans.length +
-      "대(수집하면 자동 연결): </span>" +
+      "<span style='color:#94a3b8;font-size:11px'>이 구역 연결 미발견 " + orphans.length + "대: </span>" +
       orphans.map(function (n) {
-        return "<span class='topo-orphan' data-swid='" + n.id + "' style='display:inline-block;margin:2px 4px;padding:2px 8px;" +
-          "background:#1e293b;border:1px solid " + statusColor(n) + ";border-radius:4px;color:#cbd5e1;" +
-          "font-size:11px;cursor:pointer'>" + escHtml(n.name || "") + "</span>";
+        return "<span class='topo-orphan' data-swid='" + n.id + "' data-kind='" + (n.kind || "sw") +
+          "' style='display:inline-block;margin:2px 4px;padding:2px 8px;" +
+          "background:#1e293b;border:1px solid " + _topoColor(n) + ";border-radius:4px;color:#cbd5e1;" +
+          "font-size:11px;cursor:pointer'>" + (n.kind === "fw" ? "🛡 " : "") + escHtml(n.name || "") + "</span>";
       }).join("") + "</div>";
   }
-  host.innerHTML = legend + svg.join("") + orphanHtml +
+  host.innerHTML = _topoToolbarHTML() + legend + svg.join("") + orphanHtml +
     "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
-    "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:420px'></div>";
+    "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:420px;white-space:pre-line'></div>";
+  _topoBindToolbar(host);
+  _topoBindTips(host);
 
-  // 클릭 → 상세보기
-  function _open(id) {
-    var sw = (_switches || []).find(function (s) { return s.id === id; });
+  // 클릭: 고스트=그 구역으로 이동, 방화벽=방화벽 상세, 스위치=스위치 상세
+  function _open(g) {
+    var id = g.getAttribute("data-swid");
+    if (g.getAttribute("data-ghost") === "1") {
+      var n = byId[id] || byId[parseInt(id, 10)];
+      if (n) { _topoZone = _topoZoneOf(n); _topoFocus = n.id; renderTopology(); }
+      return;
+    }
+    if (g.getAttribute("data-kind") === "fw") {
+      showFirewallDetail(parseInt(id.slice(1), 10));
+      return;
+    }
+    var sw = (_switches || []).find(function (s) { return String(s.id) === String(id); });
     if (sw) openDetailPanel(sw);
   }
   host.querySelectorAll(".topo-node, .topo-orphan").forEach(function (g) {
-    g.addEventListener("click", function () { _open(parseInt(g.getAttribute("data-swid"), 10)); });
+    g.addEventListener("click", function () { _open(g); });
   });
 
-  // 호버 툴팁 + 노드 호버 시 연결 링크 강조
-  var tipEl = document.getElementById("topo-tip");
-  function showTip(e, text) {
-    tipEl.textContent = text;
-    tipEl.style.display = "block";
-    tipEl.style.left = (e.clientX + 12) + "px";
-    tipEl.style.top = (e.clientY + 12) + "px";
-  }
-  host.querySelectorAll("[data-tip]").forEach(function (el) {
-    el.addEventListener("mousemove", function (e) { showTip(e, el.getAttribute("data-tip")); });
-    el.addEventListener("mouseleave", function () { tipEl.style.display = "none"; });
-  });
-  // 노드 호버: 직결 라인은 청록 글로우로 선명하게, 무관한 노드/라인은 흐리게 —
-  // 어느 장비가 어디에 직결돼 있는지 한눈에 식별(자비스식 하이라이트)
+  // 자비스식 호버: 직결 라인 글로우 + 무관 요소 페이드 + 이웃 강조
   host.querySelectorAll(".topo-node").forEach(function (g) {
     var id = g.getAttribute("data-swid");
     g.addEventListener("mouseenter", function () {
       var neighbors = {};
       neighbors[id] = true;
-      host.querySelectorAll(".topo-edge").forEach(function (p) {
-        var ea = p.getAttribute("data-ea"), eb = p.getAttribute("data-eb");
+      host.querySelectorAll(".topo-edge").forEach(function (p2) {
+        var ea = p2.getAttribute("data-ea"), eb = p2.getAttribute("data-eb");
         var on = ea === id || eb === id;
         if (on) { neighbors[ea] = true; neighbors[eb] = true; }
-        p.setAttribute("stroke", on ? "#38bdf8" : "#334155");
-        p.setAttribute("stroke-width", on ? "3.5" : "1");
-        p.style.opacity = on ? "1" : "0.12";
-        p.style.filter = on ? "drop-shadow(0 0 4px #38bdf8)" : "";
+        p2.setAttribute("stroke", on ? "#38bdf8" : "#334155");
+        p2.setAttribute("stroke-width", on ? "3.5" : "1");
+        p2.style.opacity = on ? "1" : "0.12";
+        p2.style.filter = on ? "drop-shadow(0 0 4px #38bdf8)" : "";
       });
       host.querySelectorAll(".topo-node").forEach(function (n) {
         var nid = n.getAttribute("data-swid");
         var hot = !!neighbors[nid];
         n.style.opacity = hot ? "1" : "0.15";
-        var rect = n.querySelector("rect");
+        var rects = n.querySelectorAll("rect");
+        var rect = rects[rects.length - 1];
         if (rect) {
-          if (hot && nid !== id) rect.setAttribute("stroke", "#38bdf8");   // 직결 이웃 강조
-          if (nid === id) rect.setAttribute("stroke-width", "3.5");        // 자기 자신 강조
+          if (hot && nid !== id) rect.setAttribute("stroke", "#38bdf8");
+          if (nid === id) rect.setAttribute("stroke-width", "3.5");
         }
       });
     });
     g.addEventListener("mouseleave", function () {
-      host.querySelectorAll(".topo-edge").forEach(function (p) {
-        p.setAttribute("stroke", "#64748b");
-        p.setAttribute("stroke-width", "2");
-        p.style.opacity = "1";
-        p.style.filter = "";
+      host.querySelectorAll(".topo-edge").forEach(function (p2) {
+        p2.setAttribute("stroke", "#64748b");
+        p2.setAttribute("stroke-width", "2");
+        p2.style.opacity = "1";
+        p2.style.filter = "";
       });
       host.querySelectorAll(".topo-node").forEach(function (n) {
-        n.style.opacity = "1";
-        var rect = n.querySelector("rect");
+        n.style.opacity = n.getAttribute("data-ghost") === "1" ? "0.65" : "1";
+        var rects = n.querySelectorAll("rect");
+        var rect = rects[rects.length - 1];
         if (rect) {
           rect.setAttribute("stroke", rect.getAttribute("data-basestroke") || "#64748b");
           rect.setAttribute("stroke-width", "2");
@@ -2109,8 +2271,28 @@ function renderTopology(nodes, links) {
     });
   });
 
-  // 줌(휠)/팬(드래그) — viewBox 조작
-  var svgEl = document.getElementById("topo-svg");
+  _topoBindZoomPan(host, width, height);
+}
+
+// 툴팁 공통 바인딩
+function _topoBindTips(host) {
+  var tipEl = host.querySelector("#topo-tip");
+  if (!tipEl) return;
+  host.querySelectorAll("[data-tip]").forEach(function (el) {
+    el.addEventListener("mousemove", function (e) {
+      tipEl.textContent = el.getAttribute("data-tip");
+      tipEl.style.display = "block";
+      tipEl.style.left = (e.clientX + 12) + "px";
+      tipEl.style.top = (e.clientY + 12) + "px";
+    });
+    el.addEventListener("mouseleave", function () { tipEl.style.display = "none"; });
+  });
+}
+
+// 줌/팬 공통(구역 상세)
+function _topoBindZoomPan(host, width, height) {
+  var svgEl = host.querySelector("#topo-svg");
+  if (!svgEl) return;
   var vb = { x: 0, y: 0, w: width, h: height };
   function applyVB() { svgEl.setAttribute("viewBox", vb.x + " " + vb.y + " " + vb.w + " " + vb.h); }
   svgEl.addEventListener("wheel", function (e) {
@@ -2146,7 +2328,7 @@ function renderTopology(nodes, links) {
 
 (function () {
   var b = document.getElementById("btn-topo-refresh");
-  if (b) b.addEventListener("click", loadTopology);
+  if (b) b.addEventListener("click", function () { _topoZone = null; _topoFocus = null; loadTopology(); });
 })();
 
 // ─── 설정(config) 백업/diff 탭 ───────────────────────────────────

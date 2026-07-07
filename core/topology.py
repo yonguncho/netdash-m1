@@ -14,10 +14,9 @@ from . import db
 logger = logging.getLogger(__name__)
 
 
-def _switch_mgmt_macs(db_path, switches):
-    """{switch_id: mgmt_mac(lower)} — 전체 ARP에서 각 스위치 IP의 MAC을 찾음."""
-    ip_to_sid = {s["ip"]: s["id"] for s in switches if s.get("ip")}
-    macs = {}
+def _arp_ip_macs(db_path):
+    """최신 스냅샷 ARP 전체에서 {ip: mac(lower)} — 스위치/방화벽 IP의 MAC 탐색용."""
+    out = {}
     with db.get_db(db_path) as conn:
         cur = conn.cursor()
         try:
@@ -25,12 +24,18 @@ def _switch_mgmt_macs(db_path, switches):
                 """SELECT a.ip, a.mac FROM arp_entries a
                    WHERE a.snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id)""")
             for r in cur.fetchall():
-                sid = ip_to_sid.get(r["ip"])
-                if sid and r["mac"]:
-                    macs[sid] = r["mac"].lower()
+                if r["ip"] and r["mac"]:
+                    out.setdefault(r["ip"], r["mac"].lower())
         except Exception:
             pass
-    return macs
+    return out
+
+
+def _switch_mgmt_macs(db_path, switches, ip_macs=None):
+    """{switch_id: mgmt_mac(lower)} — 전체 ARP에서 각 스위치 IP의 MAC을 찾음."""
+    ip_macs = ip_macs if ip_macs is not None else _arp_ip_macs(db_path)
+    return {s["id"]: ip_macs[s["ip"]]
+            for s in switches if s.get("ip") and s["ip"] in ip_macs}
 
 
 def build_topology(db_path):
@@ -45,7 +50,8 @@ def build_topology(db_path):
     if not switches:
         return {"nodes": [], "links": []}
 
-    mgmt = _switch_mgmt_macs(db_path, switches)          # {sid: mac}
+    ip_macs = _arp_ip_macs(db_path)                      # {ip: mac}
+    mgmt = _switch_mgmt_macs(db_path, switches, ip_macs)  # {sid: mac}
     mac_map = db.get_mac_to_switchport(db_path)          # {mac: [(sid, name, port)]}
     pc_map = db.get_port_channel_members(db_path)        # {(sid, po): [members]}
 
@@ -105,9 +111,39 @@ def build_topology(db_path):
         except Exception:
             group = ""
         nodes.append({
-            "id": s["id"], "name": s.get("name"), "ip": s.get("ip"),
+            "id": s["id"], "kind": "sw", "name": s.get("name"), "ip": s.get("ip"),
             "vendor": s.get("vendor"), "status": s.get("status"),
-            "alert": s.get("alert") or "none", "group": group,
+            "alert": s.get("alert") or "none",
+            "group": group or (s.get("location") or ""),
             "depth": depth.get(s["id"], None),
         })
+
+    # 방화벽 노드 + 직결 링크: 스위치 ARP에서 방화벽 IP의 MAC을 찾아
+    # 그 MAC이 보이는 '물리 포트'(가장 구체적 관측)를 직결로 판단
+    try:
+        firewalls = db.list_firewalls(db_path)
+    except Exception:
+        firewalls = []
+    for fw in firewalls:
+        fw_id = "f%d" % fw["id"]
+        nodes.append({
+            "id": fw_id, "kind": "fw", "name": fw.get("name"),
+            "ip": fw.get("host"), "vendor": fw.get("vendor"),
+            "status": fw.get("status"), "alert": "none",
+            "group": fw.get("location") or "", "depth": None,
+        })
+        mac = ip_macs.get(fw.get("host"))
+        if not mac:
+            continue
+        cands = mac_map.get(mac, [])
+        # 물리 포트 우선(Po/Vl 등 논리 포트는 업링크 경유 관측)
+        phys = [c for c in cands
+                if not (c[2] or "").lower().startswith(("po", "vl", "port-channel"))]
+        pick = (phys or cands)[:1]
+        if pick:
+            sid, _name, port = pick[0]
+            link_list.append({"a": sid, "b": fw_id,
+                              "a_port": _resolve_port(sid, port),
+                              "b_port": None, "mutual": False})
+
     return {"nodes": nodes, "links": link_list}

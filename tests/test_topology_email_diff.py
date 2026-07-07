@@ -52,6 +52,39 @@ def test_topology_empty(temp_db):
     assert topo == {"nodes": [], "links": []}
 
 
+def test_topology_firewall_node_and_link(temp_db):
+    """방화벽 노드 포함 + 스위치 ARP/MAC으로 직결 링크 추론(설비는 미포함)."""
+    bb, tps = _seed_link(temp_db)
+    fid = db.save_firewall(temp_db, "FW-1", "fortigate", "10.0.0.99", port=443)
+    # BACKBONE ARP에 방화벽 IP→MAC, MAC 테이블에서 물리 포트 관측
+    s2 = db.save_snapshot(temp_db, bb)
+    db.save_arp_entries(temp_db, s2, bb, [
+        {"ip": "10.0.0.1", "mac": "aa:aa:aa:aa:aa:01", "interface": "Vlan1"},
+        {"ip": "10.0.0.11", "mac": "bb:bb:bb:bb:bb:11", "interface": "Vlan1"},
+        {"ip": "10.0.0.99", "mac": "cc:cc:cc:cc:cc:99", "interface": "Vlan1"}])
+    db.save_mac_entries(temp_db, s2, bb, [
+        {"vlan": 1, "mac": "bb:bb:bb:bb:bb:11", "port": "Eth1/5", "type": "dynamic"},
+        {"vlan": 1, "mac": "cc:cc:cc:cc:cc:99", "port": "Eth1/7", "type": "dynamic"}])
+    topo = topology.build_topology(temp_db)
+    fw_nodes = [n for n in topo["nodes"] if n.get("kind") == "fw"]
+    assert len(fw_nodes) == 1 and fw_nodes[0]["id"] == "f%d" % fid
+    fw_links = [l for l in topo["links"] if str(l["b"]).startswith("f")]
+    assert len(fw_links) == 1
+    assert fw_links[0]["a"] == bb and fw_links[0]["a_port"] == "Eth1/7"
+    # 스위치 노드에 kind 표기
+    assert all(n.get("kind") in ("sw", "fw") for n in topo["nodes"])
+
+
+def test_topology_zone_ui():
+    """구역 집계 맵 ↔ 구역 상세 2단계 + 검색 UI."""
+    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "_renderZoneMap" in js and "_renderZoneDetail" in js
+    assert "_topoZoneOf" in js and "🏢 백본" in js
+    assert "topo-search" in js                  # 장비 검색
+    assert "data-ghost" in js                   # 타 구역 직결(고스트) 노드
+    assert "링크</text>" in js                  # 구역 간 링크 집계 라벨
+
+
 def test_topology_api(client):
     r = client.get("/api/topology")
     b = r.get_json()

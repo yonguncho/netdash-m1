@@ -844,10 +844,20 @@ def create_app(demo_mode=None):
 
     @app.route("/api/topology", methods=["GET"])
     def get_topology():
-        """스위치 간 연결 관계(수집 데이터 기반 추론)."""
+        """스위치·방화벽 연결 관계(수집 데이터 기반 추론) + 도달성."""
         try:
-            from core import topology
-            return jsonify(topology.build_topology(db_path))
+            from core import topology, reachability
+            topo = topology.build_topology(db_path)
+            reach = reachability.get_state()
+            fw_reach = reachability.get_fw_state()
+            for n in topo.get("nodes", []):
+                if n.get("kind") == "fw":
+                    fid = int(str(n["id"])[1:])
+                    if fid in fw_reach:
+                        n["reachable"] = fw_reach[fid]
+                elif n["id"] in reach:
+                    n["reachable"] = reach[n["id"]]
+            return jsonify(topo)
         except Exception as e:
             log_event("error", "topology_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
