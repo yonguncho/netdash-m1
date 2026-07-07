@@ -455,31 +455,46 @@ def _worker_loop():
                             switch, username, password, vendor,
                             source_ip=source_ip, detect_vendor=True)
                     except Exception as first_err:
-                        # netmiko 드라이버가 프롬프트 매칭에 실패하는 장비
-                        # (EXOS 증가형 프롬프트 → 'pattern not detected') 폴백:
-                        # 드라이버 무관 원시 셸로 OS 탐지 → 올바른 드라이버로 재시도.
-                        probed, probe_ver = _probe_os(switch, username, password,
-                                                      source_ip=source_ip)
-                        if not probed or probed == vendor:
-                            raise
-                        utils.log_event("info", "vendor_probe_retry",
-                                        switch_id=switch_id, probed=probed,
-                                        first_error=_sanitize_error_msg(str(first_err)))
-                        if probed == "alteon":
-                            # Alteon은 netmiko 드라이버가 없음 → 전용 메뉴 CLI 수집
+                        # Alteon 프롬프트를 이미 감지했다면 프로브(추가 로그인) 없이
+                        # 전용 수집으로 직행 — 구형 Alteon은 동시 관리 세션 제한이
+                        # 있어 연속 로그인(프로브)이 거부될 수 있다.
+                        if "alteon" in str(first_err).lower():
+                            utils.log_event("info", "alteon_direct_fallback",
+                                            switch_id=switch_id)
                             outputs = _run_with_timeout(
                                 _alteon_collect, hard_to,
                                 switch, username, password, source_ip=source_ip)
                             eff_vendor = "alteon"
+                            probed, probe_ver = "alteon", ""
+                            raise_skip = True
                         else:
-                            outputs, eff_vendor = _run_with_timeout(
-                                _ssh_collect, hard_to,
-                                switch, username, password, probed,
-                                source_ip=source_ip, detect_vendor=False, max_retries=1)
-                            eff_vendor = probed
-                        # 프로브에서 읽은 show version을 버전/모델 파싱에 재활용
-                        if probe_ver and not outputs.get("version"):
-                            outputs["version"] = probe_ver
+                            raise_skip = False
+                        # netmiko 드라이버가 프롬프트 매칭에 실패하는 장비
+                        # (EXOS 증가형 프롬프트 → 'pattern not detected') 폴백:
+                        # 드라이버 무관 원시 셸로 OS 탐지 → 올바른 드라이버로 재시도.
+                        if not raise_skip:
+                            probed, probe_ver = _probe_os(switch, username, password,
+                                                          source_ip=source_ip)
+                            if not probed or probed == vendor:
+                                raise
+                            utils.log_event("info", "vendor_probe_retry",
+                                            switch_id=switch_id, probed=probed,
+                                            first_error=_sanitize_error_msg(str(first_err)))
+                            if probed == "alteon":
+                                # Alteon은 netmiko 드라이버가 없음 → 전용 메뉴 CLI 수집
+                                outputs = _run_with_timeout(
+                                    _alteon_collect, hard_to,
+                                    switch, username, password, source_ip=source_ip)
+                                eff_vendor = "alteon"
+                            else:
+                                outputs, eff_vendor = _run_with_timeout(
+                                    _ssh_collect, hard_to,
+                                    switch, username, password, probed,
+                                    source_ip=source_ip, detect_vendor=False, max_retries=1)
+                                eff_vendor = probed
+                            # 프로브에서 읽은 show version을 버전/모델 파싱에 재활용
+                            if probe_ver and not outputs.get("version"):
+                                outputs["version"] = probe_ver
                 # 실제 OS 판별: 세션 show version 출력 우선, 없으면(원시 셸 프로브
                 # 폴백 경로) eff_vendor. FIX: 예전엔 '정규화된 접속 벤더'와 비교해
                 # unknown→cisco_ios처럼 정규화 결과와 감지가 같으면 DB 갱신을
@@ -872,6 +887,61 @@ def _probe_os(switch, username, password, source_ip=None):
             client.close()
         except Exception:
             pass
+
+
+def diagnose_switch(switch, username, password, source_ip=None):
+    """장비 진단: TCP → SSH 로그인 → 배너/프롬프트 → show version 원문 수집.
+
+    수집이 이상하게 동작하는 장비(벤더 미인식 등)의 실제 응답을 화면에 그대로
+    보여줘 원인을 특정할 수 있게 한다. 반환 dict는 UI에 표시된다.
+    """
+    import paramiko
+    import time as _t
+    from . import ssh_compat
+    res = {"tcp": False, "ssh_login": False, "prompt": "", "banner_head": "",
+           "version_head": "", "guess": None, "error": ""}
+    try:
+        res["tcp"] = bool(_tcp_precheck(switch["ip"], 22, timeout=4, source_ip=source_ip))
+    except Exception as e:
+        res["error"] = "TCP-22 도달 불가: " + _sanitize_error_msg(str(e))
+        return res
+    if not res["tcp"]:
+        res["error"] = "TCP-22 도달 불가(응답 없음)"
+        return res
+    ssh_compat.enable_legacy_algorithms()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sock = None
+    if source_ip:
+        from . import netbind
+        sock = netbind.bind_socket(switch["ip"], 22, source_ip, 15)
+    try:
+        client.connect(switch["ip"], port=22, username=username, password=password,
+                       timeout=15, allow_agent=False, look_for_keys=False, sock=sock)
+        res["ssh_login"] = True
+        shell = client.invoke_shell(width=200, height=1000)
+        _t.sleep(1.5)
+        banner = _alteon_read(shell, timeout=5)
+        res["banner_head"] = (banner or "")[-600:]
+        lines = [l for l in (banner or "").splitlines() if l.strip()]
+        res["prompt"] = lines[-1][-120:] if lines else ""
+        shell.send("show version\n")
+        out = _alteon_read(shell, timeout=10)
+        res["version_head"] = (out or "")[:800]
+        res["guess"] = (_detect_vendor_from_version(out)
+                        or _detect_vendor_from_version(banner)
+                        or ("alteon" if (_prompt_looks_alteon(res["prompt"])
+                                         or re.search(r">>|Alteon|Radware",
+                                                      (banner or "") + (out or ""),
+                                                      re.IGNORECASE)) else None))
+    except Exception as e:
+        res["error"] = _sanitize_error_msg(str(e))
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+    return res
 
 
 def _alteon_collect(switch, username, password, source_ip=None):

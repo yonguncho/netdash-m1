@@ -143,6 +143,64 @@ def test_worker_always_verifies_vendor(temp_db, monkeypatch):
     assert seen.get("detect") is True
 
 
+def test_worker_alteon_direct_fallback_no_probe(temp_db, monkeypatch):
+    """프롬프트에서 Alteon 감지 시 프로브(추가 로그인) 없이 전용 수집 직행.
+
+    구형 Alteon은 동시 관리 세션 제한이 있어 프로브 로그인이 거부될 수 있음.
+    """
+    monkeypatch.setattr(collector, "get_config", lambda *a, **k: _FakeCfg())
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    sid = db.save_switch(temp_db, "L4-DIRECT", "10.0.0.26", "unknown")
+    credentials.save_credential(sid, "admin", "pw")
+
+    def fake_ssh(*a, **k):
+        raise collector._DriverMismatchError("alteon 메뉴형 프롬프트 감지")
+    monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
+
+    def fail_probe(*a, **k):
+        raise AssertionError("프로브가 호출되면 안 됨(직행 폴백)")
+    monkeypatch.setattr(collector, "_probe_os", fail_probe)
+    monkeypatch.setattr(collector, "_alteon_collect",
+                        lambda switch, u, p, source_ip=None: {
+                            "status": "", "mac": "", "arp": "",
+                            "version": "Alteon Application Switch 5224\n"
+                                       "Software Version 29.0.3.0"})
+
+    collector.init_collector()
+    collector.collect_switch(temp_db, sid, "admin", "pw")
+    import time
+    for _ in range(100):
+        sw = db.get_switch(temp_db, sid)
+        if sw["status"] in ("done", "failed") and sw["vendor"] == "alteon":
+            break
+        time.sleep(0.1)
+    sw = db.get_switch(temp_db, sid)
+    assert sw["vendor"] == "alteon" and sw["status"] == "done"
+    assert sw["model"] == "5224"
+
+
+def test_diagnose_endpoint(client, monkeypatch):
+    """진단 API: 배너/프롬프트/버전 원문 반환(계정은 저장분 또는 입력)."""
+    from core import collector as _col
+    sid = client.post("/api/switches/manual",
+                      json={"ip": "10.88.0.1", "name": "DIAG", "vendor": "unknown"}).get_json()["switch_id"]
+    monkeypatch.setattr(_col, "diagnose_switch",
+                        lambda sw, u, p, source_ip=None: {
+                            "tcp": True, "ssh_login": True,
+                            "prompt": ">> Standalone SLB - Main#",
+                            "banner_head": "Alteon Application Switch 5224",
+                            "version_head": "Error: unknown command", "guess": "alteon",
+                            "error": ""})
+    r = client.post("/api/switches/%d/diagnose" % sid,
+                    json={"username": "u", "password": "p"})
+    body = r.get_json()
+    assert body["ok"] and body["diag"]["guess"] == "alteon"
+    # 계정 없으면 400
+    sid2 = client.post("/api/switches/manual",
+                       json={"ip": "10.88.0.2", "name": "DIAG2", "vendor": "unknown"}).get_json()["switch_id"]
+    assert client.post("/api/switches/%d/diagnose" % sid2, json={}).status_code == 400
+
+
 def test_prompt_looks_alteon():
     assert collector._prompt_looks_alteon(">> Standalone SLB - Main")
     assert collector._prompt_looks_alteon(">> Main#")

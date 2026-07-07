@@ -1028,6 +1028,34 @@ def create_app(demo_mode=None):
             log_event("error", "facility_rematch_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/switches/<int:switch_id>/diagnose", methods=["POST"])
+    @rate_limit("diagnose_switch", max_requests=20, window_seconds=60)
+    def diagnose_switch_endpoint(switch_id):
+        """장비 진단: 실제 배너/프롬프트/show version 원문을 반환(벤더 미인식 원인 특정)."""
+        try:
+            sw = db.get_switch(db_path, switch_id)
+            if not sw:
+                return jsonify({"error": "not found"}), 404
+            data = request.get_json() or {}
+            username = data.get("username", "")
+            password = data.get("password", "")
+            if not (username and password):
+                blob = db.get_switch_credential(db_path, switch_id)
+                if blob:
+                    dec = credentials.decrypt_credential(blob)
+                    if dec and "|" in dec:
+                        username, password = dec.split("|", 1)
+            if not (username and password):
+                return jsonify({"error": "계정이 필요합니다(입력 또는 저장)"}), 400
+            src = db.get_setting(db_path, "source_ip") or None
+            res = collector.diagnose_switch(sw, username, password, source_ip=src)
+            log_event("info", "switch_diagnosed", switch_id=switch_id,
+                      guess=res.get("guess") or "unknown", error=res.get("error") or "")
+            return jsonify({"ok": True, "diag": res})
+        except Exception as e:
+            log_event("error", "diagnose_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/facility/delete-subnet", methods=["POST"])
     @rate_limit("facility_delete_subnet", max_requests=30, window_seconds=60)
     def facility_delete_subnet():

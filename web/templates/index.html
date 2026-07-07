@@ -396,6 +396,20 @@
   </div>
 
   <!-- 수동 추가 모달 -->
+  <div id="modal-diagnose" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box" style="max-width:720px">
+      <div class="modal__header">
+        <span>장비 진단 (실제 응답 원문)</span>
+        <button class="modal__close" data-close="modal-diagnose">&times;</button>
+      </div>
+      <div class="modal__body">
+        <pre id="diag-result" style="white-space:pre-wrap;word-break:break-all;font-size:12px;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;max-height:480px;overflow:auto;user-select:text"></pre>
+        <p style="font-size:11px;color:#64748b;margin-top:6px">벤더가 계속 '알 수 없음'이면 이 내용을 복사해 전달해 주세요 — 실제 프롬프트/응답 형태를 보고 인식 패턴을 맞춥니다.</p>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-add-switch" class="modal hidden">
     <div class="modal__backdrop"></div>
     <div class="modal__box">

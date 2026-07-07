@@ -21,6 +21,7 @@ document.addEventListener("click", function (e) {
   switch (action) {
     case "detail-switch": e.stopPropagation(); openDetailPanel(obj); break;
     case "edit-switch": editSwitch(obj); break;
+    case "diagnose-switch": diagnoseSwitch(nid); break;
     case "delete-switch": deleteSwitch(nid); break;
     case "collect-fw":
       // 저장된 자격증명이 있으면 모달 없이 바로 수집(매번 토큰 재입력 방지)
@@ -850,6 +851,9 @@ function renderSwitchTable(switches) {
       "<td>" +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
       "data-action='edit-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>수정</button> " +
+      "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+      "title='실제 배너/프롬프트/show version 응답을 확인(벤더 미인식 원인 파악)' " +
+      "data-action='diagnose-switch' data-id='" + sw.id + "'>진단</button> " +
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
       "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button></td></tr>";
   }).join("");
@@ -913,6 +917,31 @@ function editSwitch(sw) {
   document.getElementById("add-location").value = sw.location || "";
   document.getElementById("add-note").value = sw.note || "";
   openModal("modal-add-switch");
+}
+
+// 장비 진단 — 실제 배너/프롬프트/show version 응답을 모달로 표시
+function diagnoseSwitch(id) {
+  var prog = document.getElementById("diag-result");
+  openModal("modal-diagnose");
+  if (prog) prog.textContent = "진단 중... (SSH 접속 → 배너/프롬프트/show version 확인, 최대 30초)";
+  fetch("/api/switches/" + id + "/diagnose", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({}),
+  }).then(function (r) { return r.json(); }).then(function (res) {
+    if (!prog) return;
+    if (!res.ok) { prog.textContent = "진단 실패: " + (res.error || ""); return; }
+    var d = res.diag || {};
+    prog.textContent =
+      "TCP-22 도달: " + (d.tcp ? "성공" : "실패") + "\n" +
+      "SSH 로그인: " + (d.ssh_login ? "성공" : "실패") + "\n" +
+      "감지 결과(guess): " + (d.guess || "인식 못 함") + "\n" +
+      (d.error ? "오류: " + d.error + "\n" : "") +
+      "\n── 프롬프트(마지막 줄) ──\n" + (d.prompt || "(없음)") +
+      "\n\n── 로그인 배너(끝부분) ──\n" + (d.banner_head || "(없음)") +
+      "\n\n── show version 응답(앞부분) ──\n" + (d.version_head || "(없음)");
+  }).catch(function (e) {
+    if (prog) prog.textContent = "진단 오류: " + e;
+  });
 }
 
 function deleteSwitch(id) {
