@@ -133,6 +133,24 @@ def test_topology_firewall_multi_homed(temp_db):
     assert {l["a"] for l in fw_links} == {a, b}   # 두 스위치 모두 연결
 
 
+def test_infer_role_from_hostname():
+    """구분 미지정 시 hostname 패턴으로 계층 자동 추론."""
+    assert topology.infer_role("SKBA_F1_FABB") == "BackBone"
+    assert topology.infer_role("SKBA_F1_FASW1") == "L2 Switch"
+    assert topology.infer_role("SKBA_F1_OASVR_L4_1") == "L4 Switch"
+    assert topology.infer_role("SKBA_F1_FA_FW") == "Firewall"
+    assert topology.infer_role("CORE_L3SW_01") == "BackBone"
+    assert topology.infer_role("random-host") == ""
+
+
+def test_topology_node_inferred_device_type(temp_db):
+    """구분 미지정 스위치 노드에 추론된 device_type + inferred 플래그."""
+    bb, tps = _seed_link(temp_db)   # BACKBONE, TPS11
+    topo = topology.build_topology(temp_db)
+    bbn = [n for n in topo["nodes"] if n["id"] == bb][0]
+    assert bbn["device_type"] == "BackBone" and bbn["inferred"] is True
+
+
 def test_topology_two_tab_ui():
     """토폴로지 2탭(서버실 구성도/TPS 구역도) + 중간 카드 + 종류 아이콘."""
     html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
@@ -146,7 +164,7 @@ def test_topology_two_tab_ui():
     assert "이중화 링크" in js                   # 이중화 쌍 인식
     assert "_RANK_SEG" in js                     # 세그먼트(구역) 컨테이너 박스
     assert "L3 대역 인접" in js                  # L3 링크 구분
-    assert "방화벽" in js and "백본/L3" in js     # 범례 종류 구분
+    assert "Core Layer" in js and "Distribution Layer" in js and "Access Layer" in js  # 3-Tier 라벨
 
 
 def test_topology_api(client):

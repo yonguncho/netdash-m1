@@ -1,5 +1,16 @@
 # NetDash 릴리스 노트
 
+## v3.50.0 (2026-07-07) — 토폴로지 3-Tier 구성도 + 계층 자동 추론
+
+- **서버실 구성도를 표준 3-Tier 아키텍처 형태로.** 계층 라벨을
+  **Firewall(Gateway) → Core Layer(백본) → Distribution Layer(L3·L4) →
+  Access Layer(L2)** 로 표기(첨부 구성도 형식). L3·L4를 Distribution 계층으로 통합.
+- **구분(device_type) 미지정 시 hostname 자동 추론.** 이름 패턴으로 계층 분류:
+  FABB→Core, FASW→Access, OASVR/L4→L4, _FW→Firewall, CORE/BB→Core 등.
+  구분을 일일이 지정하지 않아도 구성도가 계층으로 나뉘어 그려짐(구분을 직접
+  지정하면 그 값이 우선).
+- 범례를 Core/Distribution/Access 명칭 + 종류 심볼로 갱신.
+
 ## v3.49.1 (2026-07-07) — NX-OS 포트 상태·속도·오류 정확도 수정(show interface 기반)
 
 - **NX-OS에서 down 포트가 up으로 표시되고 속도·CRC·IN/OUT 오류가 안 잡히던

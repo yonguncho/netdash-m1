@@ -1984,16 +1984,17 @@ var _topoData = null;    // {nodes, links}
 var _topoMode = "core";  // "core"=서버실, "tps"=TPS 구역도
 var _topoZone = null;    // TPS 모드에서 선택된 구역
 
-// 장비 종류 아이콘/색 — device_type 우선, 없으면 hostname 추론
+// 장비 종류 아이콘/색/심볼 — device_type 우선, 없으면 hostname 추론(백엔드 inferred)
+// sym: _deviceSymbol에 넘길 심볼 키(방화벽/백본/L3/L4/서버/기본)
 var _TOPO_KIND = {
-  "Firewall": { icon: "🛡", color: "#ef4444", label: "방화벽" },
-  "BackBone": { icon: "◆", color: "#a855f7", label: "백본" },
-  "L3 Switch": { icon: "◆", color: "#8b5cf6", label: "L3" },
-  "L4 Switch": { icon: "▧", color: "#f59e0b", label: "L4" },
-  "L2 Switch": { icon: "▢", color: "#14b8a6", label: "L2" },
-  "Server": { icon: "▤", color: "#3b82f6", label: "서버" },
-  "AP": { icon: "📶", color: "#22c55e", label: "AP" },
-  "_default": { icon: "▢", color: "#64748b", label: "" }
+  "Firewall": { color: "#ef4444", label: "방화벽", sym: "방화벽" },
+  "BackBone": { color: "#a855f7", label: "Core", sym: "백본" },
+  "L3 Switch": { color: "#8b5cf6", label: "Distribution", sym: "L3" },
+  "L4 Switch": { color: "#f59e0b", label: "L4", sym: "L4" },
+  "L2 Switch": { color: "#14b8a6", label: "Access", sym: "L2" },
+  "Server": { color: "#3b82f6", label: "서버", sym: "서버" },
+  "AP": { color: "#22c55e", label: "AP", sym: "L2" },
+  "_default": { color: "#64748b", label: "", sym: "L2" }
 };
 function _topoKindOf(n) {
   var dt = n.device_type || "";
@@ -2104,7 +2105,7 @@ function _drawNode(svg, n, x, y, opts) {
     "' data-basestroke='" + k.color + "' stroke-width='2.5'" +
     (isGhost ? " stroke-dasharray='5 4'" : "") + "/>");
   svg.push("<rect x='" + x + "' y='" + y + "' width='6' height='" + _CARD_H + "' rx='3' fill='" + k.color + "'/>");
-  svg.push(_deviceSymbol(k.label, x + 12, y + (_CARD_H - 24) / 2, k.color));
+  svg.push(_deviceSymbol(k.sym || "L2", x + 12, y + (_CARD_H - 24) / 2, k.color));
   svg.push("<text x='" + (x + 44) + "' y='" + (y + 24) +
     "' fill='#f1f5f9' font-size='13' font-weight='700'>" + escHtml((n.name || "").slice(0, 20)) + "</text>");
   svg.push("<text x='" + (x + 44) + "' y='" + (y + 42) +
@@ -2120,8 +2121,8 @@ function _drawNode(svg, n, x, y, opts) {
 
 function _legendHTML(extra) {
   return "<div style='display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:8px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +
-    "<span style='color:#ef4444'>🛡 방화벽</span><span style='color:#a855f7'>◆ 백본/L3</span>" +
-    "<span style='color:#f59e0b'>▧ L4</span><span style='color:#14b8a6'>▢ L2</span>" +
+    "<span style='color:#ef4444'>🛡 Firewall</span><span style='color:#a855f7'>◆ Core(백본)</span>" +
+    "<span style='color:#8b5cf6'>◆ Distribution(L3)</span><span style='color:#f59e0b'>⬡ L4</span><span style='color:#14b8a6'>▭ Access(L2)</span>" +
     "<span style='color:#22c55e'>● 정상</span><span style='color:#ef4444'>● 실패/끊김</span>" +
     (extra || "") +
     "<span style='margin-left:auto'>노드에 마우스=대역·포트·인터페이스, 클릭=상세, 휠=확대 · 드래그=이동</span></div>";
@@ -2129,10 +2130,11 @@ function _legendHTML(extra) {
 
 // ── 서버실 구성도: 이중화 쌍 인식 + 계층형(방화벽→백본/L3→L4→L2) ──────
 function _coreRank(n) {
+  // 3-Tier: 0=Firewall, 1=Core(백본), 2=Distribution(L3·L4), 3=Access(L2)
   var dt = n.device_type || "", nm = (n.name || "").toUpperCase();
-  if (n.kind === "fw") return 0;
-  if (dt === "BackBone" || dt === "L3 Switch" || /BACKBONE|BB|CORE|L3/.test(nm)) return 1;
-  if (dt === "L4 Switch" || /L4|SLB|ADC/.test(nm)) return 2;
+  if (n.kind === "fw" || dt === "Firewall") return 0;
+  if (dt === "BackBone" || /BACKBONE|\bBB\b|BB\d|CORE/.test(nm)) return 1;
+  if (dt === "L3 Switch" || dt === "L4 Switch" || /\bL3\b|\bL4\b|SLB|ADC|DIST|AGG/.test(nm)) return 2;
   return 3;
 }
 
@@ -2210,8 +2212,8 @@ function _renderCoreMap(host) {
              "' style='cursor:grab;display:block'>"];
 
   // 세그먼트(구역) 컨테이너 — 첨부 구성도처럼 계층별 라운드 박스 + 라벨
-  var _RANK_SEG = { 0: { t: "방화벽 (Gateway)", c: "#ef4444" }, 1: { t: "코어 / 백본 · L3", c: "#a855f7" },
-                    2: { t: "L4 (로드밸런서)", c: "#f59e0b" }, 3: { t: "L2 / 액세스", c: "#14b8a6" } };
+  var _RANK_SEG = { 0: { t: "Firewall (Gateway)", c: "#ef4444" }, 1: { t: "Core Layer (백본)", c: "#a855f7" },
+                    2: { t: "Distribution Layer (L3 · L4)", c: "#f59e0b" }, 3: { t: "Access Layer (L2)", c: "#14b8a6" } };
   ranks.forEach(function (r, ri) {
     var row = layout[r].ordered;
     if (!row.length) return;

@@ -39,6 +39,28 @@ def _switch_mgmt_macs(db_path, switches, ip_macs=None):
             for s in switches if s.get("ip") and s["ip"] in ip_macs}
 
 
+def infer_role(name, hostname=""):
+    """hostname/이름 패턴으로 장비 계층(구분) 추론 — device_type 미지정 시 사용.
+
+    반환: Firewall / BackBone / L3 Switch / L4 Switch / L2 Switch / "" (불명).
+    순서 중요: 백본(BB)·L4를 일반 SW보다 먼저 판별(FABB=백본, FASW=액세스).
+    """
+    import re as _re
+    # 언더스코어는 단어문자라 \b가 안 먹으므로 부분 문자열로 매칭(순서=우선순위)
+    t = ((name or "") + " " + (hostname or "")).upper()
+    if _re.search(r"FIREWALL|_FW|-FW|FW_|FW-|ASA|PALO|FORTI|UTM", t):
+        return "Firewall"
+    if _re.search(r"L4|SLB|ADC|ALTEON|OASVR", t):
+        return "L4 Switch"
+    if _re.search(r"BACKBONE|CORE|BB", t):
+        return "BackBone"
+    if _re.search(r"L3|DSW|DIST|AGGR|AGG", t):
+        return "L3 Switch"
+    if _re.search(r"FASW|ASW|ACCESS|ACC|EDGE|L2|SW", t):
+        return "L2 Switch"
+    return ""
+
+
 def _connected_subnets_by_switch(db_path, switch_ids):
     """{switch_id: [대역, ...]} — 각 스위치 최신 config 백업의 'ip address' 줄에서 도출.
 
@@ -139,11 +161,14 @@ def build_topology(db_path):
             group = ("%d공장 %s %d층" % (info["phase"], info["building_name"], info["floor"])) if info else ""
         except Exception:
             group = ""
+        # 구분(device_type) 미지정이면 hostname/이름 패턴으로 계층 자동 추론
+        dtype = s.get("device_type") or infer_role(s.get("name"), s.get("hostname"))
         nodes.append({
             "id": s["id"], "kind": "sw", "name": s.get("name"), "ip": s.get("ip"),
             "vendor": s.get("vendor"), "status": s.get("status"),
             "alert": s.get("alert") or "none",
-            "device_type": s.get("device_type") or "",
+            "device_type": dtype,
+            "inferred": not s.get("device_type") and bool(dtype),
             "subnets": subnet_map.get(s["id"], []),
             "group": group or (s.get("location") or ""),
             "depth": depth.get(s["id"], None),
