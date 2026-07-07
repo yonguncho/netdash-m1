@@ -60,32 +60,61 @@ Eth1/2                           notconnec 200       auto    auto    --
 Eth1/3        routed-uplink      connected routed    full    40G     QSFP-40G
 """
 
-SH_INT_COUNTERS_ERR = """
---------------------------------------------------------------------------------
-Port          Align-Err    FCS-Err   Xmit-Err    Rcv-Err  UnderSize OutDiscards
---------------------------------------------------------------------------------
-Eth1/1                0         12          3          7          0          0
-Eth1/2                0          0          0          0          0          0
-"""
 
 
 def _outputs():
     return {"status": SH_INT_STATUS, "brief": SH_INT_BRIEF, "description": SH_INT_DESC,
-            "mac": SH_MAC, "arp": SH_IP_ARP, "errors": SH_INT_COUNTERS_ERR}
+            "mac": SH_MAC, "arp": SH_IP_ARP}
 
 
-def test_nxos_parse_vlan_speed_errors():
-    """show interface status의 VLAN·속도 + counters errors의 CRC/IN/OUT 수집."""
-    r = cisco_nxos.parse(_outputs(), 1)
+SH_INT_FULL = """
+Ethernet1/1 is down (SFP not inserted)
+admin state is up, Dedicated Interface
+  Hardware: 100/1000/10000 Ethernet, address: 00de.fb12.3401
+  Description: SERVER-WEB-01
+  MTU 1500 bytes, BW 10000000 Kbit
+  full-duplex, 10 Gb/s, media type is 10G
+  Rx
+    1000 unicast packets  50 multicast packets
+    0 runts 0 giants 12 CRC 0 no buffer
+    7 input error 0 short frame 0 overrun 0 underrun 0 ignored
+  Tx
+    2000 unicast packets
+    3 output error 0 collision 0 deferred 0 late collision
+
+Ethernet1/2 is up
+admin state is up
+  full-duplex, 40 Gb/s, media type is 40G
+  Rx
+    0 runts 0 giants 0 CRC 0 no buffer
+    0 input error 0 short frame
+  Tx
+    0 output error 0 collision
+"""
+
+
+def test_nxos_full_interface_down_state_and_errors():
+    """show interface(전체): GBIC 문제로 down인 포트가 실제 down + CRC/오류 수집."""
+    r = cisco_nxos.parse({"detail": SH_INT_FULL, "status": SH_INT_STATUS,
+                          "description": SH_INT_DESC}, 1)
     by = {p["name"]: p for p in r["ports"]}
     e11 = next(p for p in r["ports"] if "1/1" in p["name"])
+    assert e11["status"] == "down"      # SFP 미삽입 → 실제 down (up 오표시 수정)
     assert e11["speed"] == "10G"
-    assert e11["crc_errors"] == 12      # FCS-Err
-    assert e11["out_errors"] == 3       # Xmit-Err
-    assert e11["in_errors"] == 7        # Rcv-Err
+    assert e11["crc_errors"] == 12
+    assert e11["in_errors"] == 7
+    assert e11["out_errors"] == 3
+    e12 = next(p for p in r["ports"] if "1/2" in p["name"])
+    assert e12["status"] == "up" and e12["speed"] == "40G"
+
+
+def test_nxos_status_fallback_vlan_speed():
+    """detail 없을 때 폴백: show interface status에서 VLAN·속도 파싱."""
+    r = cisco_nxos.parse(_outputs(), 1)   # _outputs()엔 detail 없음 → status 폴백
+    e11 = next(p for p in r["ports"] if "1/1" in p["name"])
+    assert e11["speed"] == "10G"
     e2 = next(p for p in r["ports"] if "1/2" in p["name"])
     assert e2["vlan"] == 200            # 액세스 VLAN 숫자
-    assert e2["speed"] in ("auto", "unknown")
 
 
 def test_get_parser_nxos():

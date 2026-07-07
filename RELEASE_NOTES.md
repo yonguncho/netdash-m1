@@ -1,5 +1,16 @@
 # NetDash 릴리스 노트
 
+## v3.49.1 (2026-07-07) — NX-OS 포트 상태·속도·오류 정확도 수정(show interface 기반)
+
+- **NX-OS에서 down 포트가 up으로 표시되고 속도·CRC·IN/OUT 오류가 안 잡히던
+  문제 수정.** 원인: `show interface brief/status`는 실제 링크 상태·오류 카운터를
+  담지 않음.
+  - 수정: 주 수집 명령을 **`show interface`(전체)** 로 전환 —
+    `EthX/Y is up/down (사유)`에서 **실제 링크 상태**, `10 Gb/s`에서 **속도**,
+    `N CRC` / `N input error` / `N output error`에서 **CRC·수신·송신 오류**를 파싱.
+    VLAN은 `show interface status`에서 병합. detail이 없으면 status→brief 폴백.
+  - 예: SFP 미삽입으로 down인 포트가 이제 정확히 'down'으로 표시.
+
 ## v3.49.0 (2026-07-07) — 웹 SSH 터미널(PuTTY형) 추가
 
 - **브라우저에서 장비에 직접 SSH 접속.** 스위치 현황의 💻 버튼 또는 상세 패널의

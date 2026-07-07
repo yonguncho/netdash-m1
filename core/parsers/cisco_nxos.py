@@ -15,14 +15,14 @@ from . import utils
 logger = logging.getLogger(__name__)
 
 COMMANDS = {
-    "status": "show interface status",       # vlan/speed 표(brief보다 정확)
-    "brief": "show interface brief",          # up/down 폴백
+    "detail": "show interface",               # 실제 up/down·속도·CRC·in/out 오류(주 소스)
+    "status": "show interface status",        # VLAN(액세스/트렁크)
+    "brief": "show interface brief",           # up/down 폴백
     "description": "show interface description",
     "mac": "show mac address-table dynamic",
     "arp": "show ip arp",
     "port_channel": "show port-channel summary",
     "inventory": "show inventory",   # 모델명(PID) — show version에 없는 표기 변형 대응
-    "errors": "show interface counters errors",   # CRC/IN/OUT 오류(표 형식)
 }
 
 _IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
@@ -31,11 +31,15 @@ _IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
 def parse(outputs, switch_id):
     utils.log_event("info", "parse_cisco_nxos", switch_id=switch_id)
     descriptions = _parse_descriptions(outputs.get("description", ""))
-    errors = _parse_counters_errors(outputs.get("errors", ""))
-    # status(show interface status)에서 vlan/speed, 없으면 brief에서 up/down 폴백
-    ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id, errors)
-    if not ports and outputs.get("brief"):
-        ports = _parse_brief(outputs.get("brief", ""), descriptions, switch_id, errors)
+    vlan_map = _vlan_map_from_status(outputs.get("status", ""))
+    # 주 소스: show interface(전체) — 실제 up/down·속도·CRC·in/out 오류.
+    ports = _parse_full(outputs.get("detail", ""), descriptions, vlan_map, switch_id)
+    if not ports:
+        # 폴백1: show interface status(vlan/speed) → 폴백2: brief(up/down)
+        errors = {}
+        ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id, errors)
+        if not ports and outputs.get("brief"):
+            ports = _parse_brief(outputs.get("brief", ""), descriptions, switch_id, errors)
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
     from . import cisco_ios  # show vlan brief 파싱은 IOS와 동일 형식
@@ -95,6 +99,101 @@ def _parse_descriptions(desc_output):
     return descriptions
 
 
+def _vlan_map_from_status(status_output):
+    """show interface status → {port: vlan(int)}. 트렁크/routed는 제외(숫자만)."""
+    vmap = {}
+    if not status_output or len(status_output) > 1_000_000:
+        return vmap
+    for i, line in enumerate(status_output.split("\n")):
+        if i > 10000 or len(line) > 500:
+            continue
+        m = re.match(r"^" + _IFACE + r"\s+(.*)$", line)
+        if not m:
+            continue
+        port = utils.normalize_port(m.group(1))
+        if not port:
+            continue
+        sm = re.search(r"\b(connected|notconnec\w*|disabled|err-?disabled|"
+                       r"noOperMem|sfpAbsent|xcvrAbsen|up|down)\b", m.group(2), re.IGNORECASE)
+        tail = m.group(2)[sm.end():].split() if sm else m.group(2).split()
+        if tail:
+            v = utils.normalize_vlan(tail[0])
+            if v:
+                vmap[port] = v
+    return vmap
+
+
+def _parse_full(detail_output, descriptions, vlan_map, switch_id):
+    """show interface(전체) → 포트별 실제 상태·속도·CRC·in/out 오류.
+
+    NX-OS 형식:
+      Ethernet1/1 is down (SFP not inserted)
+        ...
+        full-duplex, 10 Gb/s, media type is 10G
+        RX
+          0 runts 0 giants 12 CRC 0 no buffer
+          7 input error 0 short frame 0 overrun ...
+        TX
+          3 output error 0 collision ...
+    """
+    vlan_map = vlan_map or {}
+    if not detail_output or len(detail_output) > 8_000_000:
+        return []
+    blocks = {}   # {port: {...}}
+    cur = None
+    for line in detail_output.split("\n"):
+        if len(line) > 800:
+            continue
+        # 인터페이스 헤더: "Ethernet1/1 is up" / "... is down (reason)"
+        mh = re.match(r"^(" + _IFACE.strip("()") + r")\s+is\s+(up|down)\b(.*)$", line, re.IGNORECASE)
+        if mh:
+            port = utils.normalize_port(mh.group(1))
+            if not port:
+                cur = None
+                continue
+            cur = port
+            state = mh.group(2).lower()
+            reason = (mh.group(3) or "").strip()
+            # 관리 다운 여부는 아래 admin state에서, 여기선 회선 상태
+            blocks[cur] = {"status": "up" if state == "up" else "down",
+                           "reason": reason, "speed": "unknown",
+                           "crc": 0, "in_errors": 0, "out_errors": 0}
+            continue
+        if not cur or cur not in blocks:
+            continue
+        b = blocks[cur]
+        # 속도: "..., 10 Gb/s, ..." 또는 "auto-speed"
+        ms = re.search(r"([\d.]+)\s*Gb/s", line)
+        if ms:
+            b["speed"] = ms.group(1) + "G"
+        else:
+            ms2 = re.search(r"([\d.]+)\s*Mb/s", line)
+            if ms2 and b["speed"] == "unknown":
+                b["speed"] = ms2.group(1) + "M"
+        # CRC: "... N CRC ..."
+        mc = re.search(r"(\d+)\s+CRC\b", line)
+        if mc:
+            b["crc"] = int(mc.group(1))
+        # 입력 오류: "N input error" (단수/복수)
+        mi = re.search(r"(\d+)\s+input error", line)
+        if mi:
+            b["in_errors"] = int(mi.group(1))
+        # 출력 오류: "N output error"
+        mo = re.search(r"(\d+)\s+output error", line)
+        if mo:
+            b["out_errors"] = int(mo.group(1))
+    ports = []
+    for port, b in blocks.items():
+        ports.append({
+            "switch_id": switch_id, "name": port, "status": b["status"],
+            "vlan": vlan_map.get(port, 1),
+            "speed": b["speed"],
+            "description": descriptions.get(port, ""),
+            "crc_errors": b["crc"], "in_errors": b["in_errors"], "out_errors": b["out_errors"],
+        })
+    return utils.deduplicate_list(ports, lambda p: p["name"])
+
+
 def _map_status(word):
     """show interface status 키워드 → 표준 상태(connected=up 등)."""
     w = (word or "").lower()
@@ -107,35 +206,6 @@ def _map_status(word):
     if "err" in w or "flap" in w:
         return "err-disabled"
     return "unknown"
-
-
-def _parse_counters_errors(err_output):
-    """show interface counters errors → {port: {in_errors, crc, out_errors}}.
-
-    NX-OS 표 형식:
-      Port          Align-Err    FCS-Err   Xmit-Err    Rcv-Err  UnderSize OutDiscards
-      Eth1/1                0          0          0          0          0          0
-    매핑: FCS-Err=CRC, Rcv-Err=input(수신) 오류, Xmit-Err=output(송신) 오류.
-    """
-    result = {}
-    if not err_output or len(err_output) > 5_000_000:
-        return result
-    for i, line in enumerate(err_output.split("\n")):
-        if i > 20000 or len(line) > 500:
-            continue
-        # 포트 + 정수 6개(Align FCS Xmit Rcv UnderSize OutDiscards)
-        m = re.match(
-            r"^\s*(Eth\S+|mgmt\d+|Po\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
-            line)
-        if m:
-            port = utils.normalize_port(m.group(1))
-            if port:
-                result[port] = {
-                    "crc": int(m.group(3)),        # FCS-Err
-                    "out_errors": int(m.group(4)),  # Xmit-Err
-                    "in_errors": int(m.group(5)),   # Rcv-Err
-                }
-    return result
 
 
 def _parse_ports(status_output, descriptions, switch_id, errors=None):
