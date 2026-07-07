@@ -1970,8 +1970,38 @@ function renderTopology() {
   else _renderTpsMap(host);
 }
 
-// 카드(중간): 아이콘+호스트명 1줄, IP 작게, 상태 점. 대역/포트/인터페이스는 툴팁.
-var _CARD_W = 190, _CARD_H = 54;
+// 장비 심볼(SVG) — 이모지 대신 실제 네트워크 구성도 아이콘(24x24 좌상단 기준)
+function _deviceSymbol(label, x, y, color) {
+  var g = "<g transform='translate(" + x + "," + y + ")'>";
+  if (label === "방화벽") {
+    g += "<rect x='0' y='2' width='24' height='20' rx='2' fill='none' stroke='" + color + "' stroke-width='2'/>";
+    g += "<line x1='0' y1='9' x2='24' y2='9' stroke='" + color + "' stroke-width='1.5'/>";
+    g += "<line x1='0' y1='16' x2='24' y2='16' stroke='" + color + "' stroke-width='1.5'/>";
+    g += "<line x1='8' y1='2' x2='8' y2='9' stroke='" + color + "' stroke-width='1.5'/>";
+    g += "<line x1='16' y1='9' x2='16' y2='16' stroke='" + color + "' stroke-width='1.5'/>";
+    g += "<line x1='6' y1='16' x2='6' y2='22' stroke='" + color + "' stroke-width='1.5'/>";
+  } else if (label === "백본" || label === "L3") {
+    g += "<circle cx='12' cy='12' r='11' fill='none' stroke='" + color + "' stroke-width='2'/>";
+    g += "<path d='M12 4 L12 20 M4 12 L20 12' stroke='" + color + "' stroke-width='1.6'/>";
+    g += "<path d='M12 4 l-2 3 M12 4 l2 3 M20 12 l-3 -2 M20 12 l-3 2' fill='none' stroke='" + color + "' stroke-width='1.4'/>";
+  } else if (label === "L4") {
+    g += "<polygon points='12,2 22,7 22,17 12,22 2,17 2,7' fill='none' stroke='" + color + "' stroke-width='2'/>";
+    g += "<text x='12' y='16' fill='" + color + "' font-size='9' font-weight='700' text-anchor='middle'>L4</text>";
+  } else if (label === "서버") {
+    g += "<rect x='3' y='2' width='18' height='20' rx='2' fill='none' stroke='" + color + "' stroke-width='2'/>";
+    g += "<line x1='3' y1='9' x2='21' y2='9' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='3' y1='15' x2='21' y2='15' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<circle cx='7' cy='6' r='1' fill='" + color + "'/><circle cx='7' cy='12' r='1' fill='" + color + "'/>";
+  } else {
+    g += "<rect x='1' y='6' width='22' height='12' rx='2' fill='none' stroke='" + color + "' stroke-width='2'/>";
+    g += "<path d='M4 14 l0 3 M8 14 l0 3 M12 14 l0 3 M16 14 l0 3 M20 14 l0 3' stroke='" + color + "' stroke-width='1.5'/>";
+    g += "<path d='M6 6 l3 -3 M12 6 l3 -3' stroke='" + color + "' stroke-width='1.4'/>";
+  }
+  return g + "</g>";
+}
+
+// 카드(중간): 실제 심볼 + 호스트명 1줄, IP 작게, 상태 점. 대역/포트는 툴팁.
+var _CARD_W = 200, _CARD_H = 58;
 function _drawNode(svg, n, x, y, opts) {
   opts = opts || {};
   var k = _topoKindOf(n), dot = _topoStatusDot(n);
@@ -1989,22 +2019,16 @@ function _drawNode(svg, n, x, y, opts) {
     "' rx='9' fill='" + (isGhost ? "#0b1220" : "#1e293b") + "' stroke='" + k.color +
     "' data-basestroke='" + k.color + "' stroke-width='2.5'" +
     (isGhost ? " stroke-dasharray='5 4'" : "") + "/>");
-  // 좌측 종류색 띠
   svg.push("<rect x='" + x + "' y='" + y + "' width='6' height='" + _CARD_H + "' rx='3' fill='" + k.color + "'/>");
-  // 아이콘
-  svg.push("<text x='" + (x + 16) + "' y='" + (y + 24) + "' font-size='17'>" + k.icon + "</text>");
-  // 호스트명(1줄, 잘림 방지 위해 22자)
-  svg.push("<text x='" + (x + 38) + "' y='" + (y + 23) +
+  svg.push(_deviceSymbol(k.label, x + 12, y + (_CARD_H - 24) / 2, k.color));
+  svg.push("<text x='" + (x + 44) + "' y='" + (y + 24) +
     "' fill='#f1f5f9' font-size='13' font-weight='700'>" + escHtml((n.name || "").slice(0, 20)) + "</text>");
-  // IP(작게)
-  svg.push("<text x='" + (x + 38) + "' y='" + (y + 41) +
+  svg.push("<text x='" + (x + 44) + "' y='" + (y + 42) +
     "' fill='#94a3b8' font-size='11'>" + escHtml(n.ip || "") + "</text>");
-  // 상태 점
   svg.push("<circle cx='" + (x + _CARD_W - 14) + "' cy='" + (y + 16) + "' r='5' fill='" + dot + "'/>");
-  // 대역 개수 뱃지(있으면)
   if (n.subnets && n.subnets.length) {
-    svg.push("<rect x='" + (x + _CARD_W - 40) + "' y='" + (y + _CARD_H - 20) + "' width='34' height='15' rx='7' fill='#0f172a' stroke='#334155'/>");
-    svg.push("<text x='" + (x + _CARD_W - 23) + "' y='" + (y + _CARD_H - 9) +
+    svg.push("<rect x='" + (x + _CARD_W - 42) + "' y='" + (y + _CARD_H - 20) + "' width='36' height='15' rx='7' fill='#0f172a' stroke='#334155'/>");
+    svg.push("<text x='" + (x + _CARD_W - 24) + "' y='" + (y + _CARD_H - 9) +
       "' fill='#7dd3fc' font-size='9' text-anchor='middle'>" + n.subnets.length + "대역</text>");
   }
   svg.push("</g>");
@@ -2019,27 +2043,129 @@ function _legendHTML(extra) {
     "<span style='margin-left:auto'>노드에 마우스=대역·포트·인터페이스, 클릭=상세, 휠=확대 · 드래그=이동</span></div>";
 }
 
-// ── 서버실 구성도: 방화벽→백본/L3→L4→L2 계층(코어 장비만) ──────────
+// ── 서버실 구성도: 이중화 쌍 인식 + 계층형(방화벽→백본/L3→L4→L2) ──────
+function _coreRank(n) {
+  var dt = n.device_type || "", nm = (n.name || "").toUpperCase();
+  if (n.kind === "fw") return 0;
+  if (dt === "BackBone" || dt === "L3 Switch" || /BACKBONE|BB|CORE|L3/.test(nm)) return 1;
+  if (dt === "L4 Switch" || /L4|SLB|ADC/.test(nm)) return 2;
+  return 3;
+}
+
 function _renderCoreMap(host) {
   var core = _topoData.nodes.filter(_isCoreDevice);
   var coreIds = {};
   core.forEach(function (n) { coreIds[n.id] = true; });
-  var links = _topoData.links.filter(function (l) { return coreIds[l.a] && coreIds[l.b]; });
+  // 코어 링크: 노이즈 제거 위해 '양방향 확인(mutual)' 또는 방화벽 링크만
+  var links = _topoData.links.filter(function (l) {
+    if (!(coreIds[l.a] && coreIds[l.b])) return false;
+    var isFw = String(l.a)[0] === "f" || String(l.b)[0] === "f";
+    return l.mutual || isFw;
+  });
   if (!core.length) {
     host.innerHTML = _legendHTML() +
       "<p style='color:#94a3b8;padding:20px'>서버실(코어) 장비가 없습니다. 스위치 '구분'을 방화벽/백본/L3/L4로 지정하면 여기에 표시됩니다.</p>";
     _bindTopoModeButtons();
     return;
   }
-  // 계층: 종류 우선순위로 depth 부여(방화벽0, 백본/L3=1, L4=2, L2=3)
-  function _rank(n) {
-    var dt = n.device_type || "";
-    if (n.kind === "fw") return 0;
-    if (dt === "BackBone" || dt === "L3 Switch" || /BACKBONE|BB|CORE|L3/.test((n.name||"").toUpperCase())) return 1;
-    if (dt === "L4 Switch" || /L4|SLB|ADC/.test((n.name||"").toUpperCase())) return 2;
-    return 3;
+
+  var byId = {};
+  core.forEach(function (n) { byId[n.id] = n; });
+  var adj = {};
+  links.forEach(function (l) {
+    (adj[l.a] = adj[l.a] || []).push(l.b);
+    (adj[l.b] = adj[l.b] || []).push(l.a);
+  });
+
+  var byRank = {};
+  core.forEach(function (n) { var r = _coreRank(n); (byRank[r] = byRank[r] || []).push(n); });
+  var ranks = Object.keys(byRank).map(Number).sort(function (a, b) { return a - b; });
+
+  // 이중화 쌍 인식: 같은 rank에서 서로 직접 연결된 두 노드 = 쌍(붙여서 배치)
+  function _orderRank(list) {
+    var ids = {}; list.forEach(function (n) { ids[n.id] = n; });
+    var used = {}, ordered = [], pairs = {};
+    list.slice().sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); })
+      .forEach(function (n) {
+        if (used[n.id]) return;
+        var partner = (adj[n.id] || []).map(function (x) { return ids[x]; })
+          .filter(function (x) { return x && !used[x.id]; })[0];
+        used[n.id] = true; ordered.push(n);
+        if (partner) { used[partner.id] = true; ordered.push(partner); pairs[n.id] = partner.id; pairs[partner.id] = n.id; }
+      });
+    return { ordered: ordered, pairs: pairs };
   }
-  _layoutLayered(host, core, links, _rank, "서버실 구성도");
+
+  var GAP_X = 46, PAIR_GAP = 16, GAP_Y = 118;
+  var layout = {}, maxRowW = 0;
+  ranks.forEach(function (r) {
+    var res = _orderRank(byRank[r]);
+    layout[r] = res;
+    var w = 0, prev = null;
+    res.ordered.forEach(function (n) { w += _CARD_W + (prev && res.pairs[prev] === n.id ? PAIR_GAP : GAP_X); prev = n.id; });
+    maxRowW = Math.max(maxRowW, w - GAP_X);
+  });
+  var width = Math.max(960, maxRowW + 80);
+  var height = ranks.length * (_CARD_H + GAP_Y) + 60;
+
+  var pos = {};
+  ranks.forEach(function (r, ri) {
+    var res = layout[r], rowW = 0, prev = null;
+    res.ordered.forEach(function (n) { rowW += _CARD_W + (prev && res.pairs[prev] === n.id ? PAIR_GAP : GAP_X); prev = n.id; });
+    rowW -= GAP_X;
+    var px = (width - rowW) / 2; prev = null;
+    res.ordered.forEach(function (n) {
+      if (prev) px += _CARD_W + (res.pairs[prev] === n.id ? PAIR_GAP : GAP_X);
+      pos[n.id] = { x: px, y: 30 + ri * (_CARD_H + GAP_Y) };
+      prev = n.id;
+    });
+  });
+
+  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
+             " preserveAspectRatio='xMidYMid meet' viewBox='0 0 " + width + " " + height +
+             "' style='cursor:grab;display:block'>"];
+
+  links.forEach(function (l) {
+    var a = pos[l.a], b = pos[l.b];
+    if (!a || !b) return;
+    var ra = _coreRank(byId[l.a]), rb = _coreRank(byId[l.b]);
+    if (ra === rb && layout[ra] && layout[ra].pairs[l.a] === l.b) {
+      // 이중화 쌍: 두 카드 사이 굵은 수평 실선(교차 표현)
+      var yy = a.y + _CARD_H / 2;
+      var x1 = Math.min(a.x, b.x) + _CARD_W, x2 = Math.max(a.x, b.x);
+      svg.push("<line class='topo-edge' data-ea='" + l.a + "' data-eb='" + l.b +
+        "' data-tip=\"이중화 링크: " + escHtml((byId[l.a] || {}).name || "") + " ═ " + escHtml((byId[l.b] || {}).name || "") +
+        "\" x1='" + x1 + "' y1='" + yy + "' x2='" + x2 + "' y2='" + yy + "' stroke='#22d3ee' stroke-width='4'/>");
+      return;
+    }
+    var top = (a.y <= b.y) ? l.a : l.b, bot = (top === l.a) ? l.b : l.a;
+    var x1 = pos[top].x + _CARD_W / 2, y1 = pos[top].y + _CARD_H;
+    var x2 = pos[bot].x + _CARD_W / 2, y2 = pos[bot].y;
+    var mid = (y1 + y2) / 2;
+    var pa = (top === l.a) ? l.a_port : l.b_port;
+    var pb = (top === l.a) ? l.b_port : l.a_port;
+    var tip = ((byId[top] || {}).name || "") + (pa ? " [" + pa + "]" : "") + "  ↕  " +
+      ((byId[bot] || {}).name || "") + (pb ? " [" + pb + "]" : "") + (l.mutual ? "  (양방향)" : "");
+    svg.push("<path class='topo-edge' data-ea='" + l.a + "' data-eb='" + l.b + "' data-tip=\"" + escHtml(tip) +
+      "\" d='M" + x1 + "," + y1 + " C" + x1 + "," + mid + " " + x2 + "," + mid + " " + x2 + "," + y2 +
+      "' fill='none' stroke='" + (l.mutual ? "#94a3b8" : "#475569") + "' stroke-width='" + (l.mutual ? "2.5" : "1.5") + "'" +
+      (l.mutual ? "" : " stroke-dasharray='6 4'") + "/>");
+    if (pa) {
+      svg.push("<text x='" + ((x1 + x2) / 2) + "' y='" + (mid - 3) + "' fill='#7dd3fc' font-size='9' text-anchor='middle'>" +
+        escHtml((pa || "").split("(")[0].slice(0, 12)) + "</text>");
+    }
+  });
+  core.forEach(function (n) { var pp = pos[n.id]; if (pp) _drawNode(svg, n, pp.x, pp.y, {}); });
+  svg.push("</svg>");
+
+  host.innerHTML = _legendHTML("<span style='color:#22d3ee'>═ 이중화</span><span style='color:#e2e8f0;font-weight:600'>· 서버실 구성도</span>") +
+    "<div class='topo-stage'>" + svg.join("") + "</div>" +
+    "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
+    "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:460px;white-space:pre-line'></div>";
+  _bindTopoModeButtons();
+  _topoBindTips(host);
+  _topoBindNodeEvents(host);
+  _topoBindZoomPan(host, width, height);
 }
 
 // ── TPS 구역도: 구역 드롭다운 → 그 구역 액세스 스위치 트리 ──────────
@@ -2107,9 +2233,9 @@ function _layoutLayered(host, nodes, links, rankFn, title, ghostMap) {
     });
   });
 
-  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='" +
-             Math.max(460, Math.min(height, 760)) + "' viewBox='0 0 " + width + " " + height +
-             "' style='cursor:grab'>"];
+  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
+             " preserveAspectRatio='xMidYMid meet' viewBox='0 0 " + width + " " + height +
+             "' style='cursor:grab;display:block'>"];
   // 링크(포트 라벨 표시)
   links.forEach(function (l) {
     var a = pos[l.a], b = pos[l.b];
@@ -2139,13 +2265,14 @@ function _layoutLayered(host, nodes, links, rankFn, title, ghostMap) {
   svg.push("</svg>");
 
   host.innerHTML = _legendHTML(title ? "<span style='color:#e2e8f0;font-weight:600'>· " + escHtml(title) + "</span>" : "") +
-    svg.join("") +
+    "<div class='topo-stage'>" + svg.join("") + "</div>" +
     "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
     "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:460px;white-space:pre-line'></div>";
   _bindTopoModeButtons();
   _topoBindTips(host);
-
-  // 클릭: 고스트=코어탭 이동, 방화벽=방화벽 상세, 스위치=상세
+  _topoBindNodeEvents(host);
+  if (false) {
+  // (구 인라인 이벤트 — _topoBindNodeEvents로 대체)
   host.querySelectorAll(".topo-node").forEach(function (g) {
     g.addEventListener("click", function () {
       var id = g.getAttribute("data-swid");
@@ -2155,7 +2282,6 @@ function _layoutLayered(host, nodes, links, rankFn, title, ghostMap) {
       if (sw) openDetailPanel(sw);
     });
   });
-  // 호버 하이라이트(직결 라인 글로우 + 나머지 페이드)
   host.querySelectorAll(".topo-node").forEach(function (g) {
     var id = g.getAttribute("data-swid");
     g.addEventListener("mouseenter", function () {
@@ -2183,7 +2309,39 @@ function _layoutLayered(host, nodes, links, rankFn, title, ghostMap) {
       });
     });
   });
+  } // end if(false)
   _topoBindZoomPan(host, width, height);
+}
+
+function _topoBindNodeEvents(host) {
+  host.querySelectorAll(".topo-node").forEach(function (g) {
+    g.addEventListener("click", function () {
+      var id = g.getAttribute("data-swid");
+      if (g.getAttribute("data-ghost") === "1") { _topoMode = "core"; renderTopology(); return; }
+      if (g.getAttribute("data-kind") === "fw") { showFirewallDetail(parseInt(id.slice(1), 10)); return; }
+      var sw = (_switches || []).find(function (s) { return String(s.id) === String(id); });
+      if (sw) openDetailPanel(sw);
+    });
+    var id = g.getAttribute("data-swid");
+    g.addEventListener("mouseenter", function () {
+      var nb = {}; nb[id] = true;
+      host.querySelectorAll(".topo-edge").forEach(function (pth) {
+        var on = pth.getAttribute("data-ea") === id || pth.getAttribute("data-eb") === id;
+        if (on) { nb[pth.getAttribute("data-ea")] = true; nb[pth.getAttribute("data-eb")] = true; }
+        pth.style.opacity = on ? "1" : "0.1";
+        pth.style.filter = on ? "drop-shadow(0 0 4px #38bdf8)" : "";
+      });
+      host.querySelectorAll(".topo-node").forEach(function (nn) {
+        nn.style.opacity = nb[nn.getAttribute("data-swid")] ? "1" : "0.2";
+      });
+    });
+    g.addEventListener("mouseleave", function () {
+      host.querySelectorAll(".topo-edge").forEach(function (pth) { pth.style.opacity = "1"; pth.style.filter = ""; });
+      host.querySelectorAll(".topo-node").forEach(function (nn) {
+        nn.style.opacity = nn.getAttribute("data-ghost") === "1" ? "0.6" : "1";
+      });
+    });
+  });
 }
 
 function _topoBindTips(host) {

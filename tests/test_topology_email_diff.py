@@ -110,6 +110,8 @@ def test_topology_two_tab_ui():
     assert "_renderCoreMap" in js and "_renderTpsMap" in js
     assert "_isCoreDevice" in js and "_topoKindOf" in js
     assert "_drawNode" in js                     # 중간 카드
+    assert "_deviceSymbol" in js                 # 실제 장비 심볼(SVG)
+    assert "이중화 링크" in js                   # 이중화 쌍 인식
     assert "방화벽" in js and "백본/L3" in js     # 범례 종류 구분
 
 
