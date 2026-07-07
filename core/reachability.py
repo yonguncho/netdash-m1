@@ -20,6 +20,7 @@ _thread = None
 _stop = False
 _lock = threading.Lock()
 _state = {}          # {switch_id: True(도달)/False(불가)} — 미확인은 키 없음
+_fw_state = {}       # {firewall_id: bool} — 방화벽은 관리 포트(443 등)로 확인
 
 _CONCURRENCY = 10    # 동시 확인 상한(부하 분산)
 _TCP_TIMEOUT = 3
@@ -29,6 +30,12 @@ def get_state():
     """{switch_id: bool} 스냅샷(미확인 스위치는 미포함)."""
     with _lock:
         return dict(_state)
+
+
+def get_fw_state():
+    """{firewall_id: bool} 스냅샷(미확인 방화벽은 미포함)."""
+    with _lock:
+        return dict(_fw_state)
 
 
 def _check_tcp(ip, port=22, timeout=_TCP_TIMEOUT):
@@ -41,9 +48,7 @@ def _check_tcp(ip, port=22, timeout=_TCP_TIMEOUT):
 
 def _sweep(db_path):
     """등록 스위치 전체를 동시 _CONCURRENCY개 제한으로 확인, 전이 시 이벤트."""
-    switches = db.get_switches(db_path)
-    if not switches:
-        return
+    switches = db.get_switches(db_path) or []
     sem = threading.Semaphore(_CONCURRENCY)
     threads = []
 
@@ -65,11 +70,41 @@ def _sweep(db_path):
                                  switch_id=sid, label=sw.get("name"),
                                  message="스위치 도달 복구: %s" % (sw.get("name") or sid))
 
+    # 방화벽도 함께 감시 — 관리 포트(등록 포트, 기본 443)로 TCP 핸드셰이크만
+    try:
+        firewalls = db.list_firewalls(db_path)
+    except Exception:
+        firewalls = []
+
+    def _one_fw(fw):
+        with sem:
+            ok = _check_tcp(fw.get("host"), fw.get("port") or 443)
+        fid = fw["id"]
+        with _lock:
+            prev = _fw_state.get(fid)
+            _fw_state[fid] = ok
+        if prev is None:
+            return
+        if prev and not ok:
+            db.save_device_event(db_path, "firewall_unreachable", "warning",
+                                 label=fw.get("name"),
+                                 message="방화벽 도달 불가(TCP-%s): %s" % (
+                                     fw.get("port") or 443, fw.get("name") or fid))
+        elif ok and not prev:
+            db.save_device_event(db_path, "firewall_recovered", "info",
+                                 label=fw.get("name"),
+                                 message="방화벽 도달 복구: %s" % (fw.get("name") or fid))
+
     for sw in switches:
         t = threading.Thread(target=_one, args=(sw,), daemon=True)
         t.start()
         threads.append(t)
         time.sleep(0.05)                 # 시작 시점 분산(버스트 방지)
+    for fw in firewalls:
+        t = threading.Thread(target=_one_fw, args=(fw,), daemon=True)
+        t.start()
+        threads.append(t)
+        time.sleep(0.05)
     for t in threads:
         t.join(timeout=_TCP_TIMEOUT + 5)
 

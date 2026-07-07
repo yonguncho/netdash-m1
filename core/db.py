@@ -1294,6 +1294,13 @@ def set_switch_status(db_path, switch_id, status, error=None):
                     cursor.execute(
                         "UPDATE switches SET status = ?, last_error = ? WHERE id = ?",
                         (status, (str(error) if error else "")[:300], switch_id))
+                elif status == "done":
+                    # FIX: 수집 성공 시 last_collected 갱신 — 이전엔 갱신되지 않아
+                    # '마지막 수집' 컬럼이 항상 비어 있었음
+                    cursor.execute(
+                        "UPDATE switches SET status = ?, last_error = NULL, "
+                        "last_collected = CURRENT_TIMESTAMP WHERE id = ?",
+                        (status, switch_id))
                 else:
                     cursor.execute(
                         "UPDATE switches SET status = ?, last_error = NULL WHERE id = ?",

@@ -466,7 +466,7 @@ function renderRackView(switches) {
     var racksHtml = rkeys.map(function (t) {
       var units = racks[t].map(function (d) {
         if (d.k === "fw") {
-          var f = d.o, fsc = _fwStatusMeta[f.status] || "new";
+          var f = d.o, fsc = f.reachable === false ? "critical" : (_fwStatusMeta[f.status] || "new");
           return "<div class='rack-unit rack-unit--" + fsc + "' data-action='detail-fw' data-id='" + f.id + "'>" +
             "<span class='rack-unit__name'>🛡 " + escHtml(f.name) + "</span>" +
             "<span class='rack-unit__ip'>" + escHtml(f.host) + "</span></div>";
@@ -532,11 +532,15 @@ var _ROOM_EMPTY = "서버실 위치(A09U27 형식)가 지정된 장비가 없습
 
 // 방화벽 카드 — 스위치 카드(swCardHTML)와 동일한 골격으로 통일(현황판·서버실 공용).
 function _fwCardHTML(f) {
-  var sc = _fwStatusMeta[f.status] || "new";
+  // 도달성 감시에서 끊김이면 카드 전체를 위험 상태로 표시(현황판/서버실 공통)
+  var sc = f.reachable === false ? "critical" : (_fwStatusMeta[f.status] || "new");
+  var reachBadge = f.reachable === false
+    ? "<span class='sw-card__alert-badge badge--critical' title='도달성 감시: 관리 포트 TCP 응답 없음'>🔴 연결 끊김</span>"
+    : "";
   var locLine = f.tps_location ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>📍 " + escHtml(f.tps_location) + "</span>"
     : f.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
     : f.location ? "<span style='font-size:10px'>" + escHtml(f.location) + "</span>" : "";
-  return "<div class='sw-card sw-card--" + sc + "'>" +
+  return "<div class='sw-card sw-card--" + sc + "'>" + reachBadge +
     "<div class='sw-card__icon'><div class='sw-icon'><div class='sw-icon__ports'>" +
     renderMiniPorts({ status: f.status }) +
     "</div></div></div>" +
@@ -609,7 +613,7 @@ function renderRoomRackView(switches, firewalls) {
     var units = racks[rk].slice().sort(function (a, b) { return (b.o.room_unit || 0) - (a.o.room_unit || 0); });
     var unitsHtml = units.map(function (u) {
       if (u.k === "fw") {
-        var f = u.o, fsc = _fwStatusMeta[f.status] || "new";
+        var f = u.o, fsc = f.reachable === false ? "critical" : (_fwStatusMeta[f.status] || "new");
         return "<div class='rack-unit rack-unit--" + fsc + "' data-action='detail-fw' data-id='" + f.id + "'>" +
           "<span class='rack-unit__u'>U" + escHtml(String(f.room_unit)) + "</span>" +
           "<span class='rack-unit__name'>🛡 " + escHtml(f.name) + "</span>" +
@@ -1376,7 +1380,7 @@ function renderFirewalls(firewalls) {
   var tbody = document.getElementById("firewall-table-body");
   if (!tbody) return;
   if (!firewalls.length) {
-    tbody.innerHTML = "<tr><td colspan=8 style='color:#64748b'>등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>";
+    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>";
     return;
   }
   tbody.innerHTML = firewalls.map(function(f) {
@@ -1390,8 +1394,11 @@ function renderFirewalls(firewalls) {
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
       "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(f.status || "new") + "</span></td>" +
-      "<td>" + (f.interface_count != null ? f.interface_count : "-") + "</td>" +
-      "<td>" + (f.arp_count != null ? f.arp_count : "-") + "</td>" +
+      "<td>" + (f.reachable === false
+        ? "<span class='status-badge status-badge--critical' title='도달성 감시: 관리 포트 TCP 응답 없음'>🔴 끊김</span>"
+        : f.reachable === true
+          ? "<span class='status-badge status-badge--ok'>🟢 연결됨</span>"
+          : "<span class='status-badge status-badge--new' title='감시 첫 주기(최대 1분) 대기 중'>확인 중</span>") + "</td>" +
       "<td>" +
         "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
         "data-action='collect-fw' data-payload='" + fjson + "'>수집</button> " +
@@ -1998,7 +2005,7 @@ function renderTopology(nodes, links) {
     svg.push("<g class='topo-node' data-swid='" + n.id + "' data-tip=\"" + tip + "\" style='cursor:pointer'>");
     svg.push("<rect x='" + p.x + "' y='" + p.y + "' width='" + NODE_W + "' height='" + NODE_H +
       "' rx='8' fill='" + (isRoot ? "#27314a" : "#1e293b") + "' stroke='" + statusColor(n) +
-      "' stroke-width='" + (isRoot ? 3 : 2) + "'/>");
+      "' data-basestroke='" + statusColor(n) + "' stroke-width='" + (isRoot ? 3 : 2) + "'/>");
     if (isRoot) {
       svg.push("<text x='" + (p.x + 10) + "' y='" + (p.y + 20) + "' font-size='13'>🏢</text>");
     }
@@ -2057,19 +2064,47 @@ function renderTopology(nodes, links) {
     el.addEventListener("mousemove", function (e) { showTip(e, el.getAttribute("data-tip")); });
     el.addEventListener("mouseleave", function () { tipEl.style.display = "none"; });
   });
+  // 노드 호버: 직결 라인은 청록 글로우로 선명하게, 무관한 노드/라인은 흐리게 —
+  // 어느 장비가 어디에 직결돼 있는지 한눈에 식별(자비스식 하이라이트)
   host.querySelectorAll(".topo-node").forEach(function (g) {
     var id = g.getAttribute("data-swid");
     g.addEventListener("mouseenter", function () {
+      var neighbors = {};
+      neighbors[id] = true;
       host.querySelectorAll(".topo-edge").forEach(function (p) {
-        var on = p.getAttribute("data-ea") === id || p.getAttribute("data-eb") === id;
+        var ea = p.getAttribute("data-ea"), eb = p.getAttribute("data-eb");
+        var on = ea === id || eb === id;
+        if (on) { neighbors[ea] = true; neighbors[eb] = true; }
         p.setAttribute("stroke", on ? "#38bdf8" : "#334155");
-        p.setAttribute("stroke-width", on ? "3" : "1.5");
+        p.setAttribute("stroke-width", on ? "3.5" : "1");
+        p.style.opacity = on ? "1" : "0.12";
+        p.style.filter = on ? "drop-shadow(0 0 4px #38bdf8)" : "";
+      });
+      host.querySelectorAll(".topo-node").forEach(function (n) {
+        var nid = n.getAttribute("data-swid");
+        var hot = !!neighbors[nid];
+        n.style.opacity = hot ? "1" : "0.15";
+        var rect = n.querySelector("rect");
+        if (rect) {
+          if (hot && nid !== id) rect.setAttribute("stroke", "#38bdf8");   // 직결 이웃 강조
+          if (nid === id) rect.setAttribute("stroke-width", "3.5");        // 자기 자신 강조
+        }
       });
     });
     g.addEventListener("mouseleave", function () {
       host.querySelectorAll(".topo-edge").forEach(function (p) {
         p.setAttribute("stroke", "#64748b");
         p.setAttribute("stroke-width", "2");
+        p.style.opacity = "1";
+        p.style.filter = "";
+      });
+      host.querySelectorAll(".topo-node").forEach(function (n) {
+        n.style.opacity = "1";
+        var rect = n.querySelector("rect");
+        if (rect) {
+          rect.setAttribute("stroke", rect.getAttribute("data-basestroke") || "#64748b");
+          rect.setAttribute("stroke-width", "2");
+        }
       });
     });
   });

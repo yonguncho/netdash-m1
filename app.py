@@ -100,6 +100,21 @@ def validate_ipv4(ip_str, allowed_ip_ranges=None):
 _rate_limit_tracker = {}
 _rate_limit_lock = __import__("threading").Lock()
 
+def _client_ip():
+    """실사용자 IP 판별 — 프록시/포워딩 뒤에서도 이더넷 IP가 기록되도록.
+
+    remote_addr가 127.0.0.1이어도 X-Forwarded-For / X-Real-IP 헤더가 있으면
+    그 값을 우선한다(첫 항목 = 원 클라이언트). 없으면 remote_addr 그대로.
+    """
+    xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    if xff:
+        return xff[:64]
+    xri = (request.headers.get("X-Real-IP") or "").strip()
+    if xri:
+        return xri[:64]
+    return request.remote_addr or "unknown"
+
+
 def rate_limit(endpoint, max_requests=5, window_seconds=60):
     """HARDENING (CWE-400): Simple rate limiter decorator.
 
@@ -109,7 +124,7 @@ def rate_limit(endpoint, max_requests=5, window_seconds=60):
         @wraps(f)
         def wrapper(*args, **kwargs):
             # Get identifier: IP + token (or IP alone)
-            ip = request.remote_addr or "unknown"
+            ip = _client_ip()
             token = request.headers.get("X-API-Token", "")
             identifier = f"{ip}:{token}" if token else ip
 
@@ -274,7 +289,8 @@ def create_app(demo_mode=None):
             if response.status_code < 400:
                 label = _audit_label(request.method, request.path)
                 if label:
-                    db.save_audit(db_path, request.remote_addr, label,
+                    # 실사용자 IP(X-Forwarded-For 우선) — 127.0.0.1만 찍히던 문제 해결
+                    db.save_audit(db_path, _client_ip(), label,
                                   target=request.path, method=request.method,
                                   path=request.path)
         except Exception:
@@ -1517,6 +1533,15 @@ def create_app(demo_mode=None):
                     f["room_rack"] = room["rack"]
                     f["room_unit"] = room["unit"]
                     f["room_label"] = room["label"]
+            # 도달성 감시 결과 주입(관리 포트 TCP — True 도달/False 불가/없으면 미확인)
+            try:
+                from core import reachability
+                fr = reachability.get_fw_state()
+                for f in fws:
+                    if f["id"] in fr:
+                        f["reachable"] = fr[f["id"]]
+            except Exception:
+                pass
             return jsonify({"firewalls": fws})
         except Exception as e:
             log_event("error", "firewalls_list_error", error=collector._sanitize_error_msg(str(e)))
