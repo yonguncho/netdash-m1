@@ -2,6 +2,7 @@ import queue
 import threading
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
@@ -149,13 +150,22 @@ def _is_unknown_vendor(vendor):
 
 
 def _prompt_looks_alteon(text):
-    """Alteon 메뉴형 CLI 프롬프트('>> ... Main#' 또는 '>>'로 시작) 판별.
+    """Alteon 메뉴형 CLI 프롬프트 판별.
 
-    netmiko는 send_command 결과에서 프롬프트를 잘라내므로 '출력 텍스트'에는
-    시그니처가 남지 않는다 → 접속 직후 '프롬프트 자체'를 검사하는 것이 확실하다.
+    실장비(5224/Standard ADC) 확인 형태: '>> SKBA_... - Standard ADC - Main#'
+    — '>>' 접두는 캡처 과정에서 잘릴 수 있으므로 '- Main#' 꼬리와
+    'Standard ADC'/'Application Switch' 키워드도 함께 본다.
+    netmiko는 send_command 결과에서 프롬프트를 잘라내므로 '출력 텍스트'가 아니라
+    접속 직후 '프롬프트 자체'를 검사하는 것이 확실하다.
     """
     t = (text or "").strip()
-    return bool(t.startswith(">>") or re.search(r">>\s?[\w\s.-]*Main#?\s*$", t))
+    if not t:
+        return False
+    if t.startswith(">>"):
+        return True
+    if re.search(r"-\s*Main#?\s*$", t):          # '... - Main#' 꼬리(Alteon 고유)
+        return True
+    return bool(re.search(r"standard adc|application switch", t, re.IGNORECASE))
 
 
 def _looks_like_alteon(outputs):
@@ -166,7 +176,8 @@ def _looks_like_alteon(outputs):
     출력 어디든 Alteon 흔적이 보이면 alteon으로 교정해 전용 수집으로 재수집.
     """
     joined = "\n".join(str(v) for v in (outputs or {}).values())[:20000]
-    return bool(re.search(r">>\s?[\w\s.-]*Main#|Alteon|Radware", joined, re.IGNORECASE))
+    return bool(re.search(r">>\s?[\w\s.-]*Main#|-\s*Main#|Alteon|Radware|Standard ADC",
+                          joined, re.IGNORECASE))
 
 
 def _detect_vendor_from_version(text):
@@ -185,7 +196,7 @@ def _detect_vendor_from_version(text):
         return "extreme_exos"
     if "junos" in t or "juniper" in t:
         return "juniper_junos"
-    if "alteon" in t or "radware" in t:
+    if "alteon" in t or "radware" in t or "standard adc" in t:
         return "alteon"
     if "ios-xe" in t or "ios xe" in t or "cisco ios" in t or "ios software" in t or "cisco" in t:
         return "cisco_ios"
@@ -461,6 +472,14 @@ def _worker_loop():
                         if "alteon" in str(first_err).lower():
                             utils.log_event("info", "alteon_direct_fallback",
                                             switch_id=switch_id)
+                            # 벤더를 먼저 저장 — 이번 재수집이 (세션 제한 등으로)
+                            # 실패해도 다음 수집부터는 처음부터 alteon 경로
+                            # (로그인 1회)로 동작한다.
+                            try:
+                                db.update_switch(db_path, switch_id, vendor="alteon")
+                            except Exception:
+                                pass
+                            time.sleep(3)   # 직전 세션 정리 대기(관리 세션 제한 회피)
                             outputs = _run_with_timeout(
                                 _alteon_collect, hard_to,
                                 switch, username, password, source_ip=source_ip)

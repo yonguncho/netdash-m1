@@ -1049,8 +1049,19 @@ def create_app(demo_mode=None):
                 return jsonify({"error": "계정이 필요합니다(입력 또는 저장)"}), 400
             src = db.get_setting(db_path, "source_ip") or None
             res = collector.diagnose_switch(sw, username, password, source_ip=src)
+            # 진단이 벤더를 알아냈고 현재 미지정/오지정이면 자동 교정
+            # → 다음 수집부터 올바른 경로(예: Alteon 전용 수집)로 동작
+            guess = res.get("guess")
+            if guess and guess != (sw.get("vendor") or "").lower():
+                try:
+                    db.update_switch(db_path, switch_id, vendor=guess)
+                    res["vendor_corrected"] = guess
+                    log_event("info", "vendor_corrected_by_diagnose",
+                              switch_id=switch_id, vendor=guess)
+                except Exception:
+                    pass
             log_event("info", "switch_diagnosed", switch_id=switch_id,
-                      guess=res.get("guess") or "unknown", error=res.get("error") or "")
+                      guess=guess or "unknown", error=res.get("error") or "")
             return jsonify({"ok": True, "diag": res})
         except Exception as e:
             log_event("error", "diagnose_error", error=collector._sanitize_error_msg(str(e)))

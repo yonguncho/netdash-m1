@@ -205,9 +205,36 @@ def test_prompt_looks_alteon():
     assert collector._prompt_looks_alteon(">> Standalone SLB - Main")
     assert collector._prompt_looks_alteon(">> Main#")
     assert collector._prompt_looks_alteon(">>ASw5224 - Main#")
+    # 실장비(진단 원문): '>>'가 잘려 캡처돼도 '- Main#' 꼬리/Standard ADC로 인식
+    assert collector._prompt_looks_alteon("SKBA_F1_OASVR_L4_1 - Standard ADC - Main#")
+    assert collector._prompt_looks_alteon(">> SKBA_F1_OASVR_L4_1 - Standard ADC - Main#")
     assert not collector._prompt_looks_alteon("SW-A09#")
     assert not collector._prompt_looks_alteon("X460.1 #")
     assert not collector._prompt_looks_alteon("")
+
+
+def test_detect_vendor_standard_adc():
+    assert collector._detect_vendor_from_version(
+        "SKBA_F1_OASVR_L4_1 - Standard ADC - Main#") == "alteon"
+
+
+def test_diagnose_autocorrects_vendor(client, monkeypatch):
+    """진단이 벤더를 알아내면 DB 자동 교정 → 다음 수집부터 올바른 경로."""
+    from core import collector as _col, db as _db
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    sid = client.post("/api/switches/manual",
+                      json={"ip": "10.88.0.5", "name": "L4-AC", "vendor": "unknown"}).get_json()["switch_id"]
+    monkeypatch.setattr(_col, "diagnose_switch",
+                        lambda sw, u, p, source_ip=None: {
+                            "tcp": True, "ssh_login": True,
+                            "prompt": "SKBA_F1_OASVR_L4_1 - Standard ADC - Main#",
+                            "banner_head": "", "version_head": "", "guess": "alteon",
+                            "error": ""})
+    r = client.post("/api/switches/%d/diagnose" % sid,
+                    json={"username": "u", "password": "p"})
+    assert r.get_json()["diag"]["vendor_corrected"] == "alteon"
+    assert _db.get_switch(dbp, sid)["vendor"] == "alteon"
 
 
 def test_worker_alteon_prompt_fallback(temp_db, monkeypatch):

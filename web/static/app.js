@@ -935,6 +935,7 @@ function diagnoseSwitch(id) {
       "TCP-22 도달: " + (d.tcp ? "성공" : "실패") + "\n" +
       "SSH 로그인: " + (d.ssh_login ? "성공" : "실패") + "\n" +
       "감지 결과(guess): " + (d.guess || "인식 못 함") + "\n" +
+      (d.vendor_corrected ? "→ 벤더를 '" + d.vendor_corrected + "'(으)로 자동 교정했습니다. 이제 재수집하세요.\n" : "") +
       (d.error ? "오류: " + d.error + "\n" : "") +
       "\n── 프롬프트(마지막 줄) ──\n" + (d.prompt || "(없음)") +
       "\n\n── 로그인 배너(끝부분) ──\n" + (d.banner_head || "(없음)") +
