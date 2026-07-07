@@ -435,6 +435,11 @@ def init_schema(db_path):
                     cursor.execute(f"ALTER TABLE facility_hosts ADD COLUMN {col} {definition}")
                 except Exception:
                     pass
+            # 방화벽 인터페이스: secondary IP 목록(JSON 배열 문자열)
+            try:
+                cursor.execute("ALTER TABLE firewall_interfaces ADD COLUMN secondary_ips TEXT")
+            except Exception:
+                pass
             conn.commit()
             utils.log_event("info", "schema_created", tables=8)
 
@@ -1904,16 +1909,30 @@ def set_firewall_status(db_path, firewall_id, status):
 
 
 def save_firewall_interfaces(db_path, firewall_id, interfaces):
-    """방화벽 인터페이스 교체 저장 (firewall_id 기준 전체 갱신)."""
+    """방화벽 인터페이스 교체 저장 (firewall_id 기준 전체 갱신). secondary_ips는 JSON 저장."""
+    import json as _json
     with _db_lock:
         with get_db(db_path) as conn:
             conn.execute("DELETE FROM firewall_interfaces WHERE firewall_id=?", (firewall_id,))
+            has_sec = False
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(firewall_interfaces)").fetchall()}
+                has_sec = "secondary_ips" in cols
+            except Exception:
+                pass
             for it in interfaces:
-                conn.execute(
-                    "INSERT INTO firewall_interfaces (firewall_id, name, ip, mask, vdom_zone) VALUES (?,?,?,?,?)",
-                    (firewall_id, it.get("name"), it.get("ip"), it.get("mask"),
-                     it.get("vdom_zone") or it.get("vdom") or it.get("zone")),
-                )
+                zone = it.get("vdom_zone") or it.get("vdom") or it.get("zone")
+                sec = it.get("secondary_ips") or []
+                if has_sec:
+                    conn.execute(
+                        "INSERT INTO firewall_interfaces (firewall_id, name, ip, mask, vdom_zone, secondary_ips) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (firewall_id, it.get("name"), it.get("ip"), it.get("mask"), zone,
+                         _json.dumps(sec) if sec else None))
+                else:
+                    conn.execute(
+                        "INSERT INTO firewall_interfaces (firewall_id, name, ip, mask, vdom_zone) VALUES (?,?,?,?,?)",
+                        (firewall_id, it.get("name"), it.get("ip"), it.get("mask"), zone))
 
 
 def save_firewall_arp(db_path, firewall_id, arp_entries):
@@ -1929,10 +1948,18 @@ def save_firewall_arp(db_path, firewall_id, arp_entries):
 
 
 def get_firewall_interfaces(db_path, firewall_id):
+    import json as _json
     with get_db(db_path) as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM firewall_interfaces WHERE firewall_id=? ORDER BY id", (firewall_id,))
-        return [dict(r) for r in cur.fetchall()]
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        raw = r.get("secondary_ips")
+        try:
+            r["secondary_ips"] = _json.loads(raw) if raw else []
+        except (ValueError, TypeError):
+            r["secondary_ips"] = []
+    return rows
 
 
 def get_firewall_arp(db_path, firewall_id):

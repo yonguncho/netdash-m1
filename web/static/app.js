@@ -1454,15 +1454,22 @@ function showFirewallDetail(fid) {
       var ifaces = data.interfaces || [];
       var arp = data.arp || [];
       var ifHtml = ifaces.length
-        ? "<table class='data-table'><thead><tr><th>인터페이스</th><th>IP</th><th>마스크</th><th>VDOM/Zone</th></tr></thead><tbody>" +
+        ? "<table class='data-table'><thead><tr><th>인터페이스</th><th>IP (Primary / Secondary)</th><th>Prefix</th><th>VDOM/Zone</th></tr></thead><tbody>" +
           ifaces.map(function(i) {
-            // secondary IP 행은 파란 뱃지로 구분(2nd)
-            var isSec = i.type === "secondary" || /\(2nd\)/.test(i.name || "");
-            var nameCell = escHtml(i.name) + (isSec
-              ? " <span class='status-badge status-badge--new' style='font-size:10px'>2nd</span>" : "");
-            return "<tr" + (isSec ? " style='background:#f0f9ff'" : "") + "><td>" + nameCell +
-              "</td><td><code>" + escHtml(i.ip || "-") + "</code></td><td>" +
-              escHtml(i.mask || "-") + "</td><td>" + escHtml(i.vdom_zone || "-") + "</td></tr>";
+            // primary + secondary IP를 한 칸에 위·아래로. 마스크는 prefix(/N).
+            var pfx = _fmtPrefix(i.mask);
+            var ipStack = "<div><code>" + escHtml(i.ip || "-") + "</code>" +
+              (pfx ? "<span style='color:#94a3b8'>" + pfx + "</span>" : "") + "</div>";
+            var secs = i.secondary_ips || [];
+            secs.forEach(function (s) {
+              // s는 "ip/prefix" 또는 "ip"
+              var parts = String(s).split("/");
+              ipStack += "<div style='color:#0369a1'><code>" + escHtml(parts[0]) + "</code>" +
+                (parts[1] ? "<span style='color:#94a3b8'>/" + escHtml(parts[1]) + "</span>" : "") +
+                " <span class='status-badge status-badge--new' style='font-size:9px'>2nd</span></div>";
+            });
+            return "<tr><td>" + escHtml(i.name) + "</td><td>" + ipStack + "</td><td>" +
+              (pfx || "-") + "</td><td>" + escHtml(i.vdom_zone || "-") + "</td></tr>";
           }).join("") + "</tbody></table>"
         : "<p style='color:#64748b'>인터페이스 정보 없음</p>";
       var arpHtml = arp.length
@@ -2618,6 +2625,19 @@ function escHtml(s) {
 function fmtTime(ts) {
   if (!ts) return "-";
   try { return new Date(ts).toLocaleString("ko-KR"); } catch(e) { return String(ts); }
+}
+// 넷마스크/프리픽스 → "/N" 표기. 변환 불가 시 원문(있으면 앞에 /) 반환.
+function _fmtPrefix(mask) {
+  if (mask == null || mask === "") return "";
+  var m = String(mask).trim().replace(/^\//, "");
+  if (/^\d+$/.test(m)) return "/" + m;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(m)) {
+    var bits = m.split(".").map(function (o) {
+      return ("00000000" + (parseInt(o, 10) || 0).toString(2)).slice(-8);
+    }).join("");
+    if (!/01/.test(bits)) return "/" + (bits.split("1").length - 1);
+  }
+  return "/" + m;
 }
 
 // ─── M11: PC 이더넷 IP 표시 ──────────────────────────────────────

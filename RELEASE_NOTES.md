@@ -1,5 +1,13 @@
 # NetDash 릴리스 노트
 
+## v3.44.0 (2026-07-07) — 방화벽 인터페이스 Primary/Secondary IP 통합 표기 + Prefix
+
+- **secondary IP를 같은 인터페이스 행에 통합.** 별도 '(2nd)' 행 대신
+  port1의 IP 칸에 **Primary IP(위) / Secondary IP(아래, 파란색 2nd 뱃지)** 로
+  스택 표시.
+- **마스크를 Prefix로 표기.** 넷마스크(255.255.255.0)가 아니라 **/24** 형식으로
+  통일(전 인터페이스, secondary 포함).
+
 ## v3.43.0 (2026-07-07) — 방화벽 secondary IP 수집 + 설비 '포트 설명' 표기
 
 - **FortiGate secondary interface IP 수집.** cmdb의 `secondaryip` 목록을 읽어

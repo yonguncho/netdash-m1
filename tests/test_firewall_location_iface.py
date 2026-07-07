@@ -15,7 +15,8 @@ APP_JS = ROOT / "web" / "static" / "app.js"
 
 # ─── FortiGate 인터페이스 IP ─────────────────────────────
 def test_fortigate_split_ip_mask():
-    assert fortigate._split_ip_mask("10.0.0.1 255.255.255.0") == ("10.0.0.1", "255.255.255.0")
+    # v3.44: 마스크는 항상 prefix 숫자로 정규화
+    assert fortigate._split_ip_mask("10.0.0.1 255.255.255.0") == ("10.0.0.1", "24")
     assert fortigate._split_ip_mask("10.0.0.1/24") == ("10.0.0.1", "24")
     assert fortigate._split_ip_mask("10.0.0.1") == ("10.0.0.1", "")
     assert fortigate._split_ip_mask("") == ("", "")
@@ -30,7 +31,7 @@ def test_fortigate_parse_monitor_interfaces_dict():
     }
     ifaces = fortigate._parse_monitor_interfaces(results)
     by = {i["name"]: i for i in ifaces}
-    assert by["port1"]["ip"] == "10.10.10.1" and by["port1"]["mask"] == "255.255.255.0"
+    assert by["port1"]["ip"] == "10.10.10.1" and by["port1"]["mask"] == "24"
     assert "port2" not in by
     assert by["port3"]["ip"] == "192.168.1.1" and by["port3"]["mask"] == "24"
 

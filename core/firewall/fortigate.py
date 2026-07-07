@@ -109,17 +109,40 @@ def get_arp_table(host, port=443, token="", username="", password="", verify_ssl
     return _fetch_arp(s, base, host)
 
 
+def _mask_to_prefix(mask):
+    """넷마스크/프리픽스 문자열을 프리픽스 숫자 문자열로 정규화.
+
+    '255.255.255.0'→'24', '24'→'24', '/24'→'24'. 변환 불가 시 원문 유지.
+    """
+    if mask in (None, ""):
+        return ""
+    m = str(mask).strip().lstrip("/")
+    if m.isdigit():
+        return m
+    if m.count(".") == 3:
+        try:
+            bits = "".join(bin(int(o))[2:].zfill(8) for o in m.split("."))
+            if "01" not in bits:                 # 연속 1 마스크만 유효
+                return str(bits.count("1"))
+        except (ValueError, TypeError):
+            pass
+    return m
+
+
 def _split_ip_mask(val):
-    """'10.0.0.1 255.255.255.0' / '10.0.0.1/24' / '10.0.0.1' → (ip, mask)."""
+    """'10.0.0.1 255.255.255.0' / '10.0.0.1/24' / '10.0.0.1' → (ip, prefix).
+
+    마스크는 항상 프리픽스 숫자('24')로 정규화해 반환.
+    """
     if not val:
         return "", ""
     val = str(val).strip()
     if " " in val:
         p = val.split()
-        return p[0], (p[1] if len(p) > 1 else "")
+        return p[0], _mask_to_prefix(p[1] if len(p) > 1 else "")
     if "/" in val:
         p = val.split("/")
-        return p[0], p[1]
+        return p[0], _mask_to_prefix(p[1])
     return val, ""
 
 
@@ -132,7 +155,7 @@ def _parse_monitor_interfaces(results):
             continue
         ip, mask = _split_ip_mask(e.get("ip"))
         if not mask and e.get("mask") not in (None, ""):
-            mask = str(e.get("mask"))
+            mask = _mask_to_prefix(e.get("mask"))
         if ip and ip != "0.0.0.0":
             ifaces.append({
                 "name": e.get("name", "") or e.get("interface_name", ""),
@@ -144,27 +167,22 @@ def _parse_monitor_interfaces(results):
 
 
 def _cmdb_secondaries(results):
-    """cmdb 인터페이스 결과에서 secondary IP 행 추출.
+    """cmdb 인터페이스 결과에서 secondary IP 목록 추출.
 
-    FortiGate는 인터페이스당 secondaryip 목록을 가질 수 있다 —
-    [{"name":"port1 (2nd)","ip":...,"mask":...,"type":"secondary"}] 형태로 반환.
+    {인터페이스명: ["ip/prefix", ...]} — 같은 인터페이스의 primary 행에 병합한다.
     """
-    rows = []
+    out = {}
     for e in (results or []):
         if not isinstance(e, dict):
             continue
+        name = e.get("name", "")
         for sec in (e.get("secondaryip") or []):
             if not isinstance(sec, dict):
                 continue
             ip, mask = _split_ip_mask(sec.get("ip", ""))
             if ip and ip != "0.0.0.0":
-                rows.append({
-                    "name": "%s (2nd)" % e.get("name", ""),
-                    "ip": ip, "mask": mask,
-                    "vdom_zone": e.get("vdom", "root"),
-                    "type": "secondary",
-                })
-    return rows
+                out.setdefault(name, []).append(ip + (("/" + mask) if mask else ""))
+    return out
 
 
 def _fetch_interfaces(s, base, host):
@@ -205,8 +223,14 @@ def _fetch_interfaces(s, base, host):
             logger.info("fortigate_interfaces(cmdb) host=%s count=%d", host, len(ifaces))
         secs = _cmdb_secondaries(results)
         if secs:
-            ifaces.extend(secs)
-            logger.info("fortigate_secondary_ips host=%s count=%d", host, len(secs))
+            # secondary IP를 같은 인터페이스의 primary 행에 secondary_ips로 병합
+            n = 0
+            for it in ifaces:
+                extra = secs.get(it.get("name"))
+                if extra:
+                    it["secondary_ips"] = extra
+                    n += len(extra)
+            logger.info("fortigate_secondary_ips host=%s count=%d", host, n)
     except Exception as e:
         if ifaces is None:
             raise
