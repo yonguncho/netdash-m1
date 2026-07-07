@@ -939,7 +939,7 @@ function diagnoseSwitch(id) {
       (d.error ? "오류: " + d.error + "\n" : "") +
       "\n── 프롬프트(마지막 줄) ──\n" + (d.prompt || "(없음)") +
       "\n\n── 로그인 배너(끝부분) ──\n" + (d.banner_head || "(없음)") +
-      "\n\n── show version 응답(앞부분) ──\n" + (d.version_head || "(없음)");
+      "\n\n── " + (d.probe_cmd || "show version") + " 응답(앞부분) ──\n" + (d.version_head || "(없음)");
   }).catch(function (e) {
     if (prog) prog.textContent = "진단 오류: " + e;
   });

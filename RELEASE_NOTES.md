@@ -1,5 +1,15 @@
 # NetDash 릴리스 노트
 
+## v3.39.4 (2026-07-07) — 진단도 Alteon 명령(/info)으로
+
+- **진단 기능이 Alteon 프롬프트를 인식하면 `show version` 대신
+  `/info/sys/general`을 실행** — 진단 화면에서 실제 모델/버전 원문을 바로 확인.
+- 참고: Alteon 수집 자체는 처음부터 메뉴 경로 명령만 사용합니다 —
+  `/info/sys/general`(버전·모델) · `/info/l2/fdb/dump`(MAC) ·
+  `/info/l3/arp/dump`(ARP) · `/info/link`(포트) · `/cfg/dump`(설정 백업).
+  `show version`은 벤더를 모를 때의 탐지 프로브에만 쓰입니다(오류 응답이어도
+  프롬프트로 판별).
+
 ## v3.39.3 (2026-07-07) — Alteon 'Standard ADC' 실장비 프롬프트 반영(진단 원문 기반)
 
 - **실장비 진단 원문(`>> ... - Standard ADC - Main#`) 기준으로 인식 확정.**

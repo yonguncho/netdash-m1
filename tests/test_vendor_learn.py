@@ -213,6 +213,45 @@ def test_prompt_looks_alteon():
     assert not collector._prompt_looks_alteon("")
 
 
+def test_diagnose_uses_info_cmd_for_alteon(monkeypatch):
+    """진단: Alteon 프롬프트면 show version 대신 /info/sys/general 실행."""
+    import types
+    sent = []
+
+    class FakeShell:
+        def send(self, s):
+            sent.append(s.strip())
+
+    class FakeClient:
+        def set_missing_host_key_policy(self, p):
+            pass
+        def connect(self, *a, **k):
+            pass
+        def invoke_shell(self, **k):
+            return FakeShell()
+        def close(self):
+            pass
+
+    import paramiko as _pk
+    monkeypatch.setattr(_pk, "SSHClient", FakeClient)
+    reads = {"n": 0}
+
+    def fake_read(shell, timeout=5, **k):
+        reads["n"] += 1
+        if reads["n"] == 1:   # 배너
+            return "Alteon Application Switch 5224\n>> L4-A - Standard ADC - Main#"
+        return "Software Version 29.0.3.0\n>> L4-A - Standard ADC - Main#"
+    monkeypatch.setattr(collector, "_alteon_read", fake_read)
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: True)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    res = collector.diagnose_switch({"ip": "10.0.0.30", "name": "L4-A"}, "u", "p")
+    assert res["probe_cmd"] == "/info/sys/general"
+    assert "/info/sys/general" in sent
+    assert res["guess"] == "alteon"
+
+
 def test_detect_vendor_standard_adc():
     assert collector._detect_vendor_from_version(
         "SKBA_F1_OASVR_L4_1 - Standard ADC - Main#") == "alteon"

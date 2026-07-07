@@ -944,7 +944,14 @@ def diagnose_switch(switch, username, password, source_ip=None):
         res["banner_head"] = (banner or "")[-600:]
         lines = [l for l in (banner or "").splitlines() if l.strip()]
         res["prompt"] = lines[-1][-120:] if lines else ""
-        shell.send("show version\n")
+        # Alteon(메뉴형 CLI)은 show가 아니라 /info 경로 명령을 쓴다 —
+        # 프롬프트가 Alteon이면 진단도 /info/sys/general로 실제 버전을 확인.
+        if _prompt_looks_alteon(res["prompt"]) or _prompt_looks_alteon(banner):
+            probe_cmd = "/info/sys/general"
+        else:
+            probe_cmd = "show version"
+        res["probe_cmd"] = probe_cmd
+        shell.send(probe_cmd + "\n")
         out = _alteon_read(shell, timeout=10)
         res["version_head"] = (out or "")[:800]
         res["guess"] = (_detect_vendor_from_version(out)
