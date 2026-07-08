@@ -2604,8 +2604,9 @@ function _renderZoneMap(host) {
   function reName(re, arr) { return (arr || nodes).filter(function (n) { return re.test(n.name || ""); }); }
   // 중심축 특수 장비(호스트명 패턴)
   var isp = reName(/ISP|GATEWAY|\bGW\b|\bWAN\b/i)[0] || null;
+  // 인터넷 스위치: 이름 패턴(넓게). rk 제한 없음(구분 L2로 지정돼도 중심축에 표시)
   var internetSw = nodes.filter(function (n) {
-    return rk(n) >= 1 && n.kind !== "fw" && /INTERNET|\bINT[_-]?SW\b/i.test(n.name || "");
+    return n.kind !== "fw" && /INTERNET|\bINET\b|\bINT[_-]?SW\b|EXT[_-]?SW/i.test(n.name || "");
   })[0] || null;
   // OA Backbone = 백본 계층 전체(구분=BackBone 또는 이름 BB/CORE/BACKBONE).
   // VISS처럼 이름에 BB가 없는 백본은 '구분'을 BackBone으로 지정해야 여기 포함됨.
@@ -2616,6 +2617,11 @@ function _renderZoneMap(host) {
     firewalls.filter(function (f) {
       return nbrRank(f.id, 2).length === 0 && (adj[f.id] || []).some(function (x) { return bbIds[x]; });
     })[0] || null;
+  // 인터넷 스위치 폴백: 이름으로 못 찾으면, 인터넷 방화벽에 링크된 비-방화벽·비-백본 스위치
+  if (!internetSw && internetFw) {
+    internetSw = (adj[internetFw.id] || []).map(function (x) { return byId[x]; })
+      .filter(function (n) { return n && n.kind !== "fw" && !bbIds[n.id]; })[0] || null;
+  }
 
   // ── Zone 분류: 방화벽 hostname 토큰 기준(1순위) + 링크(보조) ──
   var zoneFws = firewalls.filter(function (f) { return f !== internetFw; });
@@ -2770,7 +2776,11 @@ function _renderZoneMap(host) {
   });
   zones.sort(function (a, b) { return a.label.localeCompare(b.label); });
   // 미분류(어느 Zone에도 못 들어간 L3/L4)
-  var orphanDists = nodes.filter(function (n) { return rk(n) === 2 && !assigned[n.id]; });
+  // 미분류 = 어느 곳에도 배정 못 된 '모든' 등록 장비(L2/스위치 포함) → 아이콘으로 표시(누락 방지).
+  // 인터넷 스위치·백본이 이름/링크로 못 잡혀도, 서버실 L2가 Zone에 안 붙어도 여기 나타남.
+  var orphanDists = nodes.filter(function (n) {
+    return !assigned[n.id] && (n.device_type || n.kind === "fw" || rk(n) <= 3);
+  });
 
   // ── SVG 렌더(아이콘 + 연결선 + 포트) ──
   function zoneSym(kind, x, y) {
@@ -2820,7 +2830,7 @@ function _renderZoneMap(host) {
   if (orphanDists.length) {
     var tw2 = orphanDists.length * DW, sx2 = zx + orphW / 2 - tw2 / 2 + DW / 2;
     orphanDists.forEach(function (d, i) { pos[d.id] = { x: sx2 + i * DW, y: L3_Y }; });
-    boxes.push({ x: zx, y: FW_Y - 32, w: orphW, h: (SUB_Y + 60) - (FW_Y - 32), label: "미분류", orphan: true });
+    boxes.push({ x: zx, y: FW_Y - 32, w: orphW, h: (SUB_Y + 60) - (FW_Y - 32), label: "미분류 (연결·Zone 미확인 — 재수집 시 편입)", orphan: true });
   }
   var maxSub = zones.reduce(function (m, z) { return Math.max(m, z._maxSub); }, 0);
   var totalH = Math.max(680, SUB_Y + maxSub * 15 + 50);
@@ -2933,7 +2943,12 @@ function _renderZoneMap(host) {
     if (z.zSubs.length && z._extraX != null) subText(z._extraX, z.zSubs, "기타(직결 L2)", DW - 20);
     else if (z.zSubs.length && !z.dists.length) subText(z._cx, z.zSubs, "기타(직결 L2)", DW - 20);
   });
-  orphanDists.forEach(function (d) { var p = pos[d.id]; if (p) subText(p.x, Object.keys(cfgSubs(d)).sort(), null); });
+  orphanDists.forEach(function (d) {
+    var p = pos[d.id]; if (!p) return;
+    var subs = Object.keys(cfgSubs(d)).sort();
+    if (!subs.length) { var c = _ipBand(d.ip); if (c) subs = [c]; }   // config 없으면 관리 IP /24
+    subText(p.x, subs, null);
+  });
   svg.push("</svg>");
 
   if (!zones.length && !orphanDists.length && !isp && !internetFw && !centralBBs.length) {

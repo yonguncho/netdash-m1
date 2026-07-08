@@ -299,6 +299,10 @@ def test_topology_zone_view():
     assert "_redunPairs" in js                  # 이중화 연결선
     assert "distGroups" in js                   # 쌍당 대역 박스 1개(중복 제거)
     assert "cfgSubs(d)" in js                   # 각 L3는 자기 config 대역만(중복 방지)
+    # 미분류 catch-all: 배정 안 된 등록 장비(L2 포함)도 누락 없이 아이콘 표시
+    assert "orphanDists" in js
+    assert 'n.device_type || n.kind === "fw" || rk(n) <= 3' in js
+    assert "EXT[_-]?SW" in js                    # 인터넷 스위치 감지 패턴 확장
 
 
 def test_serial_c9300l_formats():
