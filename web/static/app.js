@@ -2055,7 +2055,6 @@ function renderTopology() {
   var host = document.getElementById("topology-canvas");
   if (!host || !_topoData) return;
   _topoWinClear();               // 이전 렌더의 window 리스너 정리(누수 방지)
-  if (_galaxyAnim) { cancelAnimationFrame(_galaxyAnim); _galaxyAnim = null; }
   if (!_topoData.nodes.length) {
     host.innerHTML = "<p style='color:#94a3b8;padding:20px'>표시할 장비가 없습니다. 스위치·방화벽을 수집하면 연결 관계가 그려집니다.</p>";
     return;
@@ -2068,43 +2067,63 @@ function renderTopology() {
   var zsel = document.getElementById("topo-zone-select");
   if (zsel) zsel.style.display = (_topoMode === "tps") ? "" : "none";
 
-  if (_topoMode === "core") _renderCoreMap(host);
-  else if (_topoMode === "galaxy") _renderGalaxy(host);
-  else _renderTpsMap(host);
+  if (_topoMode === "tps") _renderTpsMap(host);
+  else _renderCoreMap(host);
 }
 
-// 장비 심볼(SVG) — 이모지 대신 실제 네트워크 구성도 아이콘(24x24 좌상단 기준)
+// 장비 심볼(SVG) — 실제 네트워크 구성도 스타일 아이콘(34x34 기준, 채색 + 입체감)
 function _deviceSymbol(label, x, y, color) {
+  var f = "' fill='" + color + "' fill-opacity='0.16' stroke='" + color + "' stroke-width='1.8'";
   var g = "<g transform='translate(" + x + "," + y + ")'>";
   if (label === "방화벽") {
-    g += "<rect x='0' y='2' width='24' height='20' rx='2' fill='none' stroke='" + color + "' stroke-width='2'/>";
-    g += "<line x1='0' y1='9' x2='24' y2='9' stroke='" + color + "' stroke-width='1.5'/>";
-    g += "<line x1='0' y1='16' x2='24' y2='16' stroke='" + color + "' stroke-width='1.5'/>";
-    g += "<line x1='8' y1='2' x2='8' y2='9' stroke='" + color + "' stroke-width='1.5'/>";
-    g += "<line x1='16' y1='9' x2='16' y2='16' stroke='" + color + "' stroke-width='1.5'/>";
-    g += "<line x1='6' y1='16' x2='6' y2='22' stroke='" + color + "' stroke-width='1.5'/>";
-  } else if (label === "백본" || label === "L3") {
-    g += "<circle cx='12' cy='12' r='11' fill='none' stroke='" + color + "' stroke-width='2'/>";
-    g += "<path d='M12 4 L12 20 M4 12 L20 12' stroke='" + color + "' stroke-width='1.6'/>";
-    g += "<path d='M12 4 l-2 3 M12 4 l2 3 M20 12 l-3 -2 M20 12 l-3 2' fill='none' stroke='" + color + "' stroke-width='1.4'/>";
+    // 벽돌벽(방화벽 표준 아이콘) — 엇갈린 벽돌 + 불꽃
+    g += "<rect x='2' y='6' width='30' height='22' rx='2" + f + "/>";
+    g += "<line x1='2' y1='13' x2='32' y2='13' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='2' y1='20' x2='32' y2='20' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='12' y1='6' x2='12' y2='13' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='22' y1='6' x2='22' y2='13' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='7' y1='13' x2='7' y2='20' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='17' y1='13' x2='17' y2='20' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='27' y1='13' x2='27' y2='20' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='12' y1='20' x2='12' y2='28' stroke='" + color + "' stroke-width='1.4'/>";
+    g += "<line x1='22' y1='20' x2='22' y2='28' stroke='" + color + "' stroke-width='1.4'/>";
+  } else if (label === "백본") {
+    // 라우터(원통) — 상단 타원 + 몸통 + 사방 화살표(Cisco 라우터 관용 아이콘)
+    g += "<path d='M4 12 a13 4 0 0 0 26 0 v10 a13 4 0 0 1 -26 0 z" + f + "/>";
+    g += "<ellipse cx='17' cy='12' rx='13' ry='4" + f + "/>";
+    g += "<path d='M10 17 h14 M17 13 v10' stroke='" + color + "' stroke-width='1.5' fill='none'/>";
+    g += "<path d='M24 17 l-3 -2 M24 17 l-3 2 M10 17 l3 -2 M10 17 l3 2' stroke='" + color + "' stroke-width='1.4' fill='none'/>";
+  } else if (label === "L3") {
+    // L3 스위치 — 입체 박스 + 사방 화살표(멀티레이어 스위치)
+    g += "<path d='M4 12 l13 -6 l13 6 l-13 6 z" + f + "/>";
+    g += "<path d='M4 12 v10 l13 6 v-10 z' fill='" + color + "' fill-opacity='0.1' stroke='" + color + "' stroke-width='1.6'/>";
+    g += "<path d='M30 12 v10 l-13 6 v-10 z' fill='" + color + "' fill-opacity='0.22' stroke='" + color + "' stroke-width='1.6'/>";
+    g += "<path d='M17 3 v6 M11 12 h12 M17 3 l-2 3 M17 3 l2 3' stroke='#e2e8f0' stroke-width='1.4' fill='none'/>";
   } else if (label === "L4") {
-    g += "<polygon points='12,2 22,7 22,17 12,22 2,17 2,7' fill='none' stroke='" + color + "' stroke-width='2'/>";
-    g += "<text x='12' y='16' fill='" + color + "' font-size='9' font-weight='700' text-anchor='middle'>L4</text>";
+    // L4 로드밸런서 — 박스 + 분기 화살표
+    g += "<path d='M4 12 l13 -6 l13 6 l-13 6 z" + f + "/>";
+    g += "<path d='M4 12 v10 l13 6 v-10 z' fill='" + color + "' fill-opacity='0.1' stroke='" + color + "' stroke-width='1.6'/>";
+    g += "<path d='M30 12 v10 l-13 6 v-10 z' fill='" + color + "' fill-opacity='0.22' stroke='" + color + "' stroke-width='1.6'/>";
+    g += "<text x='17' y='16' fill='#e2e8f0' font-size='8' font-weight='700' text-anchor='middle'>L4</text>";
   } else if (label === "서버") {
-    g += "<rect x='3' y='2' width='18' height='20' rx='2' fill='none' stroke='" + color + "' stroke-width='2'/>";
-    g += "<line x1='3' y1='9' x2='21' y2='9' stroke='" + color + "' stroke-width='1.4'/>";
-    g += "<line x1='3' y1='15' x2='21' y2='15' stroke='" + color + "' stroke-width='1.4'/>";
-    g += "<circle cx='7' cy='6' r='1' fill='" + color + "'/><circle cx='7' cy='12' r='1' fill='" + color + "'/>";
+    // 서버 랙 — 슬롯 3칸 + LED
+    g += "<rect x='7' y='3' width='20' height='28' rx='2" + f + "/>";
+    for (var i = 0; i < 3; i++) {
+      g += "<rect x='10' y='" + (6 + i * 8) + "' width='14' height='5' rx='1' fill='none' stroke='" + color + "' stroke-width='1.2'/>";
+      g += "<circle cx='12' cy='" + (8.5 + i * 8) + "' r='1' fill='" + color + "'/>";
+    }
   } else {
-    g += "<rect x='1' y='6' width='22' height='12' rx='2' fill='none' stroke='" + color + "' stroke-width='2'/>";
-    g += "<path d='M4 14 l0 3 M8 14 l0 3 M12 14 l0 3 M16 14 l0 3 M20 14 l0 3' stroke='" + color + "' stroke-width='1.5'/>";
-    g += "<path d='M6 6 l3 -3 M12 6 l3 -3' stroke='" + color + "' stroke-width='1.4'/>";
+    // L2 스위치 — 납작 입체 박스 + 양방향 화살표(⇄) + 포트
+    g += "<path d='M3 13 l14 -6 l14 6 l-14 6 z" + f + "/>";
+    g += "<path d='M3 13 v7 l14 6 v-7 z' fill='" + color + "' fill-opacity='0.1' stroke='" + color + "' stroke-width='1.6'/>";
+    g += "<path d='M31 13 v7 l-14 6 v-7 z' fill='" + color + "' fill-opacity='0.22' stroke='" + color + "' stroke-width='1.6'/>";
+    g += "<path d='M11 12 h12 M11 12 l2 -2 M11 12 l2 2 M23 15 l-2 -2 M23 15 l-2 2 M11 15 h12' stroke='#e2e8f0' stroke-width='1.2' fill='none'/>";
   }
   return g + "</g>";
 }
 
 // 카드(중간): 실제 심볼 + 호스트명 1줄, IP 작게, 상태 점. 대역/포트는 툴팁.
-var _CARD_W = 200, _CARD_H = 58;
+var _CARD_W = 210, _CARD_H = 64;
 function _drawNode(svg, n, x, y, opts) {
   opts = opts || {};
   var k = _topoKindOf(n), dot = _topoStatusDot(n);
@@ -2123,10 +2142,10 @@ function _drawNode(svg, n, x, y, opts) {
     "' data-basestroke='" + k.color + "' stroke-width='2.5'" +
     (isGhost ? " stroke-dasharray='5 4'" : "") + "/>");
   svg.push("<rect x='" + x + "' y='" + y + "' width='6' height='" + _CARD_H + "' rx='3' fill='" + k.color + "'/>");
-  svg.push(_deviceSymbol(k.sym || "L2", x + 12, y + (_CARD_H - 24) / 2, k.color));
-  svg.push("<text x='" + (x + 44) + "' y='" + (y + 24) +
+  svg.push(_deviceSymbol(k.sym || "L2", x + 12, y + (_CARD_H - 34) / 2, k.color));
+  svg.push("<text x='" + (x + 54) + "' y='" + (y + 27) +
     "' fill='#f1f5f9' font-size='13' font-weight='700'>" + escHtml((n.name || "").slice(0, 20)) + "</text>");
-  svg.push("<text x='" + (x + 44) + "' y='" + (y + 42) +
+  svg.push("<text x='" + (x + 54) + "' y='" + (y + 45) +
     "' fill='#94a3b8' font-size='11'>" + escHtml(n.ip || "") + "</text>");
   svg.push("<circle cx='" + (x + _CARD_W - 14) + "' cy='" + (y + 16) + "' r='5' fill='" + dot + "'/>");
   if (n.subnets && n.subnets.length) {
@@ -2470,218 +2489,6 @@ function _topoBindNodeEvents(host) {
       });
     });
   });
-}
-
-// ── 🌌 성단 뷰: 포스 그래프(다크+글로우+호버 포커스) — 라이브러리 없이 Canvas ──
-var _galaxyAnim = null;   // requestAnimationFrame id(모드 전환 시 정리)
-function _renderGalaxy(host) {
-  if (_galaxyAnim) { cancelAnimationFrame(_galaxyAnim); _galaxyAnim = null; }
-  var nodes = _topoData.nodes.slice();
-  if (!nodes.length) {
-    host.innerHTML = _legendHTML() + "<p style='color:#94a3b8;padding:20px'>표시할 장비가 없습니다.</p>";
-    _bindTopoModeButtons();
-    return;
-  }
-  var idIndex = {};
-  nodes.forEach(function (n, i) { idIndex[n.id] = i; });
-  var links = _topoData.links.filter(function (l) {
-    return idIndex[l.a] != null && idIndex[l.b] != null;
-  });
-  // 인접(호버 포커스용)
-  var adj = {};
-  links.forEach(function (l) {
-    (adj[l.a] = adj[l.a] || {})[l.b] = 1; (adj[l.b] = adj[l.b] || {})[l.a] = 1;
-  });
-  var degree = {};
-  nodes.forEach(function (n) { degree[n.id] = adj[n.id] ? Object.keys(adj[n.id]).length : 0; });
-
-  host.innerHTML = _legendHTML("<span style='color:#e2e8f0;font-weight:600'>· 성단 뷰</span>" +
-    "<span>드래그=회전이동 · 휠=확대 · 노드 호버=직결 강조</span>") +
-    "<div class='topo-stage' style='position:relative'>" +
-    "<canvas id='galaxy-canvas' style='width:100%;height:100%;display:block;background:radial-gradient(ellipse at center,#0b1224 0%,#060912 100%)'></canvas>" +
-    "<div id='galaxy-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:600;max-width:340px;white-space:pre-line'></div>" +
-    "</div>";
-  _bindTopoModeButtons();
-
-  var canvas = document.getElementById("galaxy-canvas");
-  var ctx = canvas.getContext("2d");
-  var tip = document.getElementById("galaxy-tip");
-  function _resize() {
-    var r = canvas.getBoundingClientRect();
-    canvas.width = Math.max(320, r.width); canvas.height = Math.max(320, r.height);
-  }
-  _resize();
-  var W = canvas.width, H = canvas.height;
-
-  // 초기 좌표: 구역별로 흩뿌림(원 위 무작위)
-  var zones = {};
-  nodes.forEach(function (n) { var z = _topoZoneOf(n); (zones[z] = zones[z] || []).push(n); });
-  var zkeys = Object.keys(zones);
-  var P = nodes.map(function (n, i) {
-    var zi = zkeys.indexOf(_topoZoneOf(n));
-    var ang = (zi / Math.max(1, zkeys.length)) * Math.PI * 2;
-    var seed = (i * 2654435761 % 1000) / 1000;   // 결정적 유사난수(라이브러리 없이)
-    var rr = 60 + seed * 160;
-    return { x: W / 2 + Math.cos(ang) * rr + (seed - 0.5) * 80,
-             y: H / 2 + Math.sin(ang) * rr + ((i % 7) / 7 - 0.5) * 80,
-             vx: 0, vy: 0 };
-  });
-
-  // 뷰 변환(줌/팬)
-  var view = { s: 1, tx: 0, ty: 0 };
-  var hoverIdx = -1, drag = null;
-
-  function _color(n) { return _topoStatusDot(n); }
-  function _kcolor(n) { return _topoKindOf(n).color; }
-  function _radius(n) { return 4 + Math.min(9, (degree[n.id] || 0) * 1.1) + (n.kind === "fw" ? 3 : 0); }
-
-  // force 시뮬레이션(반발 + 스프링 + 중심 인력) — 제한 스텝
-  var LINK_LEN = 70, iterations = { n: 0 };
-  function _step() {
-    var i, j;
-    // 반발(근접쌍만 — O(n^2)이나 노드 수 제한적, 큰 경우 셀분할 생략)
-    for (i = 0; i < P.length; i++) { P[i].vx *= 0.85; P[i].vy *= 0.85; }
-    for (i = 0; i < P.length; i++) {
-      for (j = i + 1; j < P.length; j++) {
-        var dx = P[i].x - P[j].x, dy = P[i].y - P[j].y;
-        var d2 = dx * dx + dy * dy || 0.01;
-        if (d2 > 90000) continue;   // 300px 밖은 무시(성능)
-        var f = 900 / d2;
-        var d = Math.sqrt(d2);
-        var ux = dx / d, uy = dy / d;
-        P[i].vx += ux * f; P[i].vy += uy * f;
-        P[j].vx -= ux * f; P[j].vy -= uy * f;
-      }
-    }
-    // 스프링(링크)
-    links.forEach(function (l) {
-      var a = P[idIndex[l.a]], b = P[idIndex[l.b]];
-      var dx = b.x - a.x, dy = b.y - a.y;
-      var d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      var f = (d - LINK_LEN) * 0.02;
-      var ux = dx / d, uy = dy / d;
-      a.vx += ux * f; a.vy += uy * f;
-      b.vx -= ux * f; b.vy -= uy * f;
-    });
-    // 중심 인력
-    for (i = 0; i < P.length; i++) {
-      P[i].vx += (W / 2 - P[i].x) * 0.002;
-      P[i].vy += (H / 2 - P[i].y) * 0.002;
-      P[i].x += P[i].vx; P[i].y += P[i].vy;
-    }
-    iterations.n++;
-  }
-
-  function _toScreen(p) { return { x: p.x * view.s + view.tx, y: p.y * view.s + view.ty }; }
-
-  function _draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // 링크(반투명 곡선 + 호버 시 이웃만 밝게)
-    ctx.lineWidth = 1;
-    links.forEach(function (l) {
-      var a = _toScreen(P[idIndex[l.a]]), b = _toScreen(P[idIndex[l.b]]);
-      var on = hoverIdx >= 0 && (idIndex[l.a] === hoverIdx || idIndex[l.b] === hoverIdx);
-      if (hoverIdx >= 0 && !on) { ctx.strokeStyle = "rgba(100,116,139,0.06)"; }
-      else if (on) { ctx.strokeStyle = "rgba(56,189,248,0.9)"; }
-      else { ctx.strokeStyle = l.mutual ? "rgba(148,163,184,0.28)" : "rgba(71,85,105,0.18)"; }
-      ctx.beginPath(); ctx.moveTo(a.x, a.y);
-      var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 14;
-      ctx.quadraticCurveTo(mx, my, b.x, b.y); ctx.stroke();
-    });
-    // 노드(글로우)
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i], p = _toScreen(P[i]);
-      var r = _radius(n) * view.s;
-      var dim = hoverIdx >= 0 && i !== hoverIdx && !(adj[nodes[hoverIdx].id] && adj[nodes[hoverIdx].id][n.id]);
-      var alpha = dim ? 0.18 : 1;
-      // 글로우
-      var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.2);
-      g.addColorStop(0, _hexA(_color(n), 0.55 * alpha));
-      g.addColorStop(1, _hexA(_color(n), 0));
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, Math.PI * 2); ctx.fill();
-      // 코어
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = _kcolor(n);
-      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
-      ctx.lineWidth = 1.5; ctx.strokeStyle = _hexA(_color(n), alpha);
-      ctx.stroke();
-      // 호버/큰노드 라벨
-      if (i === hoverIdx || (r > 8 && !dim)) {
-        ctx.globalAlpha = alpha; ctx.fillStyle = "#e2e8f0";
-        ctx.font = (i === hoverIdx ? "bold " : "") + "11px sans-serif";
-        ctx.fillText((n.name || "").slice(0, 18), p.x + r + 3, p.y + 3);
-      }
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  function _loop() {
-    if (iterations.n < 320) _step();   // 안정화까지만 시뮬레이션
-    _draw();
-    _galaxyAnim = requestAnimationFrame(_loop);
-  }
-  _loop();
-
-  // 상호작용: 호버(가장 가까운 노드), 드래그 팬, 휠 줌, 클릭 상세
-  function _pick(mx, my) {
-    var best = -1, bd = 400;
-    for (var i = 0; i < nodes.length; i++) {
-      var p = _toScreen(P[i]);
-      var d = (p.x - mx) * (p.x - mx) + (p.y - my) * (p.y - my);
-      if (d < bd) { bd = d; best = i; }
-    }
-    return best;
-  }
-  canvas.addEventListener("mousemove", function (e) {
-    var r = canvas.getBoundingClientRect();
-    var mx = (e.clientX - r.left) * (canvas.width / r.width);
-    var my = (e.clientY - r.top) * (canvas.height / r.height);
-    if (drag) {
-      view.tx += (e.clientX - drag.px) * (canvas.width / r.width);
-      view.ty += (e.clientY - drag.py) * (canvas.height / r.height);
-      drag.px = e.clientX; drag.py = e.clientY; return;
-    }
-    hoverIdx = _pick(mx, my);
-    if (hoverIdx >= 0) {
-      var n = nodes[hoverIdx], k = _topoKindOf(n);
-      var lines = [(k.label ? "[" + k.label + "] " : "") + (n.name || ""),
-                   (n.ip || "") + (n.vendor ? " · " + n.vendor : ""),
-                   "직결 " + (degree[n.id] || 0) + "개"];
-      if (n.subnets && n.subnets.length) lines.push("대역: " + n.subnets.join(", "));
-      tip.textContent = lines.join("\n");
-      tip.style.display = "block";
-      tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px";
-      canvas.style.cursor = "pointer";
-    } else { tip.style.display = "none"; canvas.style.cursor = "grab"; }
-  });
-  canvas.addEventListener("mouseleave", function () { hoverIdx = -1; tip.style.display = "none"; });
-  canvas.addEventListener("mousedown", function (e) { drag = { px: e.clientX, py: e.clientY }; canvas.style.cursor = "grabbing"; });
-  _topoWinOn("mouseup", function () { drag = null; });   // 추적 등록(재렌더 시 정리)
-  canvas.addEventListener("wheel", function (e) {
-    e.preventDefault();
-    var f = e.deltaY > 0 ? 0.9 : 1.1;
-    view.s = Math.max(0.3, Math.min(4, view.s * f));
-  }, { passive: false });
-  canvas.addEventListener("click", function (e) {
-    var r = canvas.getBoundingClientRect();
-    var mx = (e.clientX - r.left) * (canvas.width / r.width);
-    var my = (e.clientY - r.top) * (canvas.height / r.height);
-    var i = _pick(mx, my);
-    if (i < 0) return;
-    var n = nodes[i];
-    if (n.kind === "fw") { showFirewallDetail(parseInt(String(n.id).slice(1), 10)); return; }
-    var sw = (_switches || []).find(function (s) { return String(s.id) === String(n.id); });
-    if (sw) openDetailPanel(sw);
-  });
-}
-
-// #rrggbb + alpha → rgba()
-function _hexA(hex, a) {
-  hex = (hex || "#64748b").replace("#", "");
-  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-  var r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
-  return "rgba(" + r + "," + g + "," + b + "," + a + ")";
 }
 
 function _topoBindTips(host) {

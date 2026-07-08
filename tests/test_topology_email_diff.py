@@ -178,15 +178,14 @@ def test_topology_node_inferred_device_type(temp_db):
     assert bbn["device_type"] == "BackBone" and bbn["inferred"] is True
 
 
-def test_topology_galaxy_view_ui():
-    """🌌 성단 뷰(포스 그래프) 모드 존재 — Canvas + 글로우 + 호버 포커스."""
+def test_topology_galaxy_view_removed():
+    """성단 뷰 제거 확인 — 서버실/TPS 2탭만."""
     html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert 'data-mode="galaxy"' in html
+    assert 'data-mode="galaxy"' not in html
     js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "_renderGalaxy" in js
-    assert "galaxy-canvas" in js
-    assert "requestAnimationFrame" in js         # force 시뮬레이션 루프
-    assert "createRadialGradient" in js          # 노드 글로우
+    assert "_renderGalaxy" not in js
+    # 개선된 장비 심볼(라우터/스위치/방화벽) 존재
+    assert "_deviceSymbol" in js
 
 
 def test_topology_two_tab_ui():
