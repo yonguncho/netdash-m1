@@ -2037,7 +2037,7 @@ function doSearch() {
 
 // ─── 토폴로지: [서버실 구성도] / [TPS 구역도] 2탭 (중간 카드, 가시성 우선) ──
 var _topoData = null;    // {nodes, links}
-var _topoMode = "core";  // "core"=서버실, "tps"=TPS 구역도
+var _topoMode = "zone";  // 단일 뷰: 존·대역 구성도(SVG 선+포트). core/tps 코드는 보존(미노출)
 var _topoZone = null;    // TPS 모드에서 선택된 구역
 var _topoExpandL2 = false;  // false=L2를 대역 뱃지로 접음(기본), true=개별 노드로 펼침
 var _topoOpenBand = null;   // 드릴다운으로 펼쳐본 대역 key
@@ -2629,7 +2629,42 @@ function _renderZoneMap(host) {
       });
     }
   });
-  // 장비 → Zone: 호스트명 distinctive 토큰 최대 겹침(1순위), 없으면 링크(보조)
+  // ── CDP/LLDP 확정 링크 우선(있으면 실제 물리 구성으로 배정) ──
+  var internetFwId0 = internetFw ? internetFw.id : null;
+  // 중심 OA BB 후보: 인터넷 방화벽에 링크됨 or 구별 토큰 없는 백본(VISS 등)
+  var centralBBids = {};
+  backbones.forEach(function (bb) {
+    var linkedInt = internetFwId0 && (adj[bb.id] || []).indexOf(internetFwId0) >= 0;
+    if (linkedInt || !distinctive(_hostTokens(bb.name)).length) centralBBids[bb.id] = 1;
+  });
+  // 확정(CDP/LLDP) 인접만
+  var adjC = {};
+  links.forEach(function (l) {
+    if (l.source !== "cdp/lldp") return;
+    (adjC[l.a] = adjC[l.a] || []).push(l.b);
+    (adjC[l.b] = adjC[l.b] || []).push(l.a);
+  });
+  // 경계(중심 OA BB·인터넷 FW·다른 Zone FW)에서 멈추는 확정링크 BFS → 소유 Zone
+  var blocked = {};
+  if (internetFwId0) blocked[internetFwId0] = 1;
+  Object.keys(centralBBids).forEach(function (id) { blocked[id] = 1; });
+  zoneFws.forEach(function (f) { blocked[f.id] = 1; });
+  var confirmedOwner = {};
+  zoneFws.forEach(function (f) {
+    var k = zoneKeyOf(f), seen = {}; seen[f.id] = 1; var q = [f.id];
+    while (q.length) {
+      var id = q.shift();
+      (adjC[id] || []).forEach(function (nb) {
+        var nn = byId[nb];
+        if (!nn || seen[nb] || rk(nn) < 1) return;   // 백본(1)~L2(3) 통과
+        seen[nb] = 1;
+        if (blocked[nb]) return;                      // 경계 노드: 소유·전파 금지
+        if (!confirmedOwner[nb]) confirmedOwner[nb] = k;
+        q.push(nb);
+      });
+    }
+  });
+  // 장비 → Zone: 확정링크(1순위) → 호스트명 토큰 → 보조 링크
   function zoneByName(n) {
     var t = distinctive(_hostTokens(n.name));
     if (!t.length) return null;
@@ -2655,24 +2690,23 @@ function _renderZoneMap(host) {
   //  · 호스트명 토큰이 특정 Zone과 맞는 백본 = 그 Zone 백본(Zone 내부에 표시)
   //  · 그 외(VISS처럼 구별 토큰 없음) = 중심 OA BB
   var centralBBs = [];
-  var internetFwId = internetFw ? internetFw.id : null;
   backbones.forEach(function (bb) {
     assigned[bb.id] = 1;
-    var linkedToInternet = internetFwId && (adj[bb.id] || []).indexOf(internetFwId) >= 0;
-    var k = linkedToInternet ? null : (zoneByName(bb) || linkOwner[bb.id]);
+    if (centralBBids[bb.id]) { centralBBs.push(bb); return; }
+    var k = confirmedOwner[bb.id] || zoneByName(bb) || linkOwner[bb.id];
     if (k && zoneMap[k]) zoneMap[k].bbs.push(bb);
     else centralBBs.push(bb);
   });
   // rank2(L3/L4) → Zone 배정
   nodes.forEach(function (n) {
     if (rk(n) !== 2 || assigned[n.id]) return;
-    var k = zoneByName(n) || linkOwner[n.id];
+    var k = confirmedOwner[n.id] || zoneByName(n) || linkOwner[n.id];
     if (k && zoneMap[k]) { assigned[n.id] = 1; zoneMap[k].dists.push(n); }
   });
   // rank3(L2)는 아이콘 없이 대역만 → Zone 배정
   nodes.forEach(function (n) {
     if (rk(n) !== 3 || assigned[n.id]) return;
-    var k = zoneByName(n) || linkOwner[n.id];
+    var k = confirmedOwner[n.id] || zoneByName(n) || linkOwner[n.id];
     if (k && zoneMap[k]) { assigned[n.id] = 1; zoneMap[k].zL2.push(n); }
   });
   // Zone 완성: dist 대역 = L3 config 대역 + (Zone 내부) 호스트명 매칭 L2 /24
@@ -2706,67 +2740,149 @@ function _renderZoneMap(host) {
   // 미분류(어느 Zone에도 못 들어간 L3/L4)
   var orphanDists = nodes.filter(function (n) { return rk(n) === 2 && !assigned[n.id]; });
 
-  // ── 렌더 ──
-  function nodeCard(n, kindOverride, cls) {
-    var kind = kindOverride || _zoneIconKind(n);
-    return "<div class='znode " + (cls || "") + "' data-swid='" + n.id + "' data-kind='" + (n.kind || "sw") +
-      "' title='" + escHtml((n.name || "") + " · " + (n.ip || "")) + "'>" +
-      _zoneIcon(kind) + "<span class='znode__lbl'>" + escHtml((n.name || "").slice(0, 22)) + "</span></div>";
+  // ── SVG 렌더(아이콘 + 연결선 + 포트) ──
+  function zoneSym(kind, x, y) {
+    var C = { isp: "#38bdf8", sw: "#38bdf8", fw: "#ef4444", bb: "#a855f7", l3: "#8b5cf6", l4: "#f59e0b" }[kind] || "#64748b";
+    if (kind === "isp")
+      return "<g transform='translate(" + x + "," + y + ")'><path d='M6,26 a10,10 0 0,1 1.5,-19 a13,11 0 0,1 25,-1 a11,10 0 0,1 10,20 z' fill='" +
+        C + "' fill-opacity='0.16' stroke='" + C + "' stroke-width='1.8'/></g>";
+    var label = { fw: "방화벽", bb: "백본", l3: "L3", l4: "L4", sw: "L2" }[kind] || "L2";
+    return _deviceSymbol(label, x, y, C);
   }
-  function subsBox(title, subs) {
-    var body = subs.length
-      ? subs.map(function (c) { return "<div class='zsub'>🌐 " + escHtml(c) + "</div>"; }).join("")
-      : "<div class='zsub zsub--none'>대역 정보 없음 (config 미수집)</div>";
-    return "<div class='zsubs'>" + (title ? "<div class='zsubs__t'>" + escHtml(title) + " 하위 대역</div>" : "") + body + "</div>";
+  var IC = 40, PAIRGAP = 34, DW = 186, DGAP = 16, ZGAP = 34, PADX = 30;
+  zones.forEach(function (z) {
+    var dn = Math.max(1, z.dists.length);
+    z._w = Math.max(206, dn * DW + (dn - 1) * DGAP + 24);
+    z._maxSub = z.zSubs.length ? z.zSubs.length + 1 : 0;
+    z.dists.forEach(function (d) { z._maxSub = Math.max(z._maxSub, d.subs.length); });
+  });
+  var orphW = orphanDists.length ? Math.max(206, orphanDists.length * DW + 24) : 0;
+  var totalW = Math.max(900, PADX * 2 + zones.reduce(function (s, z) { return s + z._w; }, 0) +
+    ZGAP * Math.max(0, zones.length - 1) + (orphW ? orphW + ZGAP : 0));
+  var cx = totalW / 2, pos = {};
+  function placeRow(list, centerX, yy) {
+    var n = list.length; if (!n) return;
+    var tw = n * IC + (n - 1) * PAIRGAP, sx = centerX - tw / 2 + IC / 2;
+    list.forEach(function (nd, i) { pos[nd.id] = { x: sx + i * (IC + PAIRGAP), y: yy }; });
   }
-  function distBlock(d) {
-    return "<div class='zdist'>" + nodeCard(d.node) + subsBox(d.node.name, d.subs) + "</div>";
-  }
-  function zoneBox(z) {
-    var s = "<div class='zonebox'><div class='zonebox__head'>🗂 " + escHtml(z.label) + "</div>";
-    s += "<div class='zone-fwrow'>" + z.fws.map(function (f) { return nodeCard(f, "fw", "znode--fw"); }).join("") + "</div>";
-    // Zone 백본(있으면): 방화벽 아래에 표시
-    if (z.bbs && z.bbs.length) {
-      s += "<div class='zarrow'>▼</div><div class='zone-fwrow'>" +
-        z.bbs.map(function (b) { return nodeCard(b, "bb"); }).join("") + "</div>";
+  // 중심축(세로)
+  var yy = 46;
+  if (isp) { placeRow([isp], cx, yy); yy += 78; }
+  if (internetSw) { placeRow([internetSw], cx, yy); yy += 78; }
+  if (internetFw) { placeRow([internetFw], cx, yy); yy += 78; }
+  if (centralBBs.length) { placeRow(centralBBs, cx, yy); yy += 78; }
+  var FW_Y = yy + 46, BB_Y = FW_Y + 74, L3_Y = BB_Y + 74, SUB_Y = L3_Y + 32;
+  var zx = PADX, boxes = [];
+  zones.forEach(function (z) {
+    var zcx = zx + z._w / 2;
+    z._cx = zcx;
+    placeRow(z.fws, zcx, FW_Y);
+    if (z.bbs.length) placeRow(z.bbs, zcx, BB_Y);
+    var dn = z.dists.length;
+    if (dn) {
+      var tw = dn * DW + (dn - 1) * DGAP, sx = zcx - tw / 2 + DW / 2;
+      z.dists.forEach(function (d, i) { pos[d.node.id] = { x: sx + i * (DW + DGAP), y: L3_Y }; });
     }
-    s += "<div class='zarrow'>▼</div>";
-    if (z.dists.length) s += "<div class='zdists'>" + z.dists.map(distBlock).join("") + "</div>";
-    if (z.zSubs && z.zSubs.length) s += subsBox("기타(직결 L2)", z.zSubs);
-    if (!z.dists.length && !(z.zSubs && z.zSubs.length))
-      s += "<div class='zsub zsub--none'>하위 L3/L4·대역 정보 없음 (재수집 필요)</div>";
-    s += "</div>";
-    return s;
-  }
-
-  var html = _zoneLegend() + "<div class='zone-scroll'>";
-  // 중심축(세로): ISP GW → Internet SW → Internet FW → OA Backbone
-  var spine = [];
-  if (isp) spine.push(nodeCard(isp, "isp"));
-  if (internetSw) spine.push(nodeCard(internetSw, "sw"));
-  if (internetFw) spine.push(nodeCard(internetFw, "fw"));
-  centralBBs.forEach(function (n) { spine.push(nodeCard(n, "bb")); });
-  if (spine.length) {
-    html += "<div class='zspine'><div class='zspine__t'>중심축</div>" +
-      spine.join("<div class='zarrow'>▼</div>") + "</div>" +
-      "<div class='zarrow zarrow--big'>▼ OA Backbone에서 Zone별 분기 ▼</div>";
-  }
-  // Zone 그리드
-  html += "<div class='zone-grid'>" + zones.map(zoneBox).join("");
+    boxes.push({ x: zx, y: FW_Y - 32, w: z._w, h: (SUB_Y + z._maxSub * 15 + 20) - (FW_Y - 32), label: z.label });
+    zx += z._w + ZGAP;
+  });
   if (orphanDists.length) {
-    html += "<div class='zonebox zonebox--orphan'><div class='zonebox__head'>🗂 미분류 (방화벽 링크 미수집)</div>" +
-      "<div class='zdists'>" + orphanDists.map(function (d) {
-        return distBlock({ node: d, subs: Object.keys(cfgSubs(d)).sort() });
-      }).join("") + "</div></div>";
+    var tw2 = orphanDists.length * DW, sx2 = zx + orphW / 2 - tw2 / 2 + DW / 2;
+    orphanDists.forEach(function (d, i) { pos[d.id] = { x: sx2 + i * DW, y: L3_Y }; });
+    boxes.push({ x: zx, y: FW_Y - 32, w: orphW, h: (SUB_Y + 60) - (FW_Y - 32), label: "미분류", orphan: true });
   }
-  html += "</div>";
-  if (!zones.length && !orphanDists.length) {
-    html += "<p style='color:#94a3b8;padding:16px'>Zone 방화벽/L3를 인식하지 못했습니다. 스위치 '구분'을 방화벽/백본/L3/L4로 지정하고 재수집하면 자동 구성됩니다.</p>";
+  var maxSub = zones.reduce(function (m, z) { return Math.max(m, z._maxSub); }, 0);
+  var totalH = Math.max(680, SUB_Y + maxSub * 15 + 50);
+
+  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
+    " preserveAspectRatio='xMidYMid meet' viewBox='0 0 " + totalW + " " + totalH + "' style='cursor:grab;display:block'>"];
+  // 존 박스
+  boxes.forEach(function (b) {
+    var c = b.orphan ? "#64748b" : "#8b5cf6";
+    svg.push("<rect x='" + b.x + "' y='" + b.y + "' width='" + b.w + "' height='" + b.h +
+      "' rx='12' fill='" + c + "' fill-opacity='0.05' stroke='" + c + "' stroke-opacity='0.4' stroke-width='1.4' stroke-dasharray='3 4'/>");
+    svg.push("<text x='" + (b.x + b.w / 2) + "' y='" + (b.y - 6) + "' fill='" + (b.orphan ? "#94a3b8" : "#c4b5fd") +
+      "' font-size='12' font-weight='700' text-anchor='middle'>🗂 " + escHtml(b.label) + "</text>");
+  });
+  // 연결선 + 포트(그려진 노드끼리만): 확정=실선, 추론=점선
+  var drawn = {};
+  (_topoData.links || []).forEach(function (l) {
+    var A = pos[l.a], B = pos[l.b];
+    if (!A || !B) return;
+    var kk = (String(l.a) < String(l.b)) ? l.a + "~" + l.b : l.b + "~" + l.a;
+    if (drawn[kk]) return; drawn[kk] = 1;
+    var confirmed = l.source === "cdp/lldp";
+    var sameRow = Math.abs(A.y - B.y) < 4;
+    var col = sameRow ? (confirmed ? "#22d3ee" : "#64748b") : (confirmed ? "#38bdf8" : "#64748b");
+    var dash = confirmed ? "" : " stroke-dasharray='6 4'";
+    var d;
+    if (sameRow) {
+      d = "M" + (Math.min(A.x, B.x) + IC / 2) + "," + A.y + " L" + (Math.max(A.x, B.x) - IC / 2) + "," + B.y;
+    } else {
+      var t = A.y < B.y ? A : B, bo = A.y < B.y ? B : A, my = (t.y + bo.y) / 2;
+      d = "M" + t.x + "," + (t.y + IC / 2) + " C" + t.x + "," + my + " " + bo.x + "," + my + " " + bo.x + "," + (bo.y - IC / 2 - 12);
+    }
+    var pa = l.a_port, pb = l.b_port;
+    var tip = ((byId[l.a] || {}).name || "") + (pa ? " [" + pa + "]" : "") + "  ↔  " +
+      ((byId[l.b] || {}).name || "") + (pb ? " [" + pb + "]" : "") + "\n" + (confirmed ? "CDP/LLDP 확정 링크" : "MAC 추론 링크");
+    svg.push("<path class='topo-edge' data-ea='" + l.a + "' data-eb='" + l.b + "' data-tip=\"" + escHtml(tip) +
+      "\" d='" + d + "' fill='none' stroke='" + col + "' stroke-width='" + (confirmed ? 2 : 1.6) + "'" + dash + "/>");
+    if ((pa || pb) && !sameRow) {
+      var ptxt = (confirmed ? "" : "~") + ((pa || "?").split("(")[0].slice(0, 9)) + "↔" + ((pb || "?").split("(")[0].slice(0, 9));
+      svg.push("<text x='" + ((A.x + B.x) / 2) + "' y='" + ((A.y + B.y) / 2 - 2) + "' fill='" +
+        (confirmed ? "#7dd3fc" : "#94a3b8") + "' font-size='8.5' text-anchor='middle'>" + escHtml(ptxt) + "</text>");
+    }
+  });
+  // 노드(아이콘+라벨)
+  function drawNode(nd, kindOverride) {
+    var p = pos[nd.id]; if (!p) return;
+    var kind = kindOverride || _zoneIconKind(nd);
+    svg.push("<g class='topo-node' data-swid='" + nd.id + "' data-kind='" + (nd.kind || "sw") +
+      "' data-tip=\"" + escHtml((nd.name || "") + " · " + (nd.ip || "")) + "\" style='cursor:pointer'>");
+    svg.push(zoneSym(kind, p.x - 17, p.y - 17));
+    svg.push("<text x='" + p.x + "' y='" + (p.y + 30) + "' fill='#e2e8f0' font-size='9.5' font-weight='700' text-anchor='middle'>" +
+      escHtml((nd.name || "").slice(0, 20)) + "</text>");
+    svg.push("</g>");
   }
-  html += "</div>";   // .zone-scroll
-  host.innerHTML = html;
+  if (isp) drawNode(isp, "isp");
+  if (internetSw) drawNode(internetSw, "sw");
+  if (internetFw) drawNode(internetFw, "fw");
+  centralBBs.forEach(function (n) { drawNode(n, "bb"); });
+  zones.forEach(function (z) {
+    z.fws.forEach(function (f) { drawNode(f, "fw"); });
+    z.bbs.forEach(function (b) { drawNode(b, "bb"); });
+    z.dists.forEach(function (d) { drawNode(d.node); });
+  });
+  orphanDists.forEach(function (d) { drawNode(d); });
+  // L3/L4 밑 대역 텍스트(L2는 아이콘 없이 여기 표기)
+  function subText(centerX, subs, title) {
+    var w = DW - 20, bx = centerX - w / 2, h = subs.length * 15 + (title ? 16 : 4) + 6;
+    svg.push("<rect x='" + bx + "' y='" + SUB_Y + "' width='" + w + "' height='" + h +
+      "' rx='7' fill='#0e2a2a' stroke='#14b8a6' stroke-width='1.1'/>");
+    var ty = SUB_Y + 13;
+    if (title) { svg.push("<text x='" + (bx + 7) + "' y='" + ty + "' fill='#5eead4' font-size='8.5' font-weight='700'>" + escHtml(title) + "</text>"); ty += 15; }
+    subs.forEach(function (c) { svg.push("<text x='" + (bx + 7) + "' y='" + ty + "' fill='#a7f3d0' font-size='9.5'>🌐 " + escHtml(c) + "</text>"); ty += 15; });
+    if (!subs.length) svg.push("<text x='" + (bx + 7) + "' y='" + ty + "' fill='#64748b' font-size='9' font-style='italic'>대역 정보 없음</text>");
+  }
+  zones.forEach(function (z) {
+    z.dists.forEach(function (d) { var p = pos[d.node.id]; if (p) subText(p.x, d.subs, null); });
+    if (z.zSubs.length && !z.dists.length) subText(z._cx, z.zSubs, "기타(직결 L2)");
+  });
+  orphanDists.forEach(function (d) { var p = pos[d.id]; if (p) subText(p.x, Object.keys(cfgSubs(d)).sort(), null); });
+  svg.push("</svg>");
+
+  if (!zones.length && !orphanDists.length && !isp && !internetFw && !centralBBs.length) {
+    host.innerHTML = _zoneLegend() + "<p style='color:#94a3b8;padding:16px'>Zone 방화벽/L3를 인식하지 못했습니다. 스위치 '구분'을 방화벽/백본/L3/L4로 지정하고 재수집하면 자동 구성됩니다.</p>";
+    _bindTopoModeButtons();
+    return;
+  }
+  host.innerHTML = _zoneLegend() + "<div class='topo-stage'>" + svg.join("") + "</div>" +
+    "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
+    "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:460px;white-space:pre-line'></div>";
   _bindTopoModeButtons();
-  _bindZoneMapEvents(host);
+  _topoBindTips(host);
+  _topoBindNodeEvents(host);
+  _topoBindZoomPan(host, totalW, totalH);
 }
 function _zoneLegend() {
   return "<div style='display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:8px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +

@@ -188,22 +188,15 @@ def test_topology_galaxy_view_removed():
     assert "_deviceSymbol" in js
 
 
-def test_topology_two_tab_ui():
-    """토폴로지 2탭(서버실 구성도/TPS 구역도) + 중간 카드 + 종류 아이콘."""
-    html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert 'data-mode="core"' in html and 'data-mode="tps"' in html
-    assert 'id="topo-zone-select"' in html
+def test_topology_single_zone_view():
+    """토폴로지는 존·대역 단일 뷰. core/tps/L2뱃지 코드는 보존(미노출)."""
     js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    # 단일 뷰: 기본 모드 zone, 모드 전환 버튼 제거
+    assert 'var _topoMode = "zone"' in js
+    # 심볼/렌더 코드는 보존
     assert "_renderCoreMap" in js and "_renderTpsMap" in js
-    assert "_isCoreDevice" in js and "_topoKindOf" in js
-    assert "_drawNode" in js                     # 중간 카드
-    assert "_deviceSymbol" in js                 # 실제 장비 심볼(SVG)
-    assert "이중화 링크" in js                   # 이중화 쌍 인식
-    assert "_RANK_SEG" in js                     # 세그먼트(구역) 컨테이너 박스
-    assert "L3 대역 인접" in js                  # L3 링크 구분
-    assert "코어 계층" in js and "분배 계층" in js and "액세스 계층" in js  # 3-Tier 라벨
-    assert "_buildBands" in js and "_drawBand" in js  # L2 대역 뱃지(접기)
-    assert "_topoExpandL2" in js                 # L2 펼치기/접기 토글
+    assert "_deviceSymbol" in js
+    assert "_buildBands" in js and "_drawBand" in js  # L2 대역 뱃지 코드 보존
 
 
 def test_topology_api(client):
@@ -276,31 +269,31 @@ def test_topology_tree_ui_features():
     assert "_drawNode" in js               # 중간 카드 노드
 
 
-def test_topology_l2_band_ui():
-    """L2 대역 뱃지: 토글 버튼 + 뱃지 렌더 + /24 그룹핑 + 드릴다운."""
+def test_topology_l2_band_code_preserved():
+    """L2 대역 뱃지 코드 보존(단일 뷰로 전환됐지만 core map 코드 유지)."""
     js = APP_JS.read_text(encoding="utf-8")
-    html = HTML.read_text(encoding="utf-8")
-    assert 'id="btn-topo-l2"' in html          # L2 펼치기/접기 토글 버튼
     assert "_ipBand" in js                      # /24 대역 산출
     assert "band-detail" in js                  # 드릴다운 패널
     assert 'kind === "band"' in js              # 대역 유사노드 처리
 
 
 def test_topology_zone_view():
-    """존·대역 BOX형 뷰(아이콘형): 모드 버튼 + 중심축 + Zone별 방화벽 + L3 하위 대역 정보."""
+    """존·대역 뷰(SVG 아이콘+연결선+포트): 모드 버튼 + 중심축 + Zone + L3 하위 대역."""
     js = APP_JS.read_text(encoding="utf-8")
     html = HTML.read_text(encoding="utf-8")
-    assert 'data-mode="zone"' in html           # 존·대역 모드 버튼
+    assert 'id="tab-topology"' in html          # 토폴로지 탭(단일 존·대역 뷰)
     assert "_renderZoneMap" in js               # 존·대역 렌더러
-    assert "_zoneIcon" in js and "_zoneIconKind" in js  # 장비 아이콘
+    assert "zoneSym" in js and "_zoneIconKind" in js  # 장비 SVG 아이콘
     assert "zoneFws" in js and "internetFw" in js  # Zone/경계(Internet) 방화벽 분류
     assert "internetSw" in js and "backbones" in js  # 중심축: Internet SW / OA Backbone
-    assert "zspine" in js                       # ISP GW→Internet SW→Internet FW→OA BB 중심축
-    assert "zsubs" in js                        # L3/L4 밑 대역 정보 박스(L2 아이콘 없음)
     assert "_hostTokens" in js                  # 방화벽 호스트명 토큰으로 Zone 구분
     assert "zoneByName" in js and "zoneKeyOf" in js  # 호스트명 1순위 + 이중화 병합
     assert "centralBBs" in js                   # 중심 OA BB만 중심축(Zone 백본은 Zone 내부)
     assert "cfgSubs" in js                       # L3 config 대역만(Zone 간 오염 방지)
+    # SVG 선+포트 하이브리드
+    assert "confirmedOwner" in js               # CDP/LLDP 확정 링크 우선 배정
+    assert 'l.source === "cdp/lldp"' in js       # 확정=실선 / 추론=점선 구분
+    assert "subText" in js                       # L3 밑 대역 텍스트(L2 아이콘 없음)
 
 
 def test_serial_c9300l_formats():
