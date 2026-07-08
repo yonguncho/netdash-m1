@@ -161,6 +161,14 @@ def rate_limit(endpoint, max_requests=5, window_seconds=60):
                 else:
                     _rate_limit_tracker[key] = [now]
 
+                # 메모리 누수 방지(CWE-770): 주기적으로 만료된 빈 키 정리.
+                # ip/token은 클라이언트 제어라 고유 키가 무한 누적될 수 있어 gc 필요.
+                _rl = _rate_limit_tracker
+                if len(_rl) > 512:
+                    for k in [k for k, v in _rl.items()
+                              if not any(now - t < window_seconds for t in v)]:
+                        del _rl[k]
+
             return f(*args, **kwargs)
         return wrapper
     return decorator
@@ -1984,9 +1992,10 @@ def create_app(demo_mode=None):
                 except Exception:
                     pass
                 return
-            # 계정: 쿼리로 전달되면 사용, 아니면 저장된 자격증명(webshell 내부 처리)
-            username = request.args.get("u", "")
-            password = request.args.get("p", "")
+            # 자격증명은 저장된 것(세션/DPAPI)만 사용 — 쿼리 파라미터로 받지 않는다
+            # (URL 쿼리는 access log/프록시 로그에 남을 수 있어 자격증명 노출 위험).
+            username = ""
+            password = ""
             src = db.get_setting(db_path, "source_ip") or None
             ranges = config.collector.get("allowed_ip_ranges")
 

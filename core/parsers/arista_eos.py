@@ -98,8 +98,11 @@ def _parse_macs(mac_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # Simplified regex with explicit MAC format
-        match = re.match(r"^\s*(\d+)\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+(\w+)\s+([A-Za-z0-9/:._-]+)$", line, re.IGNORECASE)
+        # MAC은 콜론/점/대시/무구분 모두 허용(Arista 표준은 dot: 0011.2233.44aa).
+        # 이전엔 콜론-페어만 매칭해 Arista MAC 테이블이 전량 유실됐다.
+        match = re.match(
+            r"^\s*(\d+)\s+([0-9a-fA-F][0-9a-fA-F.:\-]{10,18}[0-9a-fA-F])\s+(\w+)\s+([A-Za-z0-9/:._-]+)$",
+            line, re.IGNORECASE)
         if match:
             vlan_str, mac_addr, mac_type, port_name = match.groups()
 
@@ -132,8 +135,10 @@ def _parse_arps(arp_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # Simplified regex with explicit IP/MAC format
-        match = re.match(r"^\s*([\d.]+)\s+\d+\s+([\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2}:[\da-f]{2})\s+([A-Za-z0-9/:._-]+)$", line, re.IGNORECASE)
+        # MAC 형식 무관(dot/colon/dash) — 콜론-페어만 매칭하던 ARP 유실 수정
+        match = re.match(
+            r"^\s*([\d.]+)\s+\S+\s+([0-9a-fA-F][0-9a-fA-F.:\-]{10,18}[0-9a-fA-F])\s+([A-Za-z0-9/:._-]+)$",
+            line, re.IGNORECASE)
         if match:
             ip, mac_addr, interface = match.groups()
 

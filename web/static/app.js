@@ -2054,6 +2054,8 @@ function loadTopology() {
 function renderTopology() {
   var host = document.getElementById("topology-canvas");
   if (!host || !_topoData) return;
+  _topoWinClear();               // 이전 렌더의 window 리스너 정리(누수 방지)
+  if (_galaxyAnim) { cancelAnimationFrame(_galaxyAnim); _galaxyAnim = null; }
   if (!_topoData.nodes.length) {
     host.innerHTML = "<p style='color:#94a3b8;padding:20px'>표시할 장비가 없습니다. 스위치·방화벽을 수집하면 연결 관계가 그려집니다.</p>";
     return;
@@ -2655,7 +2657,7 @@ function _renderGalaxy(host) {
   });
   canvas.addEventListener("mouseleave", function () { hoverIdx = -1; tip.style.display = "none"; });
   canvas.addEventListener("mousedown", function (e) { drag = { px: e.clientX, py: e.clientY }; canvas.style.cursor = "grabbing"; });
-  window.addEventListener("mouseup", function () { drag = null; });
+  _topoWinOn("mouseup", function () { drag = null; });   // 추적 등록(재렌더 시 정리)
   canvas.addEventListener("wheel", function (e) {
     e.preventDefault();
     var f = e.deltaY > 0 ? 0.9 : 1.1;
@@ -2715,13 +2717,22 @@ function _topoBindZoomPan(host, width, height) {
   }, { passive: false });
   var drag = null;
   svgEl.addEventListener("mousedown", function (e) { drag = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y }; svgEl.style.cursor = "grabbing"; });
-  window.addEventListener("mousemove", function (e) {
+  // window 리스너는 추적 등록 — 재렌더 시 _topoWinClear로 정리(누수 방지)
+  _topoWinOn("mousemove", function (e) {
     if (!drag) return;
     var rect = svgEl.getBoundingClientRect();
     vb.x = drag.vx - (e.clientX - drag.sx) / rect.width * vb.w;
     vb.y = drag.vy - (e.clientY - drag.sy) / rect.height * vb.h; applyVB();
   });
-  window.addEventListener("mouseup", function () { drag = null; if (svgEl) svgEl.style.cursor = "grab"; });
+  _topoWinOn("mouseup", function () { drag = null; if (svgEl) svgEl.style.cursor = "grab"; });
+}
+
+// 토폴로지 뷰가 window에 붙인 리스너 추적/정리(재렌더마다 누적 방지)
+var _topoWinListeners = [];
+function _topoWinOn(type, fn) { window.addEventListener(type, fn); _topoWinListeners.push([type, fn]); }
+function _topoWinClear() {
+  _topoWinListeners.forEach(function (p) { window.removeEventListener(p[0], p[1]); });
+  _topoWinListeners = [];
 }
 
 function _bindTopoModeButtons() {

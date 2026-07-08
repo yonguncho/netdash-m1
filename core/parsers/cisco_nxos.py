@@ -222,10 +222,12 @@ def _map_status(word):
         return "up"
     if w.startswith("notconnec") or w in ("down", "sfpabsent", "xcvrabsen", "nooprmem", "noopermem"):
         return "down"
-    if "disabled" in w:
-        return "error-disabled"
+    # 'err'/'flap'을 'disabled'보다 먼저 검사 — err-disabled가 'disabled' 부분일치로
+    # 뭉개져 UI가 회색으로 오표시되던 문제 수정. IOS 파서와 동일하게 'err-disabled' 반환.
     if "err" in w or "flap" in w:
         return "err-disabled"
+    if "disabled" in w:
+        return "error-disabled"
     return "unknown"
 
 
