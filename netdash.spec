@@ -7,6 +7,10 @@ hiddenimports += collect_submodules('werkzeug')
 hiddenimports += ['requests']
 # 웹 SSH 터미널(WebSocket)
 hiddenimports += ['flask_sock', 'simple_websocket', 'wsproto']
+# PPTX 구성도 자동 생성
+hiddenimports += ['pptx', 'PIL', 'PIL.Image', 'PIL.ImageDraw', 'PIL.ImageFont']
+_pptx_d, _pptx_b, _pptx_h = collect_all('pptx')
+datas += _pptx_d; binaries += _pptx_b; hiddenimports += _pptx_h
 # DPAPI 자격증명 암호화(win32crypt). 미번들 시 암호화가 None→자격증명 저장 실패.
 hiddenimports += ['win32crypt', 'win32api', 'pywintypes']
 

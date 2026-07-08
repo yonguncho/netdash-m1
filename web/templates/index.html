@@ -231,6 +231,7 @@
           </select>
           <button id="btn-sw-apply-type" class="btn btn--secondary" style="font-size:12px" disabled>선택 항목에 적용</button>
           <button id="btn-configs-export" class="btn btn--secondary" style="font-size:12px" title="선택한 스위치의 최신 running-config 백업을 ZIP으로 다운로드(미선택 시 전체)">config 다운로드</button>
+          <button id="btn-pptx-report" class="btn btn--primary" style="font-size:12px" title="네트워크 구성도를 PPTX로 자동 생성(고객 전달용)">📊 구성도 PPTX</button>
           <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·모델·버전·위치...)" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:230px">
         </div>
       </div>
@@ -561,6 +562,29 @@
       <div id="dtab-syslog" class="dtab-pane"></div>
       <div id="dtab-config" class="dtab-pane"></div>
       <div id="dtab-history" class="dtab-pane"></div>
+    </div>
+  </div>
+
+  <!-- 구성도 PPTX 생성 모달 -->
+  <div id="modal-pptx" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box" style="max-width:440px">
+      <div class="modal__header">
+        <span>📊 네트워크 구성도 PPTX 생성</span>
+        <button class="modal__close" data-close="modal-pptx">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label>고객사명</label>
+        <input id="pptx-customer" type="text" placeholder="예: OO전자">
+        <label>생성일자</label>
+        <input id="pptx-date" type="date">
+        <p style="font-size:11px;color:#64748b;margin-top:8px">
+          표지 → 서버실 구성도 → TPS 구역 개요 → 구역별 상세 순으로 자동 생성됩니다.
+          SK AX USA 로고·브랜드가 적용됩니다. 파일명: 고객사명_네트워크구성도_날짜.pptx</p>
+        <div style="text-align:right;margin-top:12px">
+          <button id="pptx-generate" class="btn btn--primary" style="font-size:13px">PPTX 다운로드</button>
+        </div>
+      </div>
     </div>
   </div>
 

@@ -987,6 +987,27 @@ def create_app(demo_mode=None):
             log_event("error", "configs_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/report/pptx", methods=["GET"])
+    @rate_limit("report_pptx", max_requests=10, window_seconds=60)
+    def report_pptx():
+        """네트워크 구성도 PPTX 자동 생성. ?customer=고객사명&date=YYYY-MM-DD"""
+        try:
+            from core import pptx_report
+            customer = (request.args.get("customer") or "").strip()[:60]
+            gdate = (request.args.get("date") or "").strip()[:10]
+            if gdate and not re.match(r"^\d{4}-\d{2}-\d{2}$", gdate):
+                gdate = None
+            data, fname = pptx_report.build_pptx(db_path, customer=customer, generated=gdate)
+            import urllib.parse
+            quoted = urllib.parse.quote(fname)
+            return Response(
+                data,
+                mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                headers={"Content-Disposition": "attachment; filename*=UTF-8''%s" % quoted})
+        except Exception as e:
+            log_event("error", "report_pptx_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "PPTX 생성 실패: " + collector._sanitize_error_msg(str(e))}), 500
+
     @app.route("/api/configs/export-all", methods=["GET"])
     def export_all_configs():
         """config 백업 ZIP 다운로드. ?ids=1,2,3이면 선택 장비만, 없으면 전체."""

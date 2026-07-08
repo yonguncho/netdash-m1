@@ -10,6 +10,9 @@ pyyaml==6.0.1
 flask-sock==0.7.0
 simple-websocket==1.0.0
 openpyxl==3.1.2
+# PPTX 네트워크 구성도 자동 생성(순수 파이썬 — Cairo/Graphviz 불필요)
+python-pptx==0.6.23
+pillow==10.2.0
 requests==2.31.0
 pywin32==312 ; sys_platform == "win32"
 pytest==7.4.3

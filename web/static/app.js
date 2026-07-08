@@ -2781,6 +2781,26 @@ function loadConfigTab(switchId) {
     .catch(function (e) { console.error(e); pane.innerHTML = "<p style='color:#991b1b'>불러오기 오류</p>"; });
 }
 
+// ─── 구성도 PPTX 생성 ────────────────────────────────────────────
+(function () {
+  var btn = document.getElementById("btn-pptx-report");
+  if (btn) btn.addEventListener("click", function () {
+    var di = document.getElementById("pptx-date");
+    if (di && !di.value) { di.value = new Date().toISOString().slice(0, 10); }
+    openModal("modal-pptx");
+  });
+  var gen = document.getElementById("pptx-generate");
+  if (gen) gen.addEventListener("click", function () {
+    var c = (document.getElementById("pptx-customer") || {}).value || "";
+    var d = (document.getElementById("pptx-date") || {}).value || "";
+    if (!c.trim()) { alert("고객사명을 입력하세요."); return; }
+    var url = "/api/report/pptx?customer=" + encodeURIComponent(c.trim()) +
+      (d ? "&date=" + encodeURIComponent(d) : "");
+    window.location = url;
+    closeModal("modal-pptx");
+  });
+})();
+
 // ─── config 다운로드(ZIP) — 체크된 스위치만(미선택 시 전체) ──────────
 (function () {
   var btn = document.getElementById("btn-configs-export");
