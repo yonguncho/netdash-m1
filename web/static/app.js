@@ -844,6 +844,20 @@ function _vendorLabel(v) {
   var c = _canonVendor(v);
   return _VENDOR_LABELS[c] || c;
 }
+// 이웃(링크) 수집 방식 뱃지 — CDP/LLDP=정확, 추론(disabled)=경고
+function _nbrSrcBadge(sw) {
+  var s = sw.neighbor_source;
+  if (!s) return "";
+  if (s === "cdp" || s === "lldp") {
+    return " <span style='font-size:9px;color:#16a34a' title='" + s.toUpperCase() +
+      "로 정확한 물리 연결 수집'>●" + s.toUpperCase() + "</span>";
+  }
+  if (s === "disabled") {
+    return " <span style='font-size:9px;color:#b45309;cursor:help' title='" +
+      escHtml(sw.neighbor_note || "CDP/LLDP 비활성 — MAC 추론 링크 사용") + "'>⚠추론</span>";
+  }
+  return "";
+}
 
 // 구분 인라인 변경(위임) — 선택 즉시 저장
 document.addEventListener("change", function (e) {
@@ -921,7 +935,8 @@ function renderSwitchTable(switches) {
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'></td>" +
       "<td>" + typeSel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
-      escHtml(sw.hostname || "-") + "</td><td>" + escHtml(_vendorLabel(sw.vendor)) + "</td><td>" +
+      escHtml(sw.hostname || "-") + "</td><td>" + escHtml(_vendorLabel(sw.vendor)) +
+      _nbrSrcBadge(sw) + "</td><td>" +
       (sw.model ? escHtml(sw.model)
         : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 show version/show switch에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.os_version ? escHtml(sw.os_version)

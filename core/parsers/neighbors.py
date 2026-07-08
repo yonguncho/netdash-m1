@@ -13,6 +13,34 @@ def _norm(p):
     return utils.normalize_port(p) or (p or "").strip()
 
 
+def neighbor_source_status(cdp_out, lldp_out, n_cdp, n_lldp):
+    """이웃 수집 결과를 진단 문자열로. (실제 링크 vs 비활성 vs 미지원 구분)
+
+    반환: (source, note)
+      source: 'cdp' | 'lldp' | 'disabled' | 'none'
+      note  : 사람이 읽는 사유(비활성 등). 정상이면 "".
+    """
+    def _disabled(txt):
+        t = (txt or "").lower()
+        return ("not enabled" in t or "disabled globally" in t or
+                "invalid command" in t or "% invalid" in t or
+                ("feature" in t and "lldp" in t))
+    if n_cdp:
+        return "cdp", ""
+    if n_lldp:
+        return "lldp", ""
+    cdp_off = _disabled(cdp_out)
+    lldp_off = _disabled(lldp_out)
+    if cdp_off or lldp_off:
+        parts = []
+        if cdp_off:
+            parts.append("CDP 비활성")
+        if lldp_off:
+            parts.append("LLDP 비활성")
+        return "disabled", " · ".join(parts) + " — MAC 추론 링크 사용(정확도↓). 장비에서 CDP/LLDP 활성화 권장"
+    return "none", ""
+
+
 def parse_cdp_detail(output):
     """Cisco 'show cdp neighbors detail' 파싱(IOS/IOS-XE/NX-OS 공통 형식).
 

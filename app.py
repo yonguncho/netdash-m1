@@ -371,6 +371,17 @@ def create_app(demo_mode=None):
                         sw["reachable"] = reach[sw["id"]]
             except Exception:
                 pass
+            # 이웃 수집 방식(cdp/lldp/disabled) 주입 — 어느 장비가 추론인지 표시
+            try:
+                for sw in switches:
+                    v = db.get_setting(db_path, "nbrsrc_%d" % sw["id"], "")
+                    if v:
+                        parts = v.split("|", 1)
+                        sw["neighbor_source"] = parts[0]
+                        if len(parts) > 1:
+                            sw["neighbor_note"] = parts[1]
+            except Exception:
+                pass
 
             return jsonify({
                 "switches": switches,

@@ -58,6 +58,20 @@ def test_nxos_parse_includes_neighbors():
     assert len(r["neighbors"]) == 2
 
 
+def test_neighbor_source_status():
+    from core.parsers import neighbors as nb
+    # CDP 결과 있음 → cdp
+    assert nb.neighbor_source_status("...", "", 2, 0)[0] == "cdp"
+    # CDP 비활성 + LLDP 결과 있음 → lldp
+    assert nb.neighbor_source_status("% CDP is not enabled", "...", 0, 1)[0] == "lldp"
+    # 둘 다 비활성 → disabled + 사유
+    src, note = nb.neighbor_source_status("cdp disabled globally",
+                                          "% Invalid command", 0, 0)
+    assert src == "disabled" and "비활성" in note
+    # 출력 없음 → none
+    assert nb.neighbor_source_status("", "", 0, 0)[0] == "none"
+
+
 def test_neighbors_roundtrip_and_topology(temp_db):
     a = db.save_switch(temp_db, "SKBA_F1_FABB", "10.92.0.1", "cisco_nxos")
     b = db.save_switch(temp_db, "SKBA_F1_FASW1", "10.92.174.11", "cisco_nxos")

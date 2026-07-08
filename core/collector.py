@@ -647,7 +647,26 @@ def _worker_loop():
             db.save_port_channels(db_path, snapshot_id, switch_id, parsed_data.get("port_channels", []))
             # CDP/LLDP 이웃(물리 연결) 저장 — 토폴로지 정확도 향상
             if "neighbors" in parsed_data:
-                db.save_neighbors(db_path, switch_id, parsed_data.get("neighbors", []))
+                nbr_list = parsed_data.get("neighbors", [])
+                db.save_neighbors(db_path, switch_id, nbr_list)
+                # 수집 방식 진단: CDP/LLDP/비활성(추론) 어느 경로인지 로그 + 저장
+                try:
+                    from .parsers import neighbors as _nb
+                    from .parsers.cisco_ios import parse_cdp_detail as _pc  # noqa
+                except Exception:
+                    _nb = None
+                if _nb is not None:
+                    n_cdp = len(_nb.parse_cdp_detail(outputs.get("neighbors", "")))
+                    n_lldp = len(_nb.parse_lldp_detail(outputs.get("lldp", "")))
+                    source, note = _nb.neighbor_source_status(
+                        outputs.get("neighbors", ""), outputs.get("lldp", ""), n_cdp, n_lldp)
+                    utils.log_event("info", "neighbor_source", switch_id=switch_id,
+                                    source=source, count=len(nbr_list), note=note)
+                    try:
+                        db.set_setting(db_path, "nbrsrc_%d" % switch_id,
+                                       source + ("|" + note if note else ""))
+                    except Exception:
+                        pass
             # VLAN 이름(show vlan brief)은 스냅샷 무관 최신값으로 교체 저장
             if parsed_data.get("vlans"):
                 db.save_vlan_names(db_path, switch_id, parsed_data.get("vlans", []))
