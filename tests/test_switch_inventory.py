@@ -56,12 +56,12 @@ def test_parse_inventory_dedup():
 def test_import_inventory_endpoint(client):
     buf = _make_xlsx(
         [["10.0.1.10", "255.255.255.0", "TPS-F1B02_1F01_FA_SW1"],
-         ["8.8.8.8", "255.255.255.0", "PUBLIC"]],   # 공인 IP는 SSRF로 제외
+         ["127.0.0.1", "255.255.255.0", "LOOPBACK"]],   # 위험 대역은 SSRF로 제외(공인은 허용)
         ["IP", "IP SUBNET", "HOSTNAME"])
     r = client.post("/api/switches/import-inventory",
                     data={"file": (buf, "inv.xlsx")},
                     content_type="multipart/form-data")
     body = r.get_json()
     assert body["ok"] is True
-    assert body["imported"] == 1   # 사설만
-    assert body["skipped"] == 1    # 공인 제외
+    assert body["imported"] == 1   # 정상 IP만
+    assert body["skipped"] == 1    # 위험 대역 제외

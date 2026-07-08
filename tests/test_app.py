@@ -103,7 +103,8 @@ app:
         r = c.get("/api/switches")
         assert r.status_code == 200
         # 수동 추가(POST)도 토큰 없이 통과 (사용자가 겪은 unauthorized 회귀 방지)
-        r2 = c.post("/api/switches/manual", json={"ip": "10.0.0.5", "vendor": "cisco"})
+        # force=true: 도달성 게이트 우회(이 테스트는 토큰 면제 검증용, 도달성 무관)
+        r2 = c.post("/api/switches/manual", json={"ip": "10.0.0.5", "vendor": "cisco", "force": True})
         assert r2.status_code in (200, 201)
 
 

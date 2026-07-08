@@ -429,12 +429,22 @@ def create_app(demo_mode=None):
             if not ip:
                 return jsonify({"error": "ip is required"}), 400
 
-            # HARDENING (CWE-918 SSRF): Validate IPv4 format and reject reserved ranges
+            # SSRF 안전선만 유지(loopback/link-local/multicast/reserved 차단).
+            # 정적 IP 화이트리스트는 강제하지 않고 '실제 도달(ping/TCP)'로 등록을 허용한다.
             try:
                 validated_ip = validate_ipv4(ip, allowed_ip_ranges=config.collector.get("allowed_ip_ranges"))
             except ValueError as e:
                 log_event("warning", "add_switch_invalid_ip", ip=ip, reason=str(e))
                 return jsonify({"error": str(e)}), 400
+
+            # 도달성 게이트: ping 또는 관리 포트(TCP) 응답 시 등록. force=true/데모모드면 생략.
+            if not data.get("force") and not config.app.get("demo_mode"):
+                src = db.get_setting(db_path, "source_ip") or None
+                if not collector.is_reachable(validated_ip, source_ip=src):
+                    log_event("warning", "add_switch_unreachable", ip=validated_ip)
+                    return jsonify({"error": "%s 도달 불가 — ping/TCP(22·443·23·80) 응답이 없습니다. "
+                                             "연결(케이블/방화벽/경로)을 확인하세요. 그래도 등록하려면 '강제 등록'을 사용하세요."
+                                             % validated_ip, "unreachable": True}), 400
 
             if not name:
                 name = hostname or validated_ip

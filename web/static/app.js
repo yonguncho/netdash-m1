@@ -1947,22 +1947,30 @@ document.getElementById("btn-add-confirm").addEventListener("click", function() 
   // 수정 모드(_editSwitchId)면 PUT, 신규면 POST
   var url = _editSwitchId ? ("/api/switches/" + _editSwitchId) : "/api/switches/manual";
   var method = _editSwitchId ? "PUT" : "POST";
-  fetch(url, {
-    method: method,
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      name: document.getElementById("add-name").value.trim(),
-      ip: ip,
-      hostname: document.getElementById("add-hostname").value.trim(),
-      vendor: document.getElementById("add-vendor").value,
-      device_type: (document.getElementById("add-devtype") || {value: ""}).value,
-      location: document.getElementById("add-location").value.trim(),
-      note: document.getElementById("add-note").value,
-    }),
-  }).then(function(r) { return r.json(); }).then(function(data) {
-    if (data.ok) { closeModal("modal-add-switch"); _editSwitchId = null; pollState(); }
-    else alert(data.error || "저장 실패");
-  }).catch(function(e) { console.error(e); alert("서버 오류"); });
+  function submit(force) {
+    fetch(url, {
+      method: method,
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        name: document.getElementById("add-name").value.trim(),
+        ip: ip,
+        hostname: document.getElementById("add-hostname").value.trim(),
+        vendor: document.getElementById("add-vendor").value,
+        device_type: (document.getElementById("add-devtype") || {value: ""}).value,
+        location: document.getElementById("add-location").value.trim(),
+        note: document.getElementById("add-note").value,
+        force: !!force,
+      }),
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.ok) { closeModal("modal-add-switch"); _editSwitchId = null; pollState(); }
+      else if (data.unreachable && !force) {
+        // 도달 불가 → 강제 등록 확인
+        if (confirm((data.error || "도달 불가") + "\n\n그래도 강제로 등록할까요?")) submit(true);
+      }
+      else alert(data.error || "저장 실패");
+    }).catch(function(e) { console.error(e); alert("서버 오류"); });
+  }
+  submit(false);
 });
 
 // ─── M9: 보고서 내보내기 ─────────────────────────────────────────

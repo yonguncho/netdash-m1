@@ -85,12 +85,12 @@ def test_add_firewall_rejects_out_of_range_port(client):
 
 
 def test_collect_revalidates_host_ssrf(client):
-    """C2: DB에 우회 저장된 공인 IP 방화벽도 collect 시점에 재검증으로 차단."""
+    """C2: DB에 우회 저장된 위험 대역(루프백) 방화벽도 collect 시점 재검증으로 차단."""
     from config import get_config
     from core import db as _db
     db_path = get_config(demo_mode=True).get_db_path()
-    # DB 레이어로 직접 공인 IP 저장(엔드포인트 검증 우회 시뮬레이션)
-    fid = _db.save_firewall(db_path, "EVIL", "fortigate", "8.8.8.8", 443)
+    # DB 레이어로 직접 위험 IP 저장(엔드포인트 검증 우회 시뮬레이션)
+    fid = _db.save_firewall(db_path, "EVIL", "fortigate", "127.0.0.1", 443)
     r = client.post(f"/api/firewalls/{fid}/collect", json={"token": "x"})
     assert r.status_code == 400
     assert "rejected" in r.get_json()["error"]

@@ -156,6 +156,33 @@ def _tcp_precheck(ip, port=22, timeout=4, source_ip=None):
         return False
 
 
+def _icmp_ping(ip, timeout_ms=1500):
+    """시스템 ping으로 ICMP 도달성 확인(권한 불필요). 성공 시 True."""
+    import subprocess
+    import platform
+    try:
+        if platform.system().lower().startswith("win"):
+            cmd = ["ping", "-n", "1", "-w", str(int(timeout_ms)), str(ip)]
+        else:
+            cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout_ms / 1000))), str(ip)]
+        r = subprocess.run(cmd, capture_output=True, timeout=(timeout_ms / 1000.0) + 2,
+                           creationflags=(0x08000000 if platform.system().lower().startswith("win") else 0))
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def is_reachable(ip, source_ip=None, tcp_ports=(22, 443, 23, 80)):
+    """장비 도달성 확인 — 등록 게이트용. TCP(관리 포트) 또는 ICMP ping 중 하나라도 응답하면 True.
+
+    정적 IP 화이트리스트 대신 '실제 통신 가능 여부'로 등록을 허용하기 위한 판정.
+    """
+    for p in tcp_ports:
+        if _tcp_precheck(ip, p, timeout=2, source_ip=source_ip):
+            return True
+    return _icmp_ping(ip)
+
+
 def canonical_vendor(vendor):
     """저장용 벤더 정규화: 별칭(cisco/extreme/nexus...)을 표준 값으로.
 

@@ -57,8 +57,8 @@ def test_api_update_switch(client):
 
 def test_api_update_switch_ssrf(client):
     sid = client.post("/api/switches/manual", json={"ip": "10.0.0.7", "name": "SW", "vendor": "cisco"}).get_json()["switch_id"]
-    # 공인 IP로 수정 시도 → 거부
-    r = client.put(f"/api/switches/{sid}", json={"ip": "8.8.8.8"})
+    # 위험 대역(루프백)으로 수정 시도 → 거부(공인 IP는 정책상 허용)
+    r = client.put(f"/api/switches/{sid}", json={"ip": "127.0.0.1"})
     assert r.status_code == 400
 
 

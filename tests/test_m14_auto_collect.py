@@ -76,12 +76,12 @@ def test_ip_allowed_ssrf():
 
 
 def test_auto_collect_skips_invalid_ip(temp_db, monkeypatch):
-    """자동 수집이 허용 대역 밖 IP 장비를 건너뛰는지(SSRF 재검증)."""
+    """자동 수집이 위험 대역(루프백 등) IP 장비를 건너뛰는지(SSRF 재검증)."""
     from core import collector, config_loader
-    # 공인 IP로 스위치 등록(우회 저장 시나리오) + 가짜 자격증명
-    sid = db.save_switch(temp_db, "BAD", "8.8.8.8", "cisco_ios")
+    # 위험 대역 IP로 스위치 등록(우회 저장 시나리오) + 가짜 자격증명
+    sid = db.save_switch(temp_db, "BAD", "127.0.0.1", "cisco_ios")
     db.update_cred_blob(temp_db, sid, "fake-blob")
     called = {"n": 0}
     monkeypatch.setattr(collector, "collect_switch", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
     collector.collect_all_registered(temp_db)
-    assert called["n"] == 0  # 공인 IP → collect_switch 호출 안 됨
+    assert called["n"] == 0  # 위험 대역 → collect_switch 호출 안 됨

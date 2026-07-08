@@ -16,12 +16,10 @@ collector:
   max_concurrent: 3
   ssh_timeout: 30
   read_timeout: 60
-  # HARDENING (CWE-918 SSRF): RFC1918 기본 허용 범위 (폐쇄망 전용).
-  # 공인 IP를 허용해야 할 경우 이 목록에 추가.
-  allowed_ip_ranges:
-    - "10.0.0.0/8"
-    - "172.16.0.0/12"
-    - "192.168.0.0/16"
+  # 정적 IP 화이트리스트는 기본 비활성(빈 목록). 등록은 '실제 도달(ping/TCP)'로 허용한다.
+  # SSRF 위험 대역(loopback/link-local/multicast/reserved)은 validate_ipv4에서 항상 차단.
+  # 특정 대역만 허용하도록 제한하려면 아래에 CIDR을 추가(예: "10.0.0.0/8").
+  allowed_ip_ranges: []
 
   commands:
     cisco_ios:

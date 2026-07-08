@@ -47,8 +47,31 @@ def test_api_switch_test_endpoint(client, monkeypatch):
 
 
 def test_api_switch_test_ssrf(client):
-    r = client.post("/api/switches/test", json={"ip": "8.8.8.8", "username": "a", "password": "b"})
-    assert r.status_code == 400  # 공인 IP 차단
+    # 정책: 공인 IP는 허용(도달성으로 판단), 위험 대역(루프백/링크로컬 등)만 차단
+    r = client.post("/api/switches/test", json={"ip": "127.0.0.1", "username": "a", "password": "b"})
+    assert r.status_code == 400  # 루프백 차단
+
+
+def test_public_ip_allowed_without_whitelist():
+    """정적 화이트리스트 없으면 공인 IP 허용, 위험 대역만 차단."""
+    import pytest
+    from app import validate_ipv4
+    assert validate_ipv4("208.97.24.195", None) == "208.97.24.195"   # 공인 허용
+    assert validate_ipv4("208.97.24.195", []) == "208.97.24.195"     # 빈 목록도 허용
+    with pytest.raises(ValueError):
+        validate_ipv4("127.0.0.1", [])                                # 루프백 차단
+    with pytest.raises(ValueError):
+        validate_ipv4("169.254.169.254", [])                          # 링크로컬(메타데이터) 차단
+
+
+def test_is_reachable_gate(monkeypatch):
+    """등록 게이트: TCP 또는 ICMP 중 하나라도 응답하면 도달 가능."""
+    from core import collector
+    monkeypatch.setattr(collector, "_tcp_precheck", lambda *a, **k: False)
+    monkeypatch.setattr(collector, "_icmp_ping", lambda *a, **k: False)
+    assert collector.is_reachable("208.97.24.195") is False
+    monkeypatch.setattr(collector, "_icmp_ping", lambda *a, **k: True)
+    assert collector.is_reachable("208.97.24.195") is True
 
 
 def test_api_firewall_test_endpoint(client, monkeypatch):
