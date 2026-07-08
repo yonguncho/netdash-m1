@@ -2611,7 +2611,7 @@ function _renderZoneMap(host) {
   var zoneMap = {}, zoneOrder = [];
   zoneFws.forEach(function (f) {
     var k = zoneKeyOf(f);
-    if (!zoneMap[k]) { zoneMap[k] = { key: k, fws: [], dists: [], zL2: [] }; zoneOrder.push(k); }
+    if (!zoneMap[k]) { zoneMap[k] = { key: k, fws: [], bbs: [], dists: [], zL2: [] }; zoneOrder.push(k); }
     zoneMap[k].fws.push(f);
   });
   // 링크 기반 소유자(보조): 각 방화벽 아래 BFS(rank>=2)
@@ -2640,28 +2640,29 @@ function _renderZoneMap(host) {
     });
     return score > 0 ? best : null;
   }
-  // dist 밑 대역(config SVI + 링크로 매달린 L2 /24)
-  function subnetsUnder(startId, startRank) {
-    var start = byId[startId], set = {};
-    ((start && start.subnets) || []).forEach(function (c) { set[c] = 1; });
-    var seen = {}; seen[startId] = 1;
-    var q = [startId];
-    while (q.length) {
-      var id = q.shift();
-      (adj[id] || []).forEach(function (nb) {
-        var nn = byId[nb];
-        if (!nn || seen[nb] || rk(nn) <= startRank) return;
-        seen[nb] = 1; q.push(nb);
-        var c = _ipBand(nn.ip); if (c) set[c] = 1;
-      });
-    }
+  // config의 'ip address'에서 도출된 직결 대역(authoritative)만 사용
+  function cfgSubs(node) {
+    var set = {};
+    ((node && node.subnets) || []).forEach(function (c) { set[c] = 1; });
     return set;
   }
 
   var assigned = {};
   [isp, internetSw, internetFw].forEach(function (n) { if (n) assigned[n.id] = 1; });
-  backbones.forEach(function (n) { assigned[n.id] = 1; });
   zoneFws.forEach(function (f) { assigned[f.id] = 1; });
+  // 백본(cores) → 중심 OA BB vs Zone 백본 구분:
+  //  · 인터넷 방화벽에 링크된 백본 = 중심 OA BB(중심축)
+  //  · 호스트명 토큰이 특정 Zone과 맞는 백본 = 그 Zone 백본(Zone 내부에 표시)
+  //  · 그 외(VISS처럼 구별 토큰 없음) = 중심 OA BB
+  var centralBBs = [];
+  var internetFwId = internetFw ? internetFw.id : null;
+  backbones.forEach(function (bb) {
+    assigned[bb.id] = 1;
+    var linkedToInternet = internetFwId && (adj[bb.id] || []).indexOf(internetFwId) >= 0;
+    var k = linkedToInternet ? null : (zoneByName(bb) || linkOwner[bb.id]);
+    if (k && zoneMap[k]) zoneMap[k].bbs.push(bb);
+    else centralBBs.push(bb);
+  });
   // rank2(L3/L4) → Zone 배정
   nodes.forEach(function (n) {
     if (rk(n) !== 2 || assigned[n.id]) return;
@@ -2674,18 +2675,21 @@ function _renderZoneMap(host) {
     var k = zoneByName(n) || linkOwner[n.id];
     if (k && zoneMap[k]) { assigned[n.id] = 1; zoneMap[k].zL2.push(n); }
   });
-  // Zone 객체 완성: dist별 대역(config + 매칭 L2 /24), 나머지 L2는 Zone '기타 대역'
+  // Zone 완성: dist 대역 = L3 config 대역 + (Zone 내부) 호스트명 매칭 L2 /24
   var zones = zoneOrder.map(function (k) {
     var z = zoneMap[k];
     z.fws.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
+    z.bbs.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
     z.dists.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
+    var single = z.dists.length === 1;
     var usedCidr = {};
     var dists = z.dists.map(function (d) {
-      var set = subnetsUnder(d.id, 2);
+      var set = cfgSubs(d);
       var dtok = distinctive(_hostTokens(d.name));
       z.zL2.forEach(function (l2) {
         var lt = distinctive(_hostTokens(l2.name));
-        if (dtok.some(function (x) { return lt.indexOf(x) >= 0; })) {
+        // dist가 하나면 Zone L2 전부, 여러 개면 토큰 겹치는 L2만(Zone 내부로 한정)
+        if (single || dtok.some(function (x) { return lt.indexOf(x) >= 0; })) {
           var c = _ipBand(l2.ip); if (c) set[c] = 1;
         }
       });
@@ -2693,9 +2697,10 @@ function _renderZoneMap(host) {
       subs.forEach(function (c) { usedCidr[c] = 1; });
       return { node: d, subs: subs };
     });
+    // 어느 dist에도 안 잡힌 Zone L2 /24 → 기타(직결 L2)
     var zExtra = {};
-    z.zL2.forEach(function (l2) { var c = _ipBand(l2.ip); if (c && (!usedCidr[c] || !dists.length)) zExtra[c] = 1; });
-    return { fws: z.fws, label: k, dists: dists, zSubs: Object.keys(zExtra).sort() };
+    z.zL2.forEach(function (l2) { var c = _ipBand(l2.ip); if (c && !usedCidr[c]) zExtra[c] = 1; });
+    return { fws: z.fws, bbs: z.bbs, label: k, dists: dists, zSubs: Object.keys(zExtra).sort() };
   });
   zones.sort(function (a, b) { return a.label.localeCompare(b.label); });
   // 미분류(어느 Zone에도 못 들어간 L3/L4)
@@ -2720,6 +2725,11 @@ function _renderZoneMap(host) {
   function zoneBox(z) {
     var s = "<div class='zonebox'><div class='zonebox__head'>🗂 " + escHtml(z.label) + "</div>";
     s += "<div class='zone-fwrow'>" + z.fws.map(function (f) { return nodeCard(f, "fw", "znode--fw"); }).join("") + "</div>";
+    // Zone 백본(있으면): 방화벽 아래에 표시
+    if (z.bbs && z.bbs.length) {
+      s += "<div class='zarrow'>▼</div><div class='zone-fwrow'>" +
+        z.bbs.map(function (b) { return nodeCard(b, "bb"); }).join("") + "</div>";
+    }
     s += "<div class='zarrow'>▼</div>";
     if (z.dists.length) s += "<div class='zdists'>" + z.dists.map(distBlock).join("") + "</div>";
     if (z.zSubs && z.zSubs.length) s += subsBox("기타(직결 L2)", z.zSubs);
@@ -2735,7 +2745,7 @@ function _renderZoneMap(host) {
   if (isp) spine.push(nodeCard(isp, "isp"));
   if (internetSw) spine.push(nodeCard(internetSw, "sw"));
   if (internetFw) spine.push(nodeCard(internetFw, "fw"));
-  backbones.forEach(function (n) { spine.push(nodeCard(n, "bb")); });
+  centralBBs.forEach(function (n) { spine.push(nodeCard(n, "bb")); });
   if (spine.length) {
     html += "<div class='zspine'><div class='zspine__t'>중심축</div>" +
       spine.join("<div class='zarrow'>▼</div>") + "</div>" +
@@ -2746,7 +2756,7 @@ function _renderZoneMap(host) {
   if (orphanDists.length) {
     html += "<div class='zonebox zonebox--orphan'><div class='zonebox__head'>🗂 미분류 (방화벽 링크 미수집)</div>" +
       "<div class='zdists'>" + orphanDists.map(function (d) {
-        return distBlock({ node: d, subs: subnetsUnder(d.id, 2) });
+        return distBlock({ node: d, subs: Object.keys(cfgSubs(d)).sort() });
       }).join("") + "</div></div>";
   }
   html += "</div>";

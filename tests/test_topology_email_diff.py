@@ -296,10 +296,11 @@ def test_topology_zone_view():
     assert "zoneFws" in js and "internetFw" in js  # Zone/경계(Internet) 방화벽 분류
     assert "internetSw" in js and "backbones" in js  # 중심축: Internet SW / OA Backbone
     assert "zspine" in js                       # ISP GW→Internet SW→Internet FW→OA BB 중심축
-    assert "subnetsUnder" in js                 # L3/L4 밑 대역 정보만(L2 아이콘 없음)
-    assert "zsubs" in js                        # 대역 정보 박스
+    assert "zsubs" in js                        # L3/L4 밑 대역 정보 박스(L2 아이콘 없음)
     assert "_hostTokens" in js                  # 방화벽 호스트명 토큰으로 Zone 구분
     assert "zoneByName" in js and "zoneKeyOf" in js  # 호스트명 1순위 + 이중화 병합
+    assert "centralBBs" in js                   # 중심 OA BB만 중심축(Zone 백본은 Zone 내부)
+    assert "cfgSubs" in js                       # L3 config 대역만(Zone 간 오염 방지)
 
 
 def test_serial_c9300l_formats():
