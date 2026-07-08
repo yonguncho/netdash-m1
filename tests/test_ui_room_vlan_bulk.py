@@ -82,11 +82,13 @@ def test_state_injects_room_rack(client):
 
 
 def test_room_rack_view_letter_rows():
-    """서버실 랙 뷰: 열(A/B) 단위 줄 배치 + 랙 내 U 내림차순."""
+    """서버실 랙 뷰: 42U 실물형 프레임 + 열(A/B) 줄 배치 + U 내림차순 배치."""
     js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert " 열</div>" in js                              # 'A 열' 줄 제목
-    assert "^[A-Za-z]+" in js                             # 랙 이름 앞 글자(열)로 그룹
-    assert "(b.o.room_unit || 0) - (a.o.room_unit" in js  # U 내림차순(상단부터)
+    assert " 열</div>" in js                # 'A 열' 줄 제목
+    assert "^[A-Za-z]+" in js               # 랙 이름 앞 글자(열)로 그룹
+    assert "for (var u = maxU; u >= 1; u--)" in js   # U42→U1 전체 프레임(상단부터)
+    assert "rackframe" in js                # 실물형 랙 프레임
+    assert "_RACK_KIND" in js               # 장비 종류별 색상 팔레트
 
 
 # ─── UI 요소 존재 ─────────────────────────────

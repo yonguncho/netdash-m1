@@ -600,6 +600,8 @@ var _roomViewMode = "card";  // card | rack
   }
   bc.addEventListener("click", function () { setMode("card"); });
   br.addEventListener("click", function () { setMode("rack"); });
+  var ex = document.getElementById("btn-room-export");
+  if (ex) ex.addEventListener("click", function () { window.location = "/api/serverroom/export"; });
 })();
 
 function renderRoom(switches) {
@@ -668,6 +670,29 @@ function _roomSort(a, b) {
   return (b.room_unit || 0) - (a.room_unit || 0);  // 유닛 높은 번호가 위(실제 랙과 동일)
 }
 
+// 장비 종류 → 랙 셀 색/라벨(구분 컬럼 우선, 없으면 이름 패턴 추론)
+var _RACK_KIND = {
+  "Firewall": { c: "#ef4444", t: "FW" }, "BackBone": { c: "#a855f7", t: "Core" },
+  "L3 Switch": { c: "#8b5cf6", t: "L3" }, "L4 Switch": { c: "#f59e0b", t: "L4" },
+  "L2 Switch": { c: "#14b8a6", t: "L2" }, "Server": { c: "#3b82f6", t: "SRV" },
+  "AP": { c: "#22c55e", t: "AP" }, "_": { c: "#64748b", t: "" }
+};
+function _roomInferDT(name) {
+  var t = (name || "").toUpperCase();
+  if (/_FW|-FW|FIREWALL|ASA|PALO|FORTI/.test(t)) return "Firewall";
+  if (/L4|SLB|ADC|ALTEON|OASVR/.test(t)) return "L4 Switch";
+  if (/BACKBONE|\bBB\b|BB\d|CORE/.test(t)) return "BackBone";
+  if (/L3|DSW/.test(t)) return "L3 Switch";
+  if (/L2|FASW|ASW|ACC|SW/.test(t)) return "L2 Switch";
+  return "";
+}
+function _roomKind(d) {
+  if (d.k === "fw") return _RACK_KIND["Firewall"];
+  var dt = d.o.device_type || _roomInferDT(d.o.name);
+  return _RACK_KIND[dt] || _RACK_KIND["_"];
+}
+
+// 실제 42U 랙 배치도 — U42(상단)→U1(하단), 장비를 해당 U에 종류색으로 배치
 function renderRoomRackView(switches, firewalls) {
   var host = document.getElementById("room-rack-view");
   if (!host) return;
@@ -677,45 +702,61 @@ function renderRoomRackView(switches, firewalls) {
     host.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
-  // 랙(room_rack) → 유닛 목록 (스위치 + 방화벽)
-  var racks = {};
-  switches.forEach(function (sw) { (racks[sw.room_rack] = racks[sw.room_rack] || []).push({ k: "sw", o: sw }); });
-  firewalls.forEach(function (f) { (racks[f.room_rack] = racks[f.room_rack] || []).push({ k: "fw", o: f }); });
+  var racks = {};   // {rack: {unit: device}}
+  function _put(d) {
+    var rk = d.o.room_rack, u = d.o.room_unit;
+    if (!rk || !u) return;
+    (racks[rk] = racks[rk] || {})[u] = d;
+  }
+  switches.forEach(function (sw) { _put({ k: "sw", o: sw }); });
+  firewalls.forEach(function (f) { _put({ k: "fw", o: f }); });
 
-  // 열(A/B/...) 단위로 줄을 나눔: A01 A02...가 한 줄, B01 B02...가 다음 줄.
-  // 각 랙 안은 U 내림차순(U42→U41→U40 — 실제 랙 상단부터).
+  // 열(A/B) 단위로 줄 분리, 각 줄에 랙 나란히
   var rows = {};
   Object.keys(racks).forEach(function (rk) {
     var m = rk.match(/^[A-Za-z]+/);
-    var letter = m ? m[0].toUpperCase() : "#";
-    (rows[letter] = rows[letter] || []).push(rk);
+    (rows[m ? m[0].toUpperCase() : "#"] = rows[(m ? m[0].toUpperCase() : "#")] || []).push(rk);
   });
+  var RACK_U = 42;
 
   function _rackHtml(rk) {
-    var units = racks[rk].slice().sort(function (a, b) { return (b.o.room_unit || 0) - (a.o.room_unit || 0); });
-    var unitsHtml = units.map(function (u) {
-      if (u.k === "fw") {
-        var f = u.o, fsc = f.reachable === false ? "critical" : (_fwStatusMeta[f.status] || "new");
-        return "<div class='rack-unit rack-unit--" + fsc + "' data-action='detail-fw' data-id='" + f.id + "'>" +
-          "<span class='rack-unit__u'>U" + escHtml(String(f.room_unit)) + "</span>" +
-          "<span class='rack-unit__name'>🛡 " + escHtml(f.name) + "</span>" +
-          "<span class='rack-unit__ip'>" + escHtml(f.host) + "</span></div>";
+    var map = racks[rk];
+    var maxU = RACK_U;
+    Object.keys(map).forEach(function (u) { if (+u > maxU) maxU = +u; });
+    var slots = "";
+    for (var u = maxU; u >= 1; u--) {
+      var d = map[u];
+      if (d) {
+        var k = _roomKind(d);
+        var obj = d.o, isFw = d.k === "fw";
+        var down = isFw ? (obj.reachable === false) : (obj.status === "failed" || obj.reachable === false);
+        var act = isFw ? ("data-action='detail-fw' data-id='" + obj.id + "'")
+                       : ("data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(obj)) + "'");
+        slots += "<div class='ru ru--dev' " + act +
+          " style='background:" + k.c + "22;border-left:4px solid " + k.c + "'" +
+          " title='" + escHtml((obj.name || "") + " · " + (obj.ip || obj.host || "") + " · U" + u) + "'>" +
+          "<span class='ru__u'>U" + u + "</span>" +
+          "<span class='ru__tag' style='background:" + k.c + "'>" + (k.t || "") + "</span>" +
+          "<span class='ru__name'>" + (down ? "🔴 " : "") + escHtml(obj.name || "") + "</span>" +
+          "</div>";
+      } else {
+        slots += "<div class='ru ru--empty'><span class='ru__u'>U" + u + "</span></div>";
       }
-      var sw = u.o, cls = swStatusClass(sw);
-      return "<div class='rack-unit rack-unit--" + cls + "' " +
-        "data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>" +
-        "<span class='rack-unit__u'>U" + escHtml(String(sw.room_unit)) + "</span>" +
-        "<span class='rack-unit__name'>" + escHtml(sw.name) + "</span>" +
-        "<span class='rack-unit__ip'>" + escHtml(sw.ip) + "</span></div>";
-    }).join("");
-    return "<div class='rack'><div class='rack__label'>🗄 " + escHtml(rk) + "</div>" +
-      "<div class='rack__units'>" + unitsHtml + "</div></div>";
+    }
+    return "<div class='rackframe'>" +
+      "<div class='rackframe__label'>🗄 " + escHtml(rk) + " <span style='font-size:10px;color:#94a3b8'>(" + maxU + "U)</span></div>" +
+      "<div class='rackframe__slots'>" + slots + "</div></div>";
   }
 
-  host.innerHTML = Object.keys(rows).sort().map(function (letter) {
+  var legend = "<div class='rack-legend'>" +
+    Object.keys(_RACK_KIND).filter(function (k) { return k !== "_" && _RACK_KIND[k].t; }).map(function (k) {
+      return "<span><i style='background:" + _RACK_KIND[k].c + "'></i>" + _RACK_KIND[k].t + "</span>";
+    }).join("") + "</div>";
+
+  host.innerHTML = legend + Object.keys(rows).sort().map(function (letter) {
     var racksHtml = rows[letter].sort().map(_rackHtml).join("");
     return "<div class='rack-group'><div class='rack-group__title'>🗄 " + escHtml(letter) +
-      " 열</div><div class='rack-row'>" + racksHtml + "</div></div>";
+      " 열</div><div class='rack-row rack-row--frames'>" + racksHtml + "</div></div>";
   }).join("");
 }
 

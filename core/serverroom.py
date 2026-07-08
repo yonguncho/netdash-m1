@@ -30,3 +30,123 @@ def parse_rack(location):
     except ValueError:
         return None
     return {"rack": rack, "unit": unit, "label": "%s랙 U%d" % (rack, unit)}
+
+
+# 장비 종류 → 엑셀 셀 채움색(ARGB, 프론트 _RACK_KIND와 동일 팔레트)
+_KIND_FILL = {
+    "Firewall": "FFEF4444", "BackBone": "FFA855F7", "L3 Switch": "FF8B5CF6",
+    "L4 Switch": "FFF59E0B", "L2 Switch": "FF14B8A6", "Server": "FF3B82F6",
+    "AP": "FF22C55E",
+}
+_RACK_U = 42          # 랙 높이(U)
+_RACKS_PER_ROW = 2    # 한 줄에 랙 2개(첨부 엑셀 형식)
+
+
+def _infer_dt(name):
+    t = (name or "").upper()
+    import re as _re
+    if _re.search(r"_FW|-FW|FIREWALL|ASA|PALO|FORTI", t):
+        return "Firewall"
+    if _re.search(r"L4|SLB|ADC|ALTEON|OASVR", t):
+        return "L4 Switch"
+    if _re.search(r"BACKBONE|\bBB\b|BB\d|CORE", t):
+        return "BackBone"
+    if _re.search(r"L3|DSW", t):
+        return "L3 Switch"
+    if _re.search(r"L2|FASW|ASW|ACC|SW", t):
+        return "L2 Switch"
+    return ""
+
+
+def build_rack_xlsx(devices):
+    """서버실 랙 배치를 첨부 엑셀 형식으로 생성.
+
+    devices: [{name, ip, rack, unit, device_type}] — parse_rack 통과분만.
+    Returns: xlsx bytes.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+    import io
+
+    # 랙 → {unit: dev}
+    racks = {}
+    for d in devices:
+        rk, u = d.get("rack"), d.get("unit")
+        if not rk or not u:
+            continue
+        racks.setdefault(rk, {})[u] = d
+    rack_names = sorted(racks.keys())
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ServerRoom"
+
+    thin = Side(style="thin", color="FFBFBFBF")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    hdr_fill = PatternFill("solid", fgColor="FF1F2937")
+    hdr_font = Font(bold=True, color="FFFFFFFF", size=12)
+    u_font = Font(color="FF64748B", size=9)
+    dev_font = Font(bold=True, color="FFFFFFFF", size=10)
+    center = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left", vertical="center")
+
+    # 각 랙 블록: 2컬럼(U라벨, 장비명) + 1컬럼 간격
+    BLOCK_COLS = 3
+    row0 = 1
+    for ri in range(0, len(rack_names), _RACKS_PER_ROW):
+        chunk = rack_names[ri:ri + _RACKS_PER_ROW]
+        # 이 줄에서 사용할 최대 U (기본 42, 초과 시 확장)
+        max_u = _RACK_U
+        for rk in chunk:
+            for u in racks[rk]:
+                if u > max_u:
+                    max_u = u
+        # 헤더(랙명) — U라벨+장비명 두 칸 병합
+        for ci, rk in enumerate(chunk):
+            c0 = 1 + ci * BLOCK_COLS  # U라벨 컬럼
+            c1 = c0 + 1               # 장비명 컬럼
+            ws.merge_cells(start_row=row0, start_column=c0, end_row=row0, end_column=c1)
+            cell = ws.cell(row=row0, column=c0, value=rk)
+            cell.fill = hdr_fill
+            cell.font = hdr_font
+            cell.alignment = center
+            cell.border = border
+            ws.cell(row=row0, column=c1).border = border
+        # U 행 (U{max_u} → U1)
+        for idx, u in enumerate(range(max_u, 0, -1)):
+            r = row0 + 1 + idx
+            for ci, rk in enumerate(chunk):
+                c0 = 1 + ci * BLOCK_COLS
+                c1 = c0 + 1
+                uc = ws.cell(row=r, column=c0, value="U%d" % u)
+                uc.font = u_font
+                uc.alignment = center
+                uc.border = border
+                dc = ws.cell(row=r, column=c1)
+                dc.border = border
+                dc.alignment = left
+                dev = racks[rk].get(u)
+                if dev:
+                    dc.value = dev.get("name") or ""
+                    dc.font = dev_font
+                    dt = dev.get("device_type") or _infer_dt(dev.get("name"))
+                    fill = _KIND_FILL.get(dt)
+                    if fill:
+                        dc.fill = PatternFill("solid", fgColor=fill)
+        row0 = row0 + 1 + max_u + 2  # 다음 랙-줄 블록(간격 2행)
+
+    # 컬럼 너비
+    ncols = _RACKS_PER_ROW * BLOCK_COLS
+    for c in range(1, ncols + 1):
+        col = get_column_letter(c)
+        if (c - 1) % BLOCK_COLS == 0:
+            ws.column_dimensions[col].width = 6      # U라벨
+        elif (c - 1) % BLOCK_COLS == 1:
+            ws.column_dimensions[col].width = 26     # 장비명
+        else:
+            ws.column_dimensions[col].width = 2      # 간격
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

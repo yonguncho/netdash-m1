@@ -1073,6 +1073,34 @@ def create_app(demo_mode=None):
             log_event("error", "configs_export_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/serverroom/export", methods=["GET"])
+    def export_serverroom():
+        """서버실 랙 배치를 엑셀(랙 그리드 형식)로 다운로드."""
+        try:
+            from core import serverroom
+            devices = []
+            for sw in db.get_switches(db_path):
+                room = serverroom.parse_rack(sw.get("location"))
+                if room:
+                    devices.append({"name": sw.get("name") or sw.get("hostname"),
+                                    "ip": sw.get("ip"), "rack": room["rack"], "unit": room["unit"],
+                                    "device_type": sw.get("device_type")})
+            for f in db.list_firewalls(db_path):
+                room = serverroom.parse_rack(f.get("location"))
+                if room:
+                    devices.append({"name": f.get("name"), "ip": f.get("host"),
+                                    "rack": room["rack"], "unit": room["unit"],
+                                    "device_type": "Firewall"})
+            if not devices:
+                return jsonify({"error": "서버실 소속 장비가 없습니다. location에 'A03U36' 형식으로 랙/유닛을 기재하세요."}), 404
+            data = serverroom.build_rack_xlsx(devices)
+            return Response(data,
+                            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            headers={"Content-Disposition": "attachment; filename=serverroom_rack.xlsx"})
+        except Exception as e:
+            log_event("error", "serverroom_export_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/configs/<int:backup_id>", methods=["GET"])
     def get_config_content(backup_id):
         """설정 백업 원문 다운로드(txt)."""

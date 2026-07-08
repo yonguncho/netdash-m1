@@ -399,3 +399,18 @@ body {
 /* 토폴로지: 구성도가 캔버스 전체 높이를 채우도록 */
 .topo-stage { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; }
 .topo-stage #topo-svg { width: 100%; height: 100%; }
+
+/* 서버실 랙 배치도(42U 실물형) */
+.rack-row--frames { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.rackframe { background: #0f172a; border: 2px solid #334155; border-radius: 8px; padding: 6px; width: 230px; }
+.rackframe__label { color: #e2e8f0; font-weight: 700; font-size: 13px; text-align: center; padding: 4px 0 6px; }
+.rackframe__slots { display: flex; flex-direction: column; gap: 1px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 3px; }
+.ru { display: flex; align-items: center; gap: 6px; height: 20px; padding: 0 5px; border-radius: 2px; font-size: 11px; }
+.ru--empty { color: #475569; background: repeating-linear-gradient(45deg,#0b1220,#0b1220 6px,#111a2e 6px,#111a2e 12px); }
+.ru--dev { cursor: pointer; color: #f1f5f9; }
+.ru--dev:hover { filter: brightness(1.25); }
+.ru__u { color: #64748b; width: 26px; flex: none; font-size: 9px; }
+.ru__tag { color: #0f172a; font-weight: 700; font-size: 9px; padding: 0 4px; border-radius: 3px; flex: none; }
+.ru__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rack-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 12px; font-size: 11px; color: #94a3b8; }
+.rack-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
