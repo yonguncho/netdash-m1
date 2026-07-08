@@ -2568,11 +2568,20 @@ function loadConfigTab(switchId) {
     .catch(function (e) { console.error(e); pane.innerHTML = "<p style='color:#991b1b'>불러오기 오류</p>"; });
 }
 
-// ─── config 일괄 다운로드(ZIP) ───────────────────────────────────
+// ─── config 다운로드(ZIP) — 체크된 스위치만(미선택 시 전체) ──────────
 (function () {
   var btn = document.getElementById("btn-configs-export");
   if (btn) btn.addEventListener("click", function () {
-    window.location = "/api/configs/export-all";
+    var ids = Array.prototype.map.call(
+      document.querySelectorAll("#switch-table-body .sw-check:checked"),
+      function (c) { return c.value; });
+    if (ids.length) {
+      window.location = "/api/configs/export-all?ids=" + ids.join(",");
+    } else {
+      if (confirm("선택된 장비가 없습니다. 전체 스위치의 config를 다운로드할까요?")) {
+        window.location = "/api/configs/export-all";
+      }
+    }
   });
 })();
 

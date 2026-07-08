@@ -72,6 +72,29 @@ class _DriverMismatchError(RuntimeError):
     """netmiko 드라이버-장비 불일치(프롬프트 매칭 실패). 재시도 무의미 → 즉시 폴백."""
 
 
+_EVENT_IFACE_RE = re.compile(
+    r"((?:GigabitEthernet|TenGigabitEthernet|FastEthernet|Ethernet|Eth|Gi|Te|Fa|"
+    r"Port-?channel|Po|Vlan|mgmt)\s?\d+(?:/\d+)*(?:\.\d+)?)", re.IGNORECASE)
+
+
+def _extract_event_ports(events, kind):
+    """log_analyzer 이벤트에서 해당 종류(flapping/looping)의 문제 포트 목록 추출."""
+    ports = []
+    for e in events or []:
+        et = e.get("type")
+        if kind == "flapping" and et != "flapping":
+            continue
+        if kind == "looping" and et not in ("looping", "error"):
+            continue
+        detail = e.get("detail") or ""
+        m = _EVENT_IFACE_RE.search(detail)
+        if m:
+            p = m.group(1).replace(" ", "")
+            if p not in ports:
+                ports.append(p)
+    return ports[:5]
+
+
 def _friendly_fail_reason(msg):
     """수집 실패 원인을 실행 가능한 한국어 안내로 변환(원문 뒤에 병기)."""
     low = (msg or "").lower()
@@ -643,9 +666,13 @@ def _worker_loop():
                         # 경보 전이 시에만 알람 이벤트(매 수집 스팸 방지)
                         if la["alert"] != prev_alert:
                             _kind = "looping" if la["alert"] == "critical" else "flapping"
+                            # 어떤 포트가 문제인지 로그 분석 결과에서 추출해 메시지에 포함
+                            _ports = _extract_event_ports(la["events"], _kind)
+                            _pstr = (" [%s]" % ", ".join(_ports)) if _ports else ""
+                            _kko = "루프(looping)" if _kind == "looping" else "플래핑(flapping)"
                             db.save_device_event(db_path, _kind, la["alert"], switch_id=switch_id,
                                                  label=sw_name,
-                                                 message="%s 감지: %s" % (_kind, sw_name))
+                                                 message="%s 감지: %s%s" % (_kko, sw_name, _pstr))
                 except Exception as e:
                     utils.log_event("warning", "log_analyze_skipped",
                                     error=_sanitize_error_msg(str(e)))

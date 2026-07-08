@@ -100,11 +100,25 @@ def validate_ipv4(ip_str, allowed_ip_ranges=None):
 _rate_limit_tracker = {}
 _rate_limit_lock = __import__("threading").Lock()
 
+_SERVER_ETH_IP = None   # 서버 이더넷 IP 캐시(루프백 접속 시 대체 표기용)
+
+
+def _server_eth_ip():
+    global _SERVER_ETH_IP
+    if _SERVER_ETH_IP is None:
+        try:
+            _SERVER_ETH_IP = netinfo._primary_ip() or ""
+        except Exception:
+            _SERVER_ETH_IP = ""
+    return _SERVER_ETH_IP
+
+
 def _client_ip():
     """실사용자 IP 판별 — 프록시/포워딩 뒤에서도 이더넷 IP가 기록되도록.
 
-    remote_addr가 127.0.0.1이어도 X-Forwarded-For / X-Real-IP 헤더가 있으면
-    그 값을 우선한다(첫 항목 = 원 클라이언트). 없으면 remote_addr 그대로.
+    우선순위: X-Forwarded-For → X-Real-IP → remote_addr.
+    remote_addr가 루프백(127.0.0.1/localhost/::1 = 같은 PC 접속)이면 접근 로그에
+    127.0.0.1 대신 서버 PC의 이더넷 IP로 표기(사용자 구분 목적).
     """
     xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
     if xff:
@@ -112,7 +126,12 @@ def _client_ip():
     xri = (request.headers.get("X-Real-IP") or "").strip()
     if xri:
         return xri[:64]
-    return request.remote_addr or "unknown"
+    ra = request.remote_addr or "unknown"
+    if ra in ("127.0.0.1", "localhost", "::1"):
+        eth = _server_eth_ip()
+        if eth:
+            return eth
+    return ra
 
 
 def rate_limit(endpoint, max_requests=5, window_seconds=60):
@@ -970,15 +989,26 @@ def create_app(demo_mode=None):
 
     @app.route("/api/configs/export-all", methods=["GET"])
     def export_all_configs():
-        """전체 스위치의 '최신' config 백업을 ZIP 한 파일로 다운로드."""
+        """config 백업 ZIP 다운로드. ?ids=1,2,3이면 선택 장비만, 없으면 전체."""
         try:
             import io as _io
             import zipfile as _zip
             from datetime import datetime as _dt
+            # 선택된 스위치 id 필터(체크박스 선택 다운로드)
+            ids_raw = (request.args.get("ids") or "").strip()
+            sel_ids = None
+            if ids_raw:
+                sel_ids = set()
+                for tok in ids_raw.split(","):
+                    tok = tok.strip()
+                    if tok.isdigit():
+                        sel_ids.add(int(tok))
             buf = _io.BytesIO()
             count = 0
             with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as zf:
                 for sw in db.get_switches(db_path):
+                    if sel_ids is not None and sw["id"] not in sel_ids:
+                        continue
                     backups = db.get_config_backups(db_path, sw["id"], limit=1)
                     if not backups:
                         continue
@@ -991,7 +1021,9 @@ def create_app(demo_mode=None):
                     zf.writestr(fname, row["content"])
                     count += 1
             if count == 0:
-                return jsonify({"error": "저장된 config 백업이 없습니다. 스위치를 수집하면 자동 백업됩니다."}), 404
+                msg = ("선택한 장비에 저장된 config 백업이 없습니다." if sel_ids
+                       else "저장된 config 백업이 없습니다. 스위치를 수집하면 자동 백업됩니다.")
+                return jsonify({"error": msg}), 404
             buf.seek(0)
             stamp = _dt.now().strftime("%Y%m%d")
             return Response(buf.read(), mimetype="application/zip",
