@@ -102,6 +102,7 @@ def build_topology(db_path):
     mgmt = _switch_mgmt_macs(db_path, switches, ip_macs)  # {sid: mac}
     mac_map = db.get_mac_to_switchport(db_path)          # {mac: [(sid, name, port)]}
     pc_map = db.get_port_channel_members(db_path)        # {(sid, po): [members]}
+    port_counts = db.get_port_mac_counts(db_path)        # {(sid, port_lower): MAC수}
 
     def _resolve_port(sid, port):
         """Po면 멤버 물리포트 표기로 해석."""
@@ -110,21 +111,31 @@ def build_topology(db_path):
             return "%s (%s)" % (", ".join(members), port)
         return port
 
-    # 방향 관측: directed[(A,B)] = A에서 B의 MAC이 보인 포트
+    # 방향 관측: directed[(A,B)] = A에서 B의 MAC이 보인 '직결' 포트.
+    # B의 관리 MAC이 A의 여러 포트에 보이면(루프/이중화), 어느 게 실제 직결인지
+    # 고른다: 물리 포트 우선 + 그 포트의 학습 MAC 수가 가장 적은 것(=액세스/직결 성향).
+    # 이렇게 하면 이미 수집된 MAC 테이블만으로 추론 장비의 연결도 정확히 완성된다.
     directed = {}
+    cand = {}   # (a,b) -> [ports]
     for b_sid, b_mac in mgmt.items():
         for (a_sid, _a_name, a_port) in mac_map.get(b_mac, []):
             if a_sid == b_sid:
                 continue
-            # 같은 (A,B)에 여러 포트가 보이면 첫 관측 유지
-            directed.setdefault((a_sid, b_sid), a_port)
+            cand.setdefault((a_sid, b_sid), []).append(a_port)
+    for (a_sid, b_sid), ports in cand.items():
+        def _score(p):
+            pl = (p or "").lower()
+            is_logical = pl.startswith(("po", "vl", "port-channel"))
+            cnt = port_counts.get((a_sid, pl), 9999)
+            return (1 if is_logical else 0, cnt)   # 물리 우선, MAC 수 적은 순
+        directed[(a_sid, b_sid)] = sorted(ports, key=_score)[0]
 
-    # 링크 병합(양방향 확인 여부 포함)
+    # 링크 병합(양방향 확인 여부 포함). MAC 추론 링크는 source='mac'.
     links = {}
     for (a, b), a_port in directed.items():
         key = (min(a, b), max(a, b))
-        entry = links.setdefault(key, {"a": key[0], "b": key[1],
-                                       "a_port": None, "b_port": None, "mutual": False})
+        entry = links.setdefault(key, {"a": key[0], "b": key[1], "a_port": None,
+                                       "b_port": None, "mutual": False, "source": "mac"})
         if a == key[0]:
             entry["a_port"] = _resolve_port(a, a_port)
         else:

@@ -40,8 +40,35 @@ def test_topology_mutual_link(temp_db):
     assert len(topo["links"]) == 1
     link = topo["links"][0]
     assert link["mutual"] is True
+    assert link.get("source") == "mac"     # CDP/LLDP 없으면 MAC 추론 링크
     ports = {link["a_port"], link["b_port"]}
     assert "Eth1/5" in ports and "Gi1/0/24" in ports
+
+
+def test_topology_mac_inference_picks_direct_port(temp_db):
+    """추론 장비: 이웃 MAC이 여러 포트에 보여도 직결(MAC 수 적은 물리) 포트 선택."""
+    a = db.save_switch(temp_db, "OABB", "10.0.0.1", "cisco_nxos")
+    b = db.save_switch(temp_db, "FASW1", "10.0.0.2", "cisco_ios")
+    mac_a, mac_b = "aa:aa:aa:00:00:01", "bb:bb:bb:00:00:02"
+    sa = db.save_snapshot(temp_db, a)
+    db.save_arp_entries(temp_db, sa, a, [
+        {"ip": "10.0.0.1", "mac": mac_a, "interface": "Vlan1"},
+        {"ip": "10.0.0.2", "mac": mac_b, "interface": "Vlan1"}])
+    # OABB: FASW1의 MAC이 Eth1/1(트렁크, MAC 다수)과 Eth1/9(직결, MAC 1개) 둘 다 보임
+    db.save_mac_entries(temp_db, sa, a, [
+        {"vlan": 1, "mac": mac_b, "port": "Eth1/1", "type": "dynamic"},
+        {"vlan": 1, "mac": "de:ad:be:ef:00:01", "port": "Eth1/1", "type": "dynamic"},
+        {"vlan": 1, "mac": "de:ad:be:ef:00:02", "port": "Eth1/1", "type": "dynamic"},
+        {"vlan": 1, "mac": mac_b, "port": "Eth1/9", "type": "dynamic"}])
+    sb = db.save_snapshot(temp_db, b)
+    db.save_mac_entries(temp_db, sb, b, [
+        {"vlan": 1, "mac": mac_a, "port": "Gi1/0/48", "type": "dynamic"}])
+    topo = topology.build_topology(temp_db)
+    link = [l for l in topo["links"] if {l["a"], l["b"]} == {a, b}][0]
+    ports = {link["a_port"], link["b_port"]}
+    assert "Eth1/9" in ports          # 트렁크 Eth1/1이 아니라 직결 Eth1/9
+    assert "Eth1/1" not in ports
+    assert link.get("source") == "mac"
     # depth: 링크 수 동률이면 한쪽이 root(depth 0), 상대는 1
     depths = {n["id"]: n["depth"] for n in topo["nodes"]}
     assert sorted(depths.values()) == [0, 1]

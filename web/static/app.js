@@ -2264,9 +2264,11 @@ function _renderCoreMap(host) {
     var mid = (y1 + y2) / 2;
     var pa = (top === l.a) ? l.a_port : l.b_port;
     var pb = (top === l.a) ? l.b_port : l.a_port;
+    var _srcTxt = l.source === "cdp/lldp" ? "  · CDP/LLDP 확정"
+      : l.source === "mac" ? "  · MAC 추론" : "";
     var tip = ((byId[top] || {}).name || "") + (pa ? " [" + pa + "]" : "") + "  ↕  " +
       ((byId[bot] || {}).name || "") + (pb ? " [" + pb + "]" : "") +
-      (l.l3 ? "  (L3 대역 인접)" : l.mutual ? "  (양방향)" : "");
+      (l.l3 ? "  (L3 대역 인접)" : l.mutual ? "  (양방향)" : "") + _srcTxt;
     // L3 인접 링크(대역 기반)는 파란 점선, 관측 링크는 실선
     var lstroke = l.l3 ? "#38bdf8" : (l.mutual ? "#94a3b8" : "#475569");
     var lwidth = l.l3 ? "2" : (l.mutual ? "2.5" : "1.5");
