@@ -297,8 +297,15 @@ def _parse_serial(vendor, text):
     if not t:
         return None
     v = (vendor or "").lower()
+    # cisco_xe/catalyst는 cisco_ios와 동일 포맷 → 같은 패턴 적용
+    if v.startswith("cisco_xe") or v.startswith("cisco_ios"):
+        v = "cisco_ios"
     patterns = {
         "cisco_ios": [r"System [Ss]erial [Nn]umber\s*:?\s*([A-Z0-9]+)",
+                      # show inventory: 'SN: FOC2xxxxxxx'(가장 확실 — 9300L 등)
+                      r"SN:\s*([A-Z0-9]+)",
+                      # Catalyst 스위치 표: 'Switch Ports Model Serial No.' 아래 행 끝의 SN
+                      r"^\*?\s*\d+\s+\d+\s+\S+\s+([A-Z0-9]{8,})\s*$",
                       r"Processor board ID\s+([A-Z0-9]+)"],
         "cisco_nxos": [r"SN:\s*([A-Z0-9]+)",
                        r"Processor Board ID\s+([A-Z0-9]+)"],
@@ -1046,9 +1053,29 @@ def diagnose_switch(switch, username, password, source_ip=None):
             shell.send("/boot/cur\n")
             out = (out or "") + "\n" + (_alteon_read(shell, timeout=10) or "")
         else:
+            # user 모드(>)면 enable 진입 — IOS-XE는 '>'에서 show 명령이
+            # "% Invalid input"으로 거부된다(진단이 오해를 주지 않도록 특권 모드로).
+            if res["prompt"].rstrip().endswith(">"):
+                shell.send("enable\n")
+                _t.sleep(0.8)
+                er = _alteon_read(shell, timeout=5) or ""
+                if "password" in er.lower():
+                    shell.send((password or "") + "\n")
+                    _t.sleep(0.8)
+                    _alteon_read(shell, timeout=5)
+            # 페이징 해제(--More-- 로 인한 출력 잘림/오인식 방지)
+            shell.send("terminal length 0\n")
+            _alteon_read(shell, timeout=3)
             probe_cmd = "show version"
             shell.send(probe_cmd + "\n")
             out = _alteon_read(shell, timeout=10)
+            # 시리얼은 show inventory의 SN이 가장 확실(9300L 등 표 형식 대응)
+            shell.send("show inventory\n")
+            inv = _alteon_read(shell, timeout=8) or ""
+            res["inventory_head"] = inv[:800]
+            ser = _parse_serial("cisco_ios", out) or _parse_serial("cisco_ios", inv)
+            if ser:
+                res["serial"] = ser
         res["probe_cmd"] = probe_cmd
         res["version_head"] = (out or "")[:1200]
         res["guess"] = (_detect_vendor_from_version(out)

@@ -414,3 +414,13 @@ body {
 .ru__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rack-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 12px; font-size: 11px; color: #94a3b8; }
 .rack-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+
+/* 토폴로지 대역 드릴다운 패널 */
+.band-detail { margin: 10px 14px; background: #0b1f1f; border: 1px solid #14b8a6; border-radius: 8px; overflow: hidden; }
+.band-detail__head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #0e2a2a; color: #5eead4; font-weight: 700; font-size: 13px; }
+.band-detail__close { margin-left: auto; background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 14px; }
+.band-detail__close:hover { color: #f1f5f9; }
+.band-detail__tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.band-detail__tbl th { text-align: left; padding: 6px 12px; color: #64748b; border-bottom: 1px solid #14343433; font-weight: 600; }
+.band-detail__tbl td { padding: 6px 12px; color: #e2e8f0; border-bottom: 1px solid #0f2a2a; }
+.band-l2-row:hover td { background: #0e2a2a; }

@@ -20,6 +20,9 @@ COMMANDS = {
     "arp": "show ip arp",
     "neighbors": "show cdp neighbors detail",
     "lldp": "show lldp neighbors detail",
+    # 시리얼/모델: Catalyst 일부(9300L 등)는 show version에 'System Serial Number'
+    # 줄이 없고 하단 스위치 표(Serial No. 열)에만 있음 → show inventory의 SN이 가장 확실.
+    "inventory": "show inventory",
 }
 
 # MAC: dot(0050.56a1.b2c3) / colon / hyphen 형식 모두 허용

@@ -201,7 +201,9 @@ def test_topology_two_tab_ui():
     assert "이중화 링크" in js                   # 이중화 쌍 인식
     assert "_RANK_SEG" in js                     # 세그먼트(구역) 컨테이너 박스
     assert "L3 대역 인접" in js                  # L3 링크 구분
-    assert "Core Layer" in js and "Distribution Layer" in js and "Access Layer" in js  # 3-Tier 라벨
+    assert "코어 계층" in js and "분배 계층" in js and "액세스 계층" in js  # 3-Tier 라벨
+    assert "_buildBands" in js and "_drawBand" in js  # L2 대역 뱃지(접기)
+    assert "_topoExpandL2" in js                 # L2 펼치기/접기 토글
 
 
 def test_topology_api(client):
@@ -272,3 +274,32 @@ def test_topology_tree_ui_features():
     assert "viewBox" in js and "wheel" in js  # 줌/팬
     assert "topo-edge" in js               # 베지어 링크 + 노드 호버 강조
     assert "_drawNode" in js               # 중간 카드 노드
+
+
+def test_topology_l2_band_ui():
+    """L2 대역 뱃지: 토글 버튼 + 뱃지 렌더 + /24 그룹핑 + 드릴다운."""
+    js = APP_JS.read_text(encoding="utf-8")
+    html = HTML.read_text(encoding="utf-8")
+    assert 'id="btn-topo-l2"' in html          # L2 펼치기/접기 토글 버튼
+    assert "_ipBand" in js                      # /24 대역 산출
+    assert "band-detail" in js                  # 드릴다운 패널
+    assert 'kind === "band"' in js              # 대역 유사노드 처리
+
+
+def test_serial_c9300l_formats():
+    """C9300L: show inventory SN / 스위치 표(Serial No.) / System Serial 모두 파싱."""
+    from core.collector import _parse_serial
+    inv = 'PID: C9300L-48P-4G     , VID: V01  , SN: FOC2530L1AB'
+    tbl = "*    1   57     C9300L-48P-4G      FOC2530L1AB"
+    std = "System Serial Number            : FCW2140L0GH"
+    assert _parse_serial("cisco_ios", inv) == "FOC2530L1AB"
+    assert _parse_serial("cisco_ios", tbl) == "FOC2530L1AB"
+    assert _parse_serial("cisco_ios", std) == "FCW2140L0GH"
+    # cisco_xe도 동일 패턴 적용
+    assert _parse_serial("cisco_xe", inv) == "FOC2530L1AB"
+
+
+def test_cisco_ios_runs_inventory():
+    """cisco_ios 수집 명령에 show inventory 포함(시리얼/모델 확실)."""
+    from core.parsers import cisco_ios
+    assert cisco_ios.COMMANDS.get("inventory") == "show inventory"

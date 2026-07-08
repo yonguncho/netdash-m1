@@ -2039,6 +2039,9 @@ function doSearch() {
 var _topoData = null;    // {nodes, links}
 var _topoMode = "core";  // "core"=서버실, "tps"=TPS 구역도
 var _topoZone = null;    // TPS 모드에서 선택된 구역
+var _topoExpandL2 = false;  // false=L2를 대역 뱃지로 접음(기본), true=개별 노드로 펼침
+var _topoOpenBand = null;   // 드릴다운으로 펼쳐본 대역 key
+var _topoBandsById = {};    // 현재 렌더의 대역 id→band (드릴다운 조회용)
 
 // 장비 종류 아이콘/색/심볼 — device_type 우선, 없으면 hostname 추론(백엔드 inferred)
 // sym: _deviceSymbol에 넘길 심볼 키(방화벽/백본/L3/L4/서버/기본)
@@ -2107,6 +2110,13 @@ function renderTopology() {
   });
   var zsel = document.getElementById("topo-zone-select");
   if (zsel) zsel.style.display = (_topoMode === "tps") ? "" : "none";
+  var l2b = document.getElementById("btn-topo-l2");
+  if (l2b) {
+    l2b.style.display = (_topoMode === "core") ? "" : "none";
+    l2b.textContent = _topoExpandL2 ? "🌐 L2 대역 접기" : "🌐 L2 펼치기";
+    l2b.className = "btn " + (_topoExpandL2 ? "btn--primary" : "btn--secondary");
+    l2b.style.fontSize = "12px";
+  }
 
   if (_topoMode === "tps") _renderTpsMap(host);
   else _renderCoreMap(host);
@@ -2167,6 +2177,7 @@ function _deviceSymbol(label, x, y, color) {
 var _CARD_W = 210, _CARD_H = 64;
 function _drawNode(svg, n, x, y, opts) {
   opts = opts || {};
+  if (n.kind === "band") { _drawBand(svg, n, x, y); return; }
   var k = _topoKindOf(n), dot = _topoStatusDot(n);
   var isGhost = opts.ghost;
   var tipLines = [k.label ? ("[" + k.label + "] " + (n.name || "")) : (n.name || ""),
@@ -2197,6 +2208,100 @@ function _drawNode(svg, n, x, y, opts) {
   svg.push("</g>");
 }
 
+// 대역(subnet) 뱃지 카드 — L2 스위치 무리를 한 장으로 접어 표현. 클릭 시 하단 드릴다운.
+var _BAND_C = "#14b8a6";
+function _drawBand(svg, n, x, y) {
+  var open = _topoOpenBand === n.id;
+  var termN = (n.termCount || 0);
+  var tip = "대역 " + (n.cidr || "") + "\nL2 스위치 " + n.l2s.length + "대" +
+    (termN ? " · 단말 " + termN + "대" : "") + "\n클릭 → 소속 L2 목록 보기";
+  svg.push("<g class='topo-band' data-band='" + escHtml(n.id) + "' data-tip=\"" + escHtml(tip) +
+    "\" style='cursor:pointer'>");
+  // 카드(대역 강조: 청록 굵은 테두리 + 좌측 바)
+  svg.push("<rect x='" + x + "' y='" + y + "' width='" + _CARD_W + "' height='" + _CARD_H +
+    "' rx='9' fill='#0e2a2a' stroke='" + _BAND_C + "' stroke-width='" + (open ? 3.5 : 2.5) + "'/>");
+  svg.push("<rect x='" + x + "' y='" + y + "' width='6' height='" + _CARD_H + "' rx='3' fill='" + _BAND_C + "'/>");
+  // 지구본 아이콘(대역)
+  svg.push("<g transform='translate(" + (x + 12) + "," + (y + (_CARD_H - 32) / 2) + ")'>" +
+    "<circle cx='16' cy='16' r='14' fill='" + _BAND_C + "' fill-opacity='0.16' stroke='" + _BAND_C + "' stroke-width='1.8'/>" +
+    "<ellipse cx='16' cy='16' rx='6' ry='14' fill='none' stroke='" + _BAND_C + "' stroke-width='1.3'/>" +
+    "<line x1='2' y1='16' x2='30' y2='16' stroke='" + _BAND_C + "' stroke-width='1.3'/>" +
+    "<line x1='4.5' y1='9' x2='27.5' y2='9' stroke='" + _BAND_C + "' stroke-width='1'/>" +
+    "<line x1='4.5' y1='23' x2='27.5' y2='23' stroke='" + _BAND_C + "' stroke-width='1'/></g>");
+  // 대역(CIDR) + VLAN
+  svg.push("<text x='" + (x + 54) + "' y='" + (y + 25) +
+    "' fill='#5eead4' font-size='13' font-weight='700'>🌐 " + escHtml((n.cidr || "").slice(0, 20)) + "</text>");
+  svg.push("<text x='" + (x + 54) + "' y='" + (y + 44) +
+    "' fill='#94a3b8' font-size='11'>L2 " + n.l2s.length + "대" +
+    (termN ? " · 단말 " + termN : "") + (n.vlan ? " · VLAN " + escHtml(String(n.vlan)) : "") + "</text>");
+  // 펼침 표시(쉐브론)
+  svg.push("<text x='" + (x + _CARD_W - 16) + "' y='" + (y + 40) +
+    "' fill='" + _BAND_C + "' font-size='16' text-anchor='middle'>" + (open ? "▾" : "▸") + "</text>");
+  // L2 대수 배지
+  svg.push("<circle cx='" + (x + _CARD_W - 16) + "' cy='" + (y + 16) + "' r='9' fill='" + _BAND_C + "'/>");
+  svg.push("<text x='" + (x + _CARD_W - 16) + "' y='" + (y + 20) +
+    "' fill='#04201f' font-size='11' font-weight='700' text-anchor='middle'>" + n.l2s.length + "</text>");
+  svg.push("</g>");
+}
+
+// L2 무리를 (상위 L3 → /24 대역)으로 그룹핑해 대역 뱃지 노드 배열로 반환
+function _ipBand(ip) {
+  if (!ip) return null;
+  var m = String(ip).match(/^(\d+)\.(\d+)\.(\d+)\.\d+$/);
+  return m ? (m[1] + "." + m[2] + "." + m[3] + ".0/24") : null;
+}
+function _buildBands(l2s, links, upperById) {
+  var l2ids = {};
+  l2s.forEach(function (n) { l2ids[n.id] = n; });
+  // 각 L2의 상위(코어/L3) 부모 후보: 링크로 이어진 upper 노드 중 최다
+  var parentOf = {};
+  links.forEach(function (l) {
+    [[l.a, l.b], [l.b, l.a]].forEach(function (p) {
+      if (l2ids[p[0]] && upperById[p[1]]) {
+        var m = parentOf[p[0]] = parentOf[p[0]] || {};
+        m[p[1]] = (m[p[1]] || 0) + 1;
+      }
+    });
+  });
+  function bestParent(id) {
+    var m = parentOf[id];
+    if (!m) return null;
+    return Object.keys(m).sort(function (a, b) { return m[b] - m[a]; })[0];
+  }
+  var bands = {};
+  l2s.forEach(function (n) {
+    var cidr = _ipBand(n.ip) || "기타 대역";
+    var par = bestParent(n.id);
+    var key = (par || "none") + "|" + cidr;
+    var b = bands[key];
+    if (!b) {
+      b = bands[key] = { id: "band:" + key, kind: "band", device_type: "L2 Switch",
+        name: cidr, cidr: cidr, parent: par, l2s: [], _subset: {} };
+    }
+    b.l2s.push(n);
+    (n.subnets || []).forEach(function (s) { b._subset[s] = 1; });
+  });
+  return Object.keys(bands).map(function (key) {
+    var b = bands[key];
+    b.subnets = Object.keys(b._subset);
+    return b;
+  });
+}
+// 링크를 대역 단위로 재매핑(L2 endpoint → band id), 중복 제거
+function _remapBandLinks(links, l2ToBand, keepIds) {
+  var seen = {}, out = [];
+  links.forEach(function (l) {
+    var a = l2ToBand[l.a] || l.a, b = l2ToBand[l.b] || l.b;
+    if (a === b || !keepIds[a] || !keepIds[b]) return;
+    var kk = a < b ? a + "~" + b : b + "~" + a;
+    if (seen[kk]) return;
+    seen[kk] = 1;
+    out.push({ a: a, b: b, mutual: l.mutual, l3: l.l3, source: l.source,
+      a_port: (l2ToBand[l.a] ? "" : l.a_port), b_port: (l2ToBand[l.b] ? "" : l.b_port) });
+  });
+  return out;
+}
+
 function _legendHTML(extra) {
   return "<div style='display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:8px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +
     "<span style='color:#ef4444'>🛡 Firewall</span><span style='color:#a855f7'>◆ Core(백본)</span>" +
@@ -2208,8 +2313,9 @@ function _legendHTML(extra) {
 
 // ── 서버실 구성도: 이중화 쌍 인식 + 계층형(방화벽→백본/L3→L4→L2) ──────
 function _coreRank(n) {
-  // 3-Tier: 0=Firewall, 1=Core(백본), 2=Distribution(L3·L4), 3=Access(L2)
+  // 3-Tier: 0=Firewall, 1=Core(백본), 2=Distribution(L3·L4), 3=Access(L2/대역)
   var dt = n.device_type || "", nm = (n.name || "").toUpperCase();
+  if (n.kind === "band") return 3;               // 대역 뱃지 = 액세스 계층
   if (n.kind === "fw" || dt === "Firewall") return 0;
   if (dt === "BackBone" || /BACKBONE|\bBB\b|BB\d|CORE/.test(nm)) return 1;
   if (dt === "L3 Switch" || dt === "L4 Switch" || /\bL3\b|\bL4\b|SLB|ADC|DIST|AGG/.test(nm)) return 2;
@@ -2217,15 +2323,42 @@ function _coreRank(n) {
 }
 
 function _renderCoreMap(host) {
-  var core = _topoData.nodes.filter(_isCoreDevice);
-  var coreIds = {};
-  core.forEach(function (n) { coreIds[n.id] = true; });
-  // 코어 링크: 노이즈 제거 위해 '양방향 확인(mutual)' 또는 방화벽 링크만
-  var links = _topoData.links.filter(function (l) {
-    if (!(coreIds[l.a] && coreIds[l.b])) return false;
-    var isFw = String(l.a)[0] === "f" || String(l.b)[0] === "f";
-    return l.mutual || isFw;
-  });
+  var rawCore = _topoData.nodes.filter(_isCoreDevice);
+  var core, links, coreIds = {};
+  var l2s = rawCore.filter(function (n) { return _coreRank(n) === 3; });
+  var upper = rawCore.filter(function (n) { return _coreRank(n) !== 3; });
+
+  if (!_topoExpandL2 && l2s.length) {
+    // ── L2 접기: L2 무리를 대역 뱃지로 축약 ──
+    var upperById = {};
+    upper.forEach(function (n) { upperById[n.id] = n; });
+    var bands = _buildBands(l2s, _topoData.links, upperById);
+    _topoBandsById = {};
+    bands.forEach(function (b) { _topoBandsById[b.id] = b; });
+    var l2ToBand = {};
+    bands.forEach(function (b) { b.l2s.forEach(function (n) { l2ToBand[n.id] = b.id; }); });
+    core = upper.concat(bands);
+    core.forEach(function (n) { coreIds[n.id] = true; });
+    // upper-upper 링크(기존 필터) + 대역 링크(L3→대역, 항상 표시)
+    var upperLinks = _topoData.links.filter(function (l) {
+      if (!(upperById[l.a] && upperById[l.b])) return false;
+      var isFw = String(l.a)[0] === "f" || String(l.b)[0] === "f";
+      return l.mutual || isFw;
+    });
+    var l2Uplinks = _topoData.links.filter(function (l) {
+      return (l2ToBand[l.a] && upperById[l.b]) || (l2ToBand[l.b] && upperById[l.a]);
+    });
+    links = upperLinks.concat(_remapBandLinks(l2Uplinks, l2ToBand, coreIds));
+  } else {
+    // ── L2 펼치기: 개별 노드 그대로 ──
+    core = rawCore;
+    core.forEach(function (n) { coreIds[n.id] = true; });
+    links = _topoData.links.filter(function (l) {
+      if (!(coreIds[l.a] && coreIds[l.b])) return false;
+      var isFw = String(l.a)[0] === "f" || String(l.b)[0] === "f";
+      return l.mutual || isFw;
+    });
+  }
   if (!core.length) {
     host.innerHTML = _legendHTML() +
       "<p style='color:#94a3b8;padding:20px'>서버실(코어) 장비가 없습니다. 스위치 '구분'을 방화벽/백본/L3/L4로 지정하면 여기에 표시됩니다.</p>";
@@ -2289,9 +2422,10 @@ function _renderCoreMap(host) {
              " preserveAspectRatio='xMidYMid meet' viewBox='0 0 " + width + " " + height +
              "' style='cursor:grab;display:block'>"];
 
-  // 세그먼트(구역) 컨테이너 — 첨부 구성도처럼 계층별 라운드 박스 + 라벨
-  var _RANK_SEG = { 0: { t: "Firewall (Gateway)", c: "#ef4444" }, 1: { t: "Core Layer (백본)", c: "#a855f7" },
-                    2: { t: "Distribution Layer (L3 · L4)", c: "#f59e0b" }, 3: { t: "Access Layer (L2)", c: "#14b8a6" } };
+  // 세그먼트(구역) 컨테이너 — 첨부 구성도처럼 계층별 라운드 박스 + 좌측 라벨
+  var _RANK_SEG = { 0: { t: "🛡 보안 계층 (Firewall)", c: "#ef4444", solid: true }, 1: { t: "🏢 코어 계층 (백본)", c: "#a855f7" },
+                    2: { t: "🔀 분배 계층 (L3 · L4)", c: "#f59e0b" },
+                    3: { t: _topoExpandL2 ? "🔌 액세스 계층 (L2)" : "🌐 액세스 계층 (L2 대역)", c: "#14b8a6" } };
   ranks.forEach(function (r, ri) {
     var row = layout[r].ordered;
     if (!row.length) return;
@@ -2300,9 +2434,12 @@ function _renderCoreMap(host) {
     var y = 30 + ri * (_CARD_H + GAP_Y);
     var seg = _RANK_SEG[r] || { t: "", c: "#64748b" };
     var padX = 22, padY = 16;
+    // 보안 계층은 실선 강조, 나머지는 은은한 점선
+    var dash = seg.solid ? "" : " stroke-dasharray='2 4'";
     svg.push("<rect x='" + (minX - padX) + "' y='" + (y - padY) + "' width='" + (maxX - minX + padX * 2) +
-      "' height='" + (_CARD_H + padY * 2) + "' rx='16' fill='" + seg.c + "' fill-opacity='0.06' stroke='" +
-      seg.c + "' stroke-opacity='0.45' stroke-width='1.5' stroke-dasharray='2 4'/>");
+      "' height='" + (_CARD_H + padY * 2) + "' rx='16' fill='" + seg.c + "' fill-opacity='" + (seg.solid ? "0.09" : "0.06") +
+      "' stroke='" + seg.c + "' stroke-opacity='" + (seg.solid ? "0.75" : "0.45") + "' stroke-width='" +
+      (seg.solid ? "2" : "1.5") + "'" + dash + "/>");
     svg.push("<text x='" + (minX - padX + 4) + "' y='" + (y - padY - 6) + "' fill='" + seg.c +
       "' font-size='12' font-weight='700'>" + escHtml(seg.t) + "</text>");
   });
@@ -2346,14 +2483,49 @@ function _renderCoreMap(host) {
   core.forEach(function (n) { var pp = pos[n.id]; if (pp) _drawNode(svg, n, pp.x, pp.y, {}); });
   svg.push("</svg>");
 
-  host.innerHTML = _legendHTML("<span style='color:#22d3ee'>═ 이중화</span><span style='color:#38bdf8'>┄ L3 대역 인접</span><span style='color:#e2e8f0;font-weight:600'>· 서버실 구성도</span>") +
+  var l2hint = _topoExpandL2 ? "<span style='color:#5eead4'>▭ L2 개별 노드</span>"
+    : "<span style='color:#5eead4'>🌐 L2=대역 뱃지(클릭→목록)</span>";
+  host.innerHTML = _legendHTML("<span style='color:#22d3ee'>═ 이중화</span><span style='color:#38bdf8'>┄ L3 대역 인접</span>" + l2hint) +
     "<div class='topo-stage'>" + svg.join("") + "</div>" +
+    _bandDetailHTML() +
     "<div id='topo-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;" +
     "border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:500;max-width:460px;white-space:pre-line'></div>";
   _bindTopoModeButtons();
   _topoBindTips(host);
   _topoBindNodeEvents(host);
+  _bindBandDetailEvents(host);
   _topoBindZoomPan(host, width, height);
+}
+
+// 대역 드릴다운 패널(HTML) — 열린 대역의 소속 L2 목록
+function _bandDetailHTML() {
+  var b = _topoOpenBand && _topoBandsById[_topoOpenBand];
+  if (!b) return "";
+  var rows = b.l2s.slice().sort(function (a, c) { return (a.name || "").localeCompare(c.name || ""); })
+    .map(function (n) {
+      var dot = _topoStatusDot(n);
+      return "<tr class='band-l2-row' data-swid='" + n.id + "' style='cursor:pointer'>" +
+        "<td><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:" + dot + ";margin-right:6px'></span>" +
+        escHtml(n.name || "") + "</td>" +
+        "<td style='color:#94a3b8'>" + escHtml(n.ip || "") + "</td>" +
+        "<td style='color:#7dd3fc'>" + escHtml((n.subnets || []).join(", ")) + "</td></tr>";
+    }).join("");
+  return "<div class='band-detail'>" +
+    "<div class='band-detail__head'>🌐 " + escHtml(b.cidr || "") + " — 소속 L2 " + b.l2s.length + "대" +
+    "<button class='band-detail__close' data-band-close='1'>✕</button></div>" +
+    "<table class='band-detail__tbl'><thead><tr><th>스위치</th><th>관리 IP</th><th>연결 대역</th></tr></thead>" +
+    "<tbody>" + rows + "</tbody></table></div>";
+}
+function _bindBandDetailEvents(host) {
+  var cl = host.querySelector("[data-band-close]");
+  if (cl) cl.addEventListener("click", function () { _topoOpenBand = null; renderTopology(); });
+  host.querySelectorAll(".band-l2-row").forEach(function (tr) {
+    tr.addEventListener("click", function () {
+      var id = tr.getAttribute("data-swid");
+      var sw = (_switches || []).find(function (s) { return String(s.id) === String(id); });
+      if (sw) openDetailPanel(sw);
+    });
+  });
 }
 
 // ── TPS 구역도: 구역 드롭다운 → 그 구역 액세스 스위치 트리 ──────────
@@ -2502,6 +2674,14 @@ function _layoutLayered(host, nodes, links, rankFn, title, ghostMap) {
 }
 
 function _topoBindNodeEvents(host) {
+  // 대역 뱃지 클릭 → 드릴다운(소속 L2 목록) 토글
+  host.querySelectorAll(".topo-band").forEach(function (g) {
+    g.addEventListener("click", function () {
+      var bid = g.getAttribute("data-band");
+      _topoOpenBand = (_topoOpenBand === bid) ? null : bid;
+      renderTopology();
+    });
+  });
   host.querySelectorAll(".topo-node").forEach(function (g) {
     g.addEventListener("click", function () {
       var id = g.getAttribute("data-swid");
@@ -2593,6 +2773,15 @@ function _bindTopoModeButtons() {
     zsel._bound = true;
     zsel.addEventListener("change", function () {
       _topoZone = zsel.value.replace(/\s*\(\d+\)\s*$/, "");
+      renderTopology();
+    });
+  }
+  var l2b = document.getElementById("btn-topo-l2");
+  if (l2b && !l2b._bound) {
+    l2b._bound = true;
+    l2b.addEventListener("click", function () {
+      _topoExpandL2 = !_topoExpandL2;
+      _topoOpenBand = null;
       renderTopology();
     });
   }
