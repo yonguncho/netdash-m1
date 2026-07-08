@@ -262,6 +262,21 @@ CREATE TABLE IF NOT EXISTS port_channels (
 """
 
 
+# CDP/LLDP 이웃(물리 연결) — 로컬포트↔원격장비/포트
+CREATE_NEIGHBORS_TABLE = """
+CREATE TABLE IF NOT EXISTS neighbors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    switch_id INTEGER,
+    local_port TEXT,
+    remote_name TEXT,
+    remote_port TEXT,
+    remote_ip TEXT,
+    platform TEXT,
+    updated TEXT
+)
+"""
+
+
 # 설비 현황: 대역 ping sweep + ARP + MAC 대조 결과
 CREATE_FACILITY_HOSTS_TABLE = """
 CREATE TABLE IF NOT EXISTS facility_hosts (
@@ -377,6 +392,7 @@ def init_schema(db_path):
                 CREATE_SWITCH_LOGS_TABLE,
                 CREATE_FACILITY_HOSTS_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
+                CREATE_NEIGHBORS_TABLE,
                 CREATE_DEVICE_EVENTS_TABLE,
                 CREATE_CONFIG_BACKUPS_TABLE,
                 CREATE_AUDIT_LOG_TABLE,
@@ -681,6 +697,34 @@ def get_port_mac_counts(db_path):
         except Exception:
             pass
     return counts
+
+
+def save_neighbors(db_path, switch_id, neighbors):
+    """CDP/LLDP 이웃 저장(스위치별 전체 교체). neighbors=[{local_port,remote_name,...}]."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute("DELETE FROM neighbors WHERE switch_id=?", (switch_id,))
+                for n in neighbors or []:
+                    conn.execute(
+                        "INSERT INTO neighbors (switch_id, local_port, remote_name, remote_port, "
+                        "remote_ip, platform, updated) VALUES (?,?,?,?,?,?,datetime('now'))",
+                        (switch_id, n.get("local_port"), n.get("remote_name"),
+                         n.get("remote_port"), n.get("remote_ip"), n.get("platform")))
+            except Exception as e:
+                log_event("warning", "save_neighbors_skipped", error=str(e))
+
+
+def get_all_neighbors(db_path):
+    """전체 이웃 반환 [{switch_id, local_port, remote_name, remote_port, remote_ip, platform}]."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT switch_id, local_port, remote_name, remote_port, remote_ip, platform "
+                        "FROM neighbors")
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
 
 
 def get_port_descriptions(db_path):

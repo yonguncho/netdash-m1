@@ -1,5 +1,17 @@
 # NetDash 릴리스 노트
 
+## v3.54.0 (2026-07-07) — CDP/LLDP 이웃 수집(정확한 물리 연결) — PPTX 자동화 1단계
+
+- **CDP/LLDP neighbor 수집 추가** — MAC 추론이 아니라 **프로토콜이 알려주는
+  정확한 물리 연결**(로컬포트↔원격장비/원격포트).
+  - Cisco IOS/NX-OS: `show cdp neighbors detail`(+LLDP 폴백),
+    Arista/ExtremeXOS: `show lldp neighbors detail(ed)`.
+  - 새 `neighbors` 테이블에 저장(스위치별 교체).
+- **토폴로지 링크 정확도 대폭 향상.** CDP/LLDP로 확인된 링크는 **양쪽 포트가
+  확정**되어 MAC 추론 링크 위에 덮어씀(source=cdp/lldp). 서버실 구성도·성단 뷰가
+  실제 배선대로 그려짐.
+- (다음 단계: 이 정확한 연결 데이터로 고객 전달용 PPTX 구성도 자동 생성)
+
 ## v3.53.0 (2026-07-07) — 토폴로지 🌌 성단 뷰(포스 그래프)
 
 - **토폴로지에 '성단 뷰' 모드 추가** — 자비스st 은하 파티클 컨셉.

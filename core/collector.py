@@ -645,6 +645,9 @@ def _worker_loop():
             db.save_arp_entries(db_path, snapshot_id, switch_id, parsed_data.get("arps", []))
             # NX-OS 포트채널 멤버(Po → 물리 멤버포트) 저장 — 설비 대조 해석용
             db.save_port_channels(db_path, snapshot_id, switch_id, parsed_data.get("port_channels", []))
+            # CDP/LLDP 이웃(물리 연결) 저장 — 토폴로지 정확도 향상
+            if "neighbors" in parsed_data:
+                db.save_neighbors(db_path, switch_id, parsed_data.get("neighbors", []))
             # VLAN 이름(show vlan brief)은 스냅샷 무관 최신값으로 교체 저장
             if parsed_data.get("vlans"):
                 db.save_vlan_names(db_path, switch_id, parsed_data.get("vlans", []))

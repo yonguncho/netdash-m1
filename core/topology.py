@@ -131,6 +131,34 @@ def build_topology(db_path):
             entry["b_port"] = _resolve_port(a, a_port)
         if entry["a_port"] and entry["b_port"]:
             entry["mutual"] = True
+
+    # CDP/LLDP 이웃 = 정확한 물리 링크(양쪽 포트 확정). MAC 추론 링크 위에 덮어씀.
+    name_to_sid = {(s.get("name") or "").lower(): s["id"] for s in switches}
+    host_to_sid = {(s.get("hostname") or "").lower(): s["id"] for s in switches if s.get("hostname")}
+    ip_to_sid = {s.get("ip"): s["id"] for s in switches if s.get("ip")}
+    try:
+        nbrs = db.get_all_neighbors(db_path)
+    except Exception:
+        nbrs = []
+    for nb in nbrs:
+        a_sid = nb.get("switch_id")
+        rname = (nb.get("remote_name") or "").lower()
+        b_sid = (name_to_sid.get(rname) or host_to_sid.get(rname)
+                 or ip_to_sid.get(nb.get("remote_ip")))
+        if not b_sid or b_sid == a_sid:
+            continue
+        key = (min(a_sid, b_sid), max(a_sid, b_sid))
+        entry = links.setdefault(key, {"a": key[0], "b": key[1],
+                                       "a_port": None, "b_port": None, "mutual": False})
+        lp = _resolve_port(a_sid, nb.get("local_port"))
+        rp = nb.get("remote_port")
+        if a_sid == key[0]:
+            entry["a_port"] = lp; entry["b_port"] = entry["b_port"] or rp
+        else:
+            entry["b_port"] = lp; entry["a_port"] = entry["a_port"] or rp
+        entry["mutual"] = True
+        entry["source"] = "cdp/lldp"      # 프로토콜 확정 링크 표시
+
     link_list = list(links.values())
 
     # BFS 계층(depth): 링크 수가 가장 많은 노드 = 루트(백본)

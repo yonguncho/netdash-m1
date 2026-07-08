@@ -23,6 +23,8 @@ COMMANDS = {
     "arp": "show ip arp",
     "port_channel": "show port-channel summary",
     "inventory": "show inventory",   # 모델명(PID) — show version에 없는 표기 변형 대응
+    "neighbors": "show cdp neighbors detail",
+    "lldp": "show lldp neighbors detail",
 }
 
 _IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
@@ -56,8 +58,12 @@ def parse(outputs, switch_id):
     from . import cisco_ios  # show vlan brief 파싱은 IOS와 동일 형식
     vlans = cisco_ios.parse_vlans(outputs.get("vlan", ""), switch_id)
     port_channels = _parse_port_channels(outputs.get("port_channel", ""), switch_id)
+    from . import neighbors as _nbr
+    nbrs = _nbr.parse_cdp_detail(outputs.get("neighbors", ""))
+    if not nbrs:
+        nbrs = _nbr.parse_lldp_detail(outputs.get("lldp", ""))
     return {"ports": ports, "macs": macs, "arps": arps, "vlans": vlans,
-            "port_channels": port_channels}
+            "port_channels": port_channels, "neighbors": nbrs}
 
 
 def _parse_port_channels(pc_output, switch_id):

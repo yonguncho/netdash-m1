@@ -36,6 +36,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "facility_hosts",
         # NX-OS 포트채널 멤버
         "port_channels",
+        # CDP/LLDP 이웃(물리 연결)
+        "neighbors",
         # 장비 변경/알람 이벤트
         "device_events",
         # 설정(running-config) 백업

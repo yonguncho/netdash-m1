@@ -32,6 +32,8 @@ collector:
       vlan: "show vlan brief"
       logging: "show logging"
       errors: "show interfaces"
+      neighbors: "show cdp neighbors detail"
+      lldp: "show lldp neighbors detail"
     arista_eos:
       status: "show interfaces"
       description: "show interfaces description"
@@ -39,6 +41,7 @@ collector:
       arp: "show ip arp"
       logging: "show logging last 100"
       errors: "show interfaces"
+      lldp: "show lldp neighbors detail"
     extreme_exos:
       status: "show ports no-refresh"
       description: "show ports description"
@@ -46,6 +49,7 @@ collector:
       arp: "show iparp"
       logging: "show log messages memory-buffer"
       sysinfo: "show switch"
+      lldp: "show lldp neighbors detailed"
     cisco_nxos:
       detail: "show interface"
       status: "show interface status"
@@ -57,6 +61,8 @@ collector:
       logging: "show logging last 100"
       port_channel: "show port-channel summary"
       inventory: "show inventory"
+      neighbors: "show cdp neighbors detail"
+      lldp: "show lldp neighbors detail"
 
 correlator:
   uplink_mac_threshold: 4

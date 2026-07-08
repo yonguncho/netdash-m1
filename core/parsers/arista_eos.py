@@ -8,7 +8,8 @@ COMMANDS = {
     "status": "show interfaces",
     "description": "show interfaces description",
     "mac": "show mac address-table dynamic",
-    "arp": "show ip arp"
+    "arp": "show ip arp",
+    "lldp": "show lldp neighbors detail"
 }
 
 
@@ -28,10 +29,13 @@ def parse(outputs, switch_id):
         p["in_errors"] = e.get("in_errors", 0)
         p["out_errors"] = e.get("out_errors", 0)
 
+    from . import neighbors as _nbr
+    nbrs = _nbr.parse_lldp_detail(outputs.get("lldp", ""))
     return {
         "ports": ports,
         "macs": macs,
-        "arps": arps
+        "arps": arps,
+        "neighbors": nbrs
     }
 
 

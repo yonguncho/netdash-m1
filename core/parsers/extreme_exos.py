@@ -11,6 +11,7 @@ COMMANDS = {
     "arp": "show iparp",
     "logging": "show log messages memory-buffer",
     "sysinfo": "show switch",   # 모델(System Type:)은 show version이 아니라 여기 있음
+    "lldp": "show lldp neighbors detailed",
 }
 
 
@@ -20,11 +21,14 @@ def parse(outputs, switch_id):
     ports = _parse_ports(outputs.get("status", ""), outputs.get("description", ""), switch_id)
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
+    from . import neighbors as _nbr
+    nbrs = _nbr.parse_lldp_detail(outputs.get("lldp", ""))
 
     return {
         "ports": ports,
         "macs": macs,
-        "arps": arps
+        "arps": arps,
+        "neighbors": nbrs
     }
 
 

@@ -18,6 +18,8 @@ COMMANDS = {
     "description": "show interface description",
     "mac": "show mac address-table",
     "arp": "show ip arp",
+    "neighbors": "show cdp neighbors detail",
+    "lldp": "show lldp neighbors detail",
 }
 
 # MAC: dot(0050.56a1.b2c3) / colon / hyphen 형식 모두 허용
@@ -94,7 +96,11 @@ def parse(outputs, switch_id):
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
     vlans = parse_vlans(outputs.get("vlan", ""), switch_id)
-    return {"ports": ports, "macs": macs, "arps": arps, "vlans": vlans}
+    from . import neighbors as _nbr
+    nbrs = _nbr.parse_cdp_detail(outputs.get("neighbors", ""))
+    if not nbrs:
+        nbrs = _nbr.parse_lldp_detail(outputs.get("lldp", ""))
+    return {"ports": ports, "macs": macs, "arps": arps, "vlans": vlans, "neighbors": nbrs}
 
 
 def parse_vlans(vlan_output, switch_id):
