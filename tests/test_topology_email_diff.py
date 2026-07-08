@@ -294,6 +294,11 @@ def test_topology_zone_view():
     assert "confirmedOwner" in js               # CDP/LLDP 확정 링크 우선 배정
     assert 'l.source === "cdp/lldp"' in js       # 확정=실선 / 추론=점선 구분
     assert "subText" in js                       # L3 밑 대역 텍스트(L2 아이콘 없음)
+    # 이중화 쌍 나란히 배치 + 대역 중복 제거
+    assert "_pairKey" in js                     # 이중화 쌍 검출(M/B·1/2·BB1/BB2)
+    assert "_redunPairs" in js                  # 이중화 연결선
+    assert "distGroups" in js                   # 쌍당 대역 박스 1개(중복 제거)
+    assert "cfgSubs(d)" in js                   # 각 L3는 자기 config 대역만(중복 방지)
 
 
 def test_serial_c9300l_formats():

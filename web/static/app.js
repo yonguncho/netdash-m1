@@ -2559,6 +2559,22 @@ function _hostTokens(name) {
     return t && !/^(FW|BB|L2|L3|L4|SW|SLB|ADC|GW|CORE|VISS|M|B|A|\d{1,3})$/.test(t);
   });
 }
+// 이중화 쌍 키: 이름 끝의 이중화 표식(M/B, 1/2, PRI/SEC 등) 제거 → 쌍은 같은 키
+// 예: SKBA_OASVR_L3_1 · SKBA_OASVR_L3_2 → SKBA_OASVR_L3 (동일 쌍)
+function _pairKey(name) {
+  var parts = (name || "").toUpperCase().split(/[_\-#/]/).filter(Boolean);
+  if (parts.length > 1) {
+    var last = parts[parts.length - 1];
+    if (/^(M|B|A|\d{1,2}|PRI|SEC|STBY|ACT|STANDBY)$/.test(last)) {
+      parts.pop();                                   // 구분자로 분리된 이중화 표식(_M/_1 등)
+    } else {
+      // 'BB1','SW2','FW1'처럼 역할글자+뒤 1~2자리 숫자면 숫자만 제거(단, L2/L3/L4 역할은 유지)
+      var m = last.match(/^([A-Z]{2,})(\d{1,2})$/);
+      if (m && !/^L[234]$/.test(last)) parts[parts.length - 1] = m[1];
+    }
+  }
+  return parts.join("_");
+}
 function _renderZoneMap(host) {
   var nodes = _topoData.nodes || [], links = _topoData.links || [];
   if (!nodes.length) {
@@ -2697,6 +2713,10 @@ function _renderZoneMap(host) {
     if (k && zoneMap[k]) zoneMap[k].bbs.push(bb);
     else centralBBs.push(bb);
   });
+  centralBBs.sort(function (a, b) {
+    var p = _pairKey(a.name).localeCompare(_pairKey(b.name));
+    return p !== 0 ? p : (a.name || "").localeCompare(b.name || "");
+  });
   // rank2(L3/L4) → Zone 배정
   nodes.forEach(function (n) {
     if (rk(n) !== 2 || assigned[n.id]) return;
@@ -2709,32 +2729,36 @@ function _renderZoneMap(host) {
     var k = confirmedOwner[n.id] || zoneByName(n) || linkOwner[n.id];
     if (k && zoneMap[k]) { assigned[n.id] = 1; zoneMap[k].zL2.push(n); }
   });
-  // Zone 완성: dist 대역 = L3 config 대역 + (Zone 내부) 호스트명 매칭 L2 /24
+  // 이중화 쌍이 인접하도록 pairKey→이름 순 정렬
+  function _byPairName(a, b) {
+    var pk = _pairKey(a.name).localeCompare(_pairKey(b.name));
+    return pk !== 0 ? pk : (a.name || "").localeCompare(b.name || "");
+  }
+  // Zone 완성: dist 대역 = 그 L3의 config SVI 대역만(중복 방지). 나머지 L2 /24는 Zone 기타로.
   var zones = zoneOrder.map(function (k) {
     var z = zoneMap[k];
-    z.fws.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
-    z.bbs.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
-    z.dists.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
-    var single = z.dists.length === 1;
+    z.fws.sort(_byPairName);
+    z.bbs.sort(_byPairName);
+    z.dists.sort(_byPairName);
     var usedCidr = {};
     var dists = z.dists.map(function (d) {
-      var set = cfgSubs(d);
-      var dtok = distinctive(_hostTokens(d.name));
-      z.zL2.forEach(function (l2) {
-        var lt = distinctive(_hostTokens(l2.name));
-        // dist가 하나면 Zone L2 전부, 여러 개면 토큰 겹치는 L2만(Zone 내부로 한정)
-        if (single || dtok.some(function (x) { return lt.indexOf(x) >= 0; })) {
-          var c = _ipBand(l2.ip); if (c) set[c] = 1;
-        }
-      });
-      var subs = Object.keys(set).sort();
+      var subs = Object.keys(cfgSubs(d)).sort();   // 그 L3 자신의 config 대역만
       subs.forEach(function (c) { usedCidr[c] = 1; });
       return { node: d, subs: subs };
     });
-    // 어느 dist에도 안 잡힌 Zone L2 /24 → 기타(직결 L2)
+    // dist를 이중화 pairKey로 묶기(나란히 배치 + 대역 1회 표기)
+    var gmap = {}, groups = [];
+    dists.forEach(function (d) {
+      var pk = _pairKey(d.node.name);
+      if (!gmap[pk]) { gmap[pk] = { key: pk, items: [], _set: {} }; groups.push(gmap[pk]); }
+      gmap[pk].items.push(d);
+      d.subs.forEach(function (c) { gmap[pk]._set[c] = 1; });
+    });
+    groups.forEach(function (g) { g.subs = Object.keys(g._set).sort(); });
+    // 어느 L3 config에도 없는 Zone L2 /24 → 기타(직결 L2), 1회만
     var zExtra = {};
     z.zL2.forEach(function (l2) { var c = _ipBand(l2.ip); if (c && !usedCidr[c]) zExtra[c] = 1; });
-    return { fws: z.fws, bbs: z.bbs, label: k, dists: dists, zSubs: Object.keys(zExtra).sort() };
+    return { fws: z.fws, bbs: z.bbs, label: k, dists: dists, distGroups: groups, zSubs: Object.keys(zExtra).sort() };
   });
   zones.sort(function (a, b) { return a.label.localeCompare(b.label); });
   // 미분류(어느 Zone에도 못 들어간 L3/L4)
@@ -2751,10 +2775,10 @@ function _renderZoneMap(host) {
   }
   var IC = 40, PAIRGAP = 34, DW = 186, DGAP = 16, ZGAP = 34, PADX = 30;
   zones.forEach(function (z) {
-    var dn = Math.max(1, z.dists.length);
-    z._w = Math.max(206, dn * DW + (dn - 1) * DGAP + 24);
+    var slots = Math.max(1, z.dists.length) + (z.zSubs.length ? 1 : 0);
+    z._w = Math.max(206, slots * DW + (slots - 1) * DGAP + 24);
     z._maxSub = z.zSubs.length ? z.zSubs.length + 1 : 0;
-    z.dists.forEach(function (d) { z._maxSub = Math.max(z._maxSub, d.subs.length); });
+    (z.distGroups || []).forEach(function (g) { z._maxSub = Math.max(z._maxSub, g.subs.length); });
   });
   var orphW = orphanDists.length ? Math.max(206, orphanDists.length * DW + 24) : 0;
   var totalW = Math.max(900, PADX * 2 + zones.reduce(function (s, z) { return s + z._w; }, 0) +
@@ -2778,11 +2802,10 @@ function _renderZoneMap(host) {
     z._cx = zcx;
     placeRow(z.fws, zcx, FW_Y);
     if (z.bbs.length) placeRow(z.bbs, zcx, BB_Y);
-    var dn = z.dists.length;
-    if (dn) {
-      var tw = dn * DW + (dn - 1) * DGAP, sx = zcx - tw / 2 + DW / 2;
-      z.dists.forEach(function (d, i) { pos[d.node.id] = { x: sx + i * (DW + DGAP), y: L3_Y }; });
-    }
+    var slots = Math.max(1, z.dists.length) + (z.zSubs.length ? 1 : 0);
+    var tw = slots * DW + (slots - 1) * DGAP, sx = zcx - tw / 2 + DW / 2;
+    z.dists.forEach(function (d, i) { pos[d.node.id] = { x: sx + i * (DW + DGAP), y: L3_Y }; });
+    z._extraX = z.zSubs.length ? (sx + z.dists.length * (DW + DGAP)) : null;
     boxes.push({ x: zx, y: FW_Y - 32, w: z._w, h: (SUB_Y + z._maxSub * 15 + 20) - (FW_Y - 32), label: z.label });
     zx += z._w + ZGAP;
   });
@@ -2833,6 +2856,29 @@ function _renderZoneMap(host) {
         (confirmed ? "#7dd3fc" : "#94a3b8") + "' font-size='8.5' text-anchor='middle'>" + escHtml(ptxt) + "</text>");
     }
   });
+  // 이중화 연결선(같은 pairKey 인접 장비): 링크 데이터 없어도 쌍을 청록 선으로 표시
+  function _redunPairs(list) {
+    var g = {}, order = [], pairs = [];
+    list.forEach(function (n) { var k = _pairKey(n.name); if (!g[k]) { g[k] = []; order.push(k); } g[k].push(n); });
+    // 정확히 2대인 그룹만 이중화 쌍으로 간주(3대 이상은 별개 장비들로 취급)
+    order.forEach(function (k) { if (g[k].length === 2) pairs.push([g[k][0], g[k][1]]); });
+    return pairs;
+  }
+  var redun = _redunPairs(centralBBs);
+  zones.forEach(function (z) {
+    redun = redun.concat(_redunPairs(z.fws), _redunPairs(z.bbs),
+      _redunPairs(z.dists.map(function (d) { return d.node; })));
+  });
+  redun.forEach(function (pr) {
+    var A = pos[pr[0].id], B = pos[pr[1].id];
+    if (!A || !B || Math.abs(A.y - B.y) > 4) return;
+    var kk = (String(pr[0].id) < String(pr[1].id)) ? pr[0].id + "~" + pr[1].id : pr[1].id + "~" + pr[0].id;
+    if (drawn[kk]) return; drawn[kk] = 1;
+    svg.push("<path d='M" + (Math.min(A.x, B.x) + IC / 2) + "," + A.y + " L" + (Math.max(A.x, B.x) - IC / 2) +
+      "," + B.y + "' stroke='#22d3ee' stroke-width='2.5' fill='none'/>");
+    svg.push("<text x='" + ((A.x + B.x) / 2) + "' y='" + (A.y - IC / 2 - 1) +
+      "' fill='#22d3ee' font-size='7.5' text-anchor='middle'>이중화</text>");
+  });
   // 노드(아이콘+라벨)
   function drawNode(nd, kindOverride) {
     var p = pos[nd.id]; if (!p) return;
@@ -2855,8 +2901,8 @@ function _renderZoneMap(host) {
   });
   orphanDists.forEach(function (d) { drawNode(d); });
   // L3/L4 밑 대역 텍스트(L2는 아이콘 없이 여기 표기)
-  function subText(centerX, subs, title) {
-    var w = DW - 20, bx = centerX - w / 2, h = subs.length * 15 + (title ? 16 : 4) + 6;
+  function subText(centerX, subs, title, width) {
+    var w = width || (DW - 20), bx = centerX - w / 2, h = subs.length * 15 + (title ? 16 : 4) + 6;
     svg.push("<rect x='" + bx + "' y='" + SUB_Y + "' width='" + w + "' height='" + h +
       "' rx='7' fill='#0e2a2a' stroke='#14b8a6' stroke-width='1.1'/>");
     var ty = SUB_Y + 13;
@@ -2865,8 +2911,19 @@ function _renderZoneMap(host) {
     if (!subs.length) svg.push("<text x='" + (bx + 7) + "' y='" + ty + "' fill='#64748b' font-size='9' font-style='italic'>대역 정보 없음</text>");
   }
   zones.forEach(function (z) {
-    z.dists.forEach(function (d) { var p = pos[d.node.id]; if (p) subText(p.x, d.subs, null); });
-    if (z.zSubs.length && !z.dists.length) subText(z._cx, z.zSubs, "기타(직결 L2)");
+    // 정확히 2대인 이중화 쌍만 대역 박스 1개로 병합(동일 SVI 공유), 그 외는 장비별 박스
+    (z.distGroups || []).forEach(function (g) {
+      if (g.items.length === 2) {
+        var xs = g.items.map(function (d) { return (pos[d.node.id] || {}).x; }).filter(function (x) { return x != null; });
+        if (!xs.length) return;
+        var cxg = (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2;
+        subText(cxg, g.subs, null, g.items.length * DW - 20);
+      } else {
+        g.items.forEach(function (d) { var p = pos[d.node.id]; if (p) subText(p.x, d.subs, null); });
+      }
+    });
+    if (z.zSubs.length && z._extraX != null) subText(z._extraX, z.zSubs, "기타(직결 L2)", DW - 20);
+    else if (z.zSubs.length && !z.dists.length) subText(z._cx, z.zSubs, "기타(직결 L2)", DW - 20);
   });
   orphanDists.forEach(function (d) { var p = pos[d.id]; if (p) subText(p.x, Object.keys(cfgSubs(d)).sort(), null); });
   svg.push("</svg>");
