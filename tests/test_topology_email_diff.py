@@ -291,8 +291,10 @@ def test_topology_zone_view():
     assert "centralBBs" in js                   # 중심 OA BB만 중심축(Zone 백본은 Zone 내부)
     assert "cfgSubs" in js                       # L3 config 대역만(Zone 간 오염 방지)
     # SVG 선+포트 하이브리드
-    assert "confirmedOwner" in js               # CDP/LLDP 확정 링크 우선 배정
+    assert "confirmedOwner" in js               # 직결 확정 링크 우선 배정
     assert 'l.source === "cdp/lldp"' in js       # 확정=실선 / 추론=점선 구분
+    assert 'l.source === "mac" && l.mutual' in js  # 양방향 MAC=직결 신뢰(1순위 배정)
+    assert "macDirect" in js                     # MAC 직결 실선 표시
     assert "subText" in js                       # L3 밑 대역 텍스트(L2 아이콘 없음)
     # 이중화 쌍 나란히 배치 + 대역 중복 제거
     assert "_pairKey" in js                     # 이중화 쌍 검출(M/B·1/2·BB1/BB2)

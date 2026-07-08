@@ -2667,10 +2667,12 @@ function _renderZoneMap(host) {
     var linkedInt = internetFwId0 && (adj[bb.id] || []).indexOf(internetFwId0) >= 0;
     if (linkedInt || !distinctive(_hostTokens(bb.name)).length) centralBBids[bb.id] = 1;
   });
-  // 확정(CDP/LLDP) 인접만
+  // 직결 확정 인접: CDP/LLDP 확정 + '양방향 MAC 확인(mutual)' 링크.
+  // MAC/ARP/CONFIG 교차대조로 양쪽이 서로를 직결 포트에서 관측한 링크는 실제 물리 직결로 신뢰.
   var adjC = {};
   links.forEach(function (l) {
-    if (l.source !== "cdp/lldp") return;
+    var strong = l.source === "cdp/lldp" || (l.source === "mac" && l.mutual);
+    if (!strong) return;
     (adjC[l.a] = adjC[l.a] || []).push(l.b);
     (adjC[l.b] = adjC[l.b] || []).push(l.a);
   });
@@ -2853,9 +2855,10 @@ function _renderZoneMap(host) {
     var kk = (String(l.a) < String(l.b)) ? l.a + "~" + l.b : l.b + "~" + l.a;
     if (drawn[kk]) return; drawn[kk] = 1;
     var confirmed = l.source === "cdp/lldp";
+    var macDirect = l.source === "mac" && l.mutual;   // 양방향 MAC 확인 = 실제 직결로 신뢰
     var sameRow = Math.abs(A.y - B.y) < 4;
-    var col = sameRow ? (confirmed ? "#22d3ee" : "#64748b") : (confirmed ? "#38bdf8" : "#64748b");
-    var dash = confirmed ? "" : " stroke-dasharray='6 4'";
+    var col = confirmed ? (sameRow ? "#22d3ee" : "#38bdf8") : (macDirect ? "#5eead4" : "#64748b");
+    var dash = (confirmed || macDirect) ? "" : " stroke-dasharray='6 4'";  // 직결=실선, 단방향 추론=점선
     var d;
     if (sameRow) {
       d = "M" + (Math.min(A.x, B.x) + IC / 2) + "," + A.y + " L" + (Math.max(A.x, B.x) - IC / 2) + "," + B.y;
@@ -2864,14 +2867,15 @@ function _renderZoneMap(host) {
       d = "M" + t.x + "," + (t.y + IC / 2) + " C" + t.x + "," + my + " " + bo.x + "," + my + " " + bo.x + "," + (bo.y - IC / 2 - 12);
     }
     var pa = l.a_port, pb = l.b_port;
+    var srcTxt = confirmed ? "CDP/LLDP 확정 링크" : (macDirect ? "MAC 양방향 확인(직결)" : "MAC 추론 링크");
     var tip = ((byId[l.a] || {}).name || "") + (pa ? " [" + pa + "]" : "") + "  ↔  " +
-      ((byId[l.b] || {}).name || "") + (pb ? " [" + pb + "]" : "") + "\n" + (confirmed ? "CDP/LLDP 확정 링크" : "MAC 추론 링크");
+      ((byId[l.b] || {}).name || "") + (pb ? " [" + pb + "]" : "") + "\n" + srcTxt;
     svg.push("<path class='topo-edge' data-ea='" + l.a + "' data-eb='" + l.b + "' data-tip=\"" + escHtml(tip) +
-      "\" d='" + d + "' fill='none' stroke='" + col + "' stroke-width='" + (confirmed ? 2 : 1.6) + "'" + dash + "/>");
+      "\" d='" + d + "' fill='none' stroke='" + col + "' stroke-width='" + (confirmed ? 2 : (macDirect ? 1.8 : 1.6)) + "'" + dash + "/>");
     if ((pa || pb) && !sameRow) {
-      var ptxt = (confirmed ? "" : "~") + ((pa || "?").split("(")[0].slice(0, 9)) + "↔" + ((pb || "?").split("(")[0].slice(0, 9));
+      var ptxt = ((confirmed || macDirect) ? "" : "~") + ((pa || "?").split("(")[0].slice(0, 9)) + "↔" + ((pb || "?").split("(")[0].slice(0, 9));
       svg.push("<text x='" + ((A.x + B.x) / 2) + "' y='" + ((A.y + B.y) / 2 - 2) + "' fill='" +
-        (confirmed ? "#7dd3fc" : "#94a3b8") + "' font-size='8.5' text-anchor='middle'>" + escHtml(ptxt) + "</text>");
+        (confirmed ? "#7dd3fc" : (macDirect ? "#5eead4" : "#94a3b8")) + "' font-size='8.5' text-anchor='middle'>" + escHtml(ptxt) + "</text>");
     }
   });
   // 이중화 연결선(같은 pairKey 인접 장비): 링크 데이터 없어도 쌍을 청록 선으로 표시
@@ -2969,7 +2973,8 @@ function _zoneLegend() {
     "<span style='color:#38bdf8'>☁ ISP GW</span><span style='color:#38bdf8'>🔷 Internet SW</span>" +
     "<span style='color:#ef4444'>🛡 방화벽</span><span style='color:#a855f7'>◆ OA Backbone</span>" +
     "<span style='color:#8b5cf6'>⬛ L3</span><span style='color:#f59e0b'>⬡ L4</span><span style='color:#14b8a6'>🌐 대역(L3 하위)</span>" +
-    "<span style='margin-left:auto'>중심축: ISP GW→Internet SW→Internet FW→OA Backbone · Zone 분기 · L2는 대역 정보로 · 카드 클릭=상세</span></div>";
+    "<span style='color:#38bdf8'>— CDP/LLDP 확정</span><span style='color:#5eead4'>— MAC 직결</span><span style='color:#94a3b8'>┄ MAC 추론</span>" +
+    "<span style='margin-left:auto'>선=실제 직결(포트 표시) · L2는 대역 정보로 · 카드 클릭=상세</span></div>";
 }
 function _bindZoneMapEvents(host) {
   host.querySelectorAll(".znode").forEach(function (el) {
