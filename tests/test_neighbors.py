@@ -88,3 +88,23 @@ def test_neighbors_roundtrip_and_topology(temp_db):
     assert link[0].get("source") == "cdp/lldp"
     ports = {link[0]["a_port"], link[0]["b_port"]}
     assert "Eth1/9" in ports and "Eth1/48" in ports
+
+
+def test_interface_mac_topology(temp_db):
+    """Phase2: 관리 MAC이 ARP에 없어도 config 인터페이스 IP의 MAC으로 링크/포트 추론."""
+    a = db.save_switch(temp_db, "SKBA_A_L3", "10.0.0.1", "cisco_ios")
+    b = db.save_switch(temp_db, "SKBA_B_L2", "10.0.0.2", "cisco_ios")
+    # B의 데이터 인터페이스 IP(관리 IP 아님)를 config에 저장
+    db.save_config_backup(temp_db, b, "interface Vlan50\n ip address 10.50.0.1 255.255.255.0\n")
+    snap = db.save_snapshot(temp_db, a)
+    # A의 ARP: B 인터페이스 IP → MAC (B 관리 IP 10.0.0.2는 ARP에 없음)
+    db.save_arp_entries(temp_db, snap, a,
+                        [{"ip": "10.50.0.1", "mac": "aabb.ccdd.eeff", "interface": "Vlan1"}])
+    # A의 MAC 테이블: B 인터페이스 MAC이 Gi0/5 포트에 보임
+    db.save_mac_entries(temp_db, snap, a,
+                        [{"mac": "aabb.ccdd.eeff", "port": "Gi0/5", "vlan": "50"}])
+    topo = topology.build_topology(temp_db)
+    link = [l for l in topo["links"] if {l["a"], l["b"]} == {a, b}]
+    assert len(link) == 1                      # 관리 MAC 없이도 인터페이스 MAC으로 링크 성립
+    assert link[0].get("source") == "mac"      # 추론(점선) 링크
+    assert "Gi0/5" in {link[0]["a_port"], link[0]["b_port"]}

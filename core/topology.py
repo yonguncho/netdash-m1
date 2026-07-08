@@ -39,6 +39,58 @@ def _switch_mgmt_macs(db_path, switches, ip_macs=None):
             for s in switches if s.get("ip") and s["ip"] in ip_macs}
 
 
+def _iface_ips_from_config(cfg):
+    """running-config/show ip interface 텍스트에서 인터페이스 host IP 목록 추출.
+
+    "ip address 10.92.10.1 255.255.255.0"(secondary 포함) + "Internet address is 10.92.10.1/24".
+    관리 IP 외 데이터/SVI 인터페이스 IP까지 모아 그 장비의 '모든 MAC'을 ARP로 역추적한다.
+    """
+    import re as _re
+    ips = []
+    for line in (cfg or "").splitlines():
+        m = _re.search(r"^\s*ip address\s+(\d+\.\d+\.\d+\.\d+)\s+\d+\.\d+\.\d+\.\d+", line)
+        if m:
+            ips.append(m.group(1))
+            continue
+        m2 = _re.search(r"Internet address is\s+(\d+\.\d+\.\d+\.\d+)/\d{1,2}", line)
+        if m2:
+            ips.append(m2.group(1))
+    return ips
+
+
+def _device_macs(db_path, switches, ip_macs=None):
+    """{switch_id: set(mac)} — 각 장비가 소유한 '모든' MAC.
+
+    관리 IP MAC(기존) + 저장된 running-config의 모든 인터페이스 IP를 ARP에서 역추적한 MAC.
+    관리 MAC이 MAC 테이블에 없어도 데이터 인터페이스 MAC으로 물리 연결(포트)을 찾을 수 있다.
+    (CDP/LLDP 비활성 장비의 링크/포트 커버리지 향상)
+    """
+    ip_macs = ip_macs if ip_macs is not None else _arp_ip_macs(db_path)
+    out = {}
+    for s in switches:
+        if s.get("ip") and s["ip"] in ip_macs:
+            out.setdefault(s["id"], set()).add(ip_macs[s["ip"]])
+    try:
+        with db.get_db(db_path) as conn:
+            cur = conn.cursor()
+            for s in switches:
+                try:
+                    cur.execute("SELECT content FROM config_backups WHERE switch_id=? "
+                                "ORDER BY id DESC LIMIT 1", (s["id"],))
+                    row = cur.fetchone()
+                    if not row or not row["content"]:
+                        continue
+                    for ip in _iface_ips_from_config(row["content"]):
+                        mac = ip_macs.get(ip)
+                        if mac:
+                            out.setdefault(s["id"], set()).add(mac)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return out
+
+
 def infer_role(name, hostname=""):
     """hostname/이름 패턴으로 장비 계층(구분) 추론 — device_type 미지정 시 사용.
 
@@ -99,7 +151,7 @@ def build_topology(db_path):
         return {"nodes": [], "links": []}
 
     ip_macs = _arp_ip_macs(db_path)                      # {ip: mac}
-    mgmt = _switch_mgmt_macs(db_path, switches, ip_macs)  # {sid: mac}
+    dev_macs = _device_macs(db_path, switches, ip_macs)  # {sid: set(mac)} 관리+인터페이스 MAC
     mac_map = db.get_mac_to_switchport(db_path)          # {mac: [(sid, name, port)]}
     pc_map = db.get_port_channel_members(db_path)        # {(sid, po): [members]}
     port_counts = db.get_port_mac_counts(db_path)        # {(sid, port_lower): MAC수}
@@ -117,11 +169,12 @@ def build_topology(db_path):
     # 이렇게 하면 이미 수집된 MAC 테이블만으로 추론 장비의 연결도 정확히 완성된다.
     directed = {}
     cand = {}   # (a,b) -> [ports]
-    for b_sid, b_mac in mgmt.items():
-        for (a_sid, _a_name, a_port) in mac_map.get(b_mac, []):
-            if a_sid == b_sid:
-                continue
-            cand.setdefault((a_sid, b_sid), []).append(a_port)
+    for b_sid, b_macs in dev_macs.items():
+        for b_mac in b_macs:
+            for (a_sid, _a_name, a_port) in mac_map.get(b_mac, []):
+                if a_sid == b_sid:
+                    continue
+                cand.setdefault((a_sid, b_sid), []).append(a_port)
     for (a_sid, b_sid), ports in cand.items():
         def _score(p):
             pl = (p or "").lower()
