@@ -151,6 +151,17 @@ def test_topology_node_inferred_device_type(temp_db):
     assert bbn["device_type"] == "BackBone" and bbn["inferred"] is True
 
 
+def test_topology_galaxy_view_ui():
+    """🌌 성단 뷰(포스 그래프) 모드 존재 — Canvas + 글로우 + 호버 포커스."""
+    html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert 'data-mode="galaxy"' in html
+    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "_renderGalaxy" in js
+    assert "galaxy-canvas" in js
+    assert "requestAnimationFrame" in js         # force 시뮬레이션 루프
+    assert "createRadialGradient" in js          # 노드 글로우
+
+
 def test_topology_two_tab_ui():
     """토폴로지 2탭(서버실 구성도/TPS 구역도) + 중간 카드 + 종류 아이콘."""
     html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")

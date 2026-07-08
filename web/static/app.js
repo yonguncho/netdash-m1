@@ -2052,6 +2052,7 @@ function renderTopology() {
   if (zsel) zsel.style.display = (_topoMode === "tps") ? "" : "none";
 
   if (_topoMode === "core") _renderCoreMap(host);
+  else if (_topoMode === "galaxy") _renderGalaxy(host);
   else _renderTpsMap(host);
 }
 
@@ -2450,6 +2451,218 @@ function _topoBindNodeEvents(host) {
       });
     });
   });
+}
+
+// ── 🌌 성단 뷰: 포스 그래프(다크+글로우+호버 포커스) — 라이브러리 없이 Canvas ──
+var _galaxyAnim = null;   // requestAnimationFrame id(모드 전환 시 정리)
+function _renderGalaxy(host) {
+  if (_galaxyAnim) { cancelAnimationFrame(_galaxyAnim); _galaxyAnim = null; }
+  var nodes = _topoData.nodes.slice();
+  if (!nodes.length) {
+    host.innerHTML = _legendHTML() + "<p style='color:#94a3b8;padding:20px'>표시할 장비가 없습니다.</p>";
+    _bindTopoModeButtons();
+    return;
+  }
+  var idIndex = {};
+  nodes.forEach(function (n, i) { idIndex[n.id] = i; });
+  var links = _topoData.links.filter(function (l) {
+    return idIndex[l.a] != null && idIndex[l.b] != null;
+  });
+  // 인접(호버 포커스용)
+  var adj = {};
+  links.forEach(function (l) {
+    (adj[l.a] = adj[l.a] || {})[l.b] = 1; (adj[l.b] = adj[l.b] || {})[l.a] = 1;
+  });
+  var degree = {};
+  nodes.forEach(function (n) { degree[n.id] = adj[n.id] ? Object.keys(adj[n.id]).length : 0; });
+
+  host.innerHTML = _legendHTML("<span style='color:#e2e8f0;font-weight:600'>· 성단 뷰</span>" +
+    "<span>드래그=회전이동 · 휠=확대 · 노드 호버=직결 강조</span>") +
+    "<div class='topo-stage' style='position:relative'>" +
+    "<canvas id='galaxy-canvas' style='width:100%;height:100%;display:block;background:radial-gradient(ellipse at center,#0b1224 0%,#060912 100%)'></canvas>" +
+    "<div id='galaxy-tip' style='position:fixed;display:none;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:600;max-width:340px;white-space:pre-line'></div>" +
+    "</div>";
+  _bindTopoModeButtons();
+
+  var canvas = document.getElementById("galaxy-canvas");
+  var ctx = canvas.getContext("2d");
+  var tip = document.getElementById("galaxy-tip");
+  function _resize() {
+    var r = canvas.getBoundingClientRect();
+    canvas.width = Math.max(320, r.width); canvas.height = Math.max(320, r.height);
+  }
+  _resize();
+  var W = canvas.width, H = canvas.height;
+
+  // 초기 좌표: 구역별로 흩뿌림(원 위 무작위)
+  var zones = {};
+  nodes.forEach(function (n) { var z = _topoZoneOf(n); (zones[z] = zones[z] || []).push(n); });
+  var zkeys = Object.keys(zones);
+  var P = nodes.map(function (n, i) {
+    var zi = zkeys.indexOf(_topoZoneOf(n));
+    var ang = (zi / Math.max(1, zkeys.length)) * Math.PI * 2;
+    var seed = (i * 2654435761 % 1000) / 1000;   // 결정적 유사난수(라이브러리 없이)
+    var rr = 60 + seed * 160;
+    return { x: W / 2 + Math.cos(ang) * rr + (seed - 0.5) * 80,
+             y: H / 2 + Math.sin(ang) * rr + ((i % 7) / 7 - 0.5) * 80,
+             vx: 0, vy: 0 };
+  });
+
+  // 뷰 변환(줌/팬)
+  var view = { s: 1, tx: 0, ty: 0 };
+  var hoverIdx = -1, drag = null;
+
+  function _color(n) { return _topoStatusDot(n); }
+  function _kcolor(n) { return _topoKindOf(n).color; }
+  function _radius(n) { return 4 + Math.min(9, (degree[n.id] || 0) * 1.1) + (n.kind === "fw" ? 3 : 0); }
+
+  // force 시뮬레이션(반발 + 스프링 + 중심 인력) — 제한 스텝
+  var LINK_LEN = 70, iterations = { n: 0 };
+  function _step() {
+    var i, j;
+    // 반발(근접쌍만 — O(n^2)이나 노드 수 제한적, 큰 경우 셀분할 생략)
+    for (i = 0; i < P.length; i++) { P[i].vx *= 0.85; P[i].vy *= 0.85; }
+    for (i = 0; i < P.length; i++) {
+      for (j = i + 1; j < P.length; j++) {
+        var dx = P[i].x - P[j].x, dy = P[i].y - P[j].y;
+        var d2 = dx * dx + dy * dy || 0.01;
+        if (d2 > 90000) continue;   // 300px 밖은 무시(성능)
+        var f = 900 / d2;
+        var d = Math.sqrt(d2);
+        var ux = dx / d, uy = dy / d;
+        P[i].vx += ux * f; P[i].vy += uy * f;
+        P[j].vx -= ux * f; P[j].vy -= uy * f;
+      }
+    }
+    // 스프링(링크)
+    links.forEach(function (l) {
+      var a = P[idIndex[l.a]], b = P[idIndex[l.b]];
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      var f = (d - LINK_LEN) * 0.02;
+      var ux = dx / d, uy = dy / d;
+      a.vx += ux * f; a.vy += uy * f;
+      b.vx -= ux * f; b.vy -= uy * f;
+    });
+    // 중심 인력
+    for (i = 0; i < P.length; i++) {
+      P[i].vx += (W / 2 - P[i].x) * 0.002;
+      P[i].vy += (H / 2 - P[i].y) * 0.002;
+      P[i].x += P[i].vx; P[i].y += P[i].vy;
+    }
+    iterations.n++;
+  }
+
+  function _toScreen(p) { return { x: p.x * view.s + view.tx, y: p.y * view.s + view.ty }; }
+
+  function _draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 링크(반투명 곡선 + 호버 시 이웃만 밝게)
+    ctx.lineWidth = 1;
+    links.forEach(function (l) {
+      var a = _toScreen(P[idIndex[l.a]]), b = _toScreen(P[idIndex[l.b]]);
+      var on = hoverIdx >= 0 && (idIndex[l.a] === hoverIdx || idIndex[l.b] === hoverIdx);
+      if (hoverIdx >= 0 && !on) { ctx.strokeStyle = "rgba(100,116,139,0.06)"; }
+      else if (on) { ctx.strokeStyle = "rgba(56,189,248,0.9)"; }
+      else { ctx.strokeStyle = l.mutual ? "rgba(148,163,184,0.28)" : "rgba(71,85,105,0.18)"; }
+      ctx.beginPath(); ctx.moveTo(a.x, a.y);
+      var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 14;
+      ctx.quadraticCurveTo(mx, my, b.x, b.y); ctx.stroke();
+    });
+    // 노드(글로우)
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i], p = _toScreen(P[i]);
+      var r = _radius(n) * view.s;
+      var dim = hoverIdx >= 0 && i !== hoverIdx && !(adj[nodes[hoverIdx].id] && adj[nodes[hoverIdx].id][n.id]);
+      var alpha = dim ? 0.18 : 1;
+      // 글로우
+      var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.2);
+      g.addColorStop(0, _hexA(_color(n), 0.55 * alpha));
+      g.addColorStop(1, _hexA(_color(n), 0));
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, Math.PI * 2); ctx.fill();
+      // 코어
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = _kcolor(n);
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = _hexA(_color(n), alpha);
+      ctx.stroke();
+      // 호버/큰노드 라벨
+      if (i === hoverIdx || (r > 8 && !dim)) {
+        ctx.globalAlpha = alpha; ctx.fillStyle = "#e2e8f0";
+        ctx.font = (i === hoverIdx ? "bold " : "") + "11px sans-serif";
+        ctx.fillText((n.name || "").slice(0, 18), p.x + r + 3, p.y + 3);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function _loop() {
+    if (iterations.n < 320) _step();   // 안정화까지만 시뮬레이션
+    _draw();
+    _galaxyAnim = requestAnimationFrame(_loop);
+  }
+  _loop();
+
+  // 상호작용: 호버(가장 가까운 노드), 드래그 팬, 휠 줌, 클릭 상세
+  function _pick(mx, my) {
+    var best = -1, bd = 400;
+    for (var i = 0; i < nodes.length; i++) {
+      var p = _toScreen(P[i]);
+      var d = (p.x - mx) * (p.x - mx) + (p.y - my) * (p.y - my);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+  canvas.addEventListener("mousemove", function (e) {
+    var r = canvas.getBoundingClientRect();
+    var mx = (e.clientX - r.left) * (canvas.width / r.width);
+    var my = (e.clientY - r.top) * (canvas.height / r.height);
+    if (drag) {
+      view.tx += (e.clientX - drag.px) * (canvas.width / r.width);
+      view.ty += (e.clientY - drag.py) * (canvas.height / r.height);
+      drag.px = e.clientX; drag.py = e.clientY; return;
+    }
+    hoverIdx = _pick(mx, my);
+    if (hoverIdx >= 0) {
+      var n = nodes[hoverIdx], k = _topoKindOf(n);
+      var lines = [(k.label ? "[" + k.label + "] " : "") + (n.name || ""),
+                   (n.ip || "") + (n.vendor ? " · " + n.vendor : ""),
+                   "직결 " + (degree[n.id] || 0) + "개"];
+      if (n.subnets && n.subnets.length) lines.push("대역: " + n.subnets.join(", "));
+      tip.textContent = lines.join("\n");
+      tip.style.display = "block";
+      tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px";
+      canvas.style.cursor = "pointer";
+    } else { tip.style.display = "none"; canvas.style.cursor = "grab"; }
+  });
+  canvas.addEventListener("mouseleave", function () { hoverIdx = -1; tip.style.display = "none"; });
+  canvas.addEventListener("mousedown", function (e) { drag = { px: e.clientX, py: e.clientY }; canvas.style.cursor = "grabbing"; });
+  window.addEventListener("mouseup", function () { drag = null; });
+  canvas.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var f = e.deltaY > 0 ? 0.9 : 1.1;
+    view.s = Math.max(0.3, Math.min(4, view.s * f));
+  }, { passive: false });
+  canvas.addEventListener("click", function (e) {
+    var r = canvas.getBoundingClientRect();
+    var mx = (e.clientX - r.left) * (canvas.width / r.width);
+    var my = (e.clientY - r.top) * (canvas.height / r.height);
+    var i = _pick(mx, my);
+    if (i < 0) return;
+    var n = nodes[i];
+    if (n.kind === "fw") { showFirewallDetail(parseInt(String(n.id).slice(1), 10)); return; }
+    var sw = (_switches || []).find(function (s) { return String(s.id) === String(n.id); });
+    if (sw) openDetailPanel(sw);
+  });
+}
+
+// #rrggbb + alpha → rgba()
+function _hexA(hex, a) {
+  hex = (hex || "#64748b").replace("#", "");
+  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+  var r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+  return "rgba(" + r + "," + g + "," + b + "," + a + ")";
 }
 
 function _topoBindTips(host) {
