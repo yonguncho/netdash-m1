@@ -2119,6 +2119,7 @@ function renderTopology() {
   }
 
   if (_topoMode === "tps") _renderTpsMap(host);
+  else if (_topoMode === "zone") _renderZoneMap(host);
   else _renderCoreMap(host);
 }
 
@@ -2522,6 +2523,191 @@ function _bindBandDetailEvents(host) {
   host.querySelectorAll(".band-l2-row").forEach(function (tr) {
     tr.addEventListener("click", function () {
       var id = tr.getAttribute("data-swid");
+      var sw = (_switches || []).find(function (s) { return String(s.id) === String(id); });
+      if (sw) openDetailPanel(sw);
+    });
+  });
+}
+
+// ── 존·대역 뷰(아이콘형): ISP GW→Internet SW→Internet FW→OA Backbone 중심축
+//    + Zone별 방화벽 분기 + L3/L4 밑 "대역 정보만"(L2 아이콘 없음) ──
+function _zoneIcon(kind) {
+  var C = { isp: "#38bdf8", sw: "#38bdf8", fw: "#ef4444", bb: "#a855f7", l3: "#8b5cf6", l4: "#f59e0b" }[kind] || "#64748b";
+  var inner;
+  if (kind === "isp")
+    inner = "<path d='M8,26 a9,9 0 0,1 1.5,-17 a12,10 0 0,1 22,-1 a10,9 0 0,1 9,18 z' fill='" + C +
+      "' fill-opacity='0.16' stroke='" + C + "' stroke-width='1.8'/>";
+  else if (kind === "fw") inner = _deviceSymbol("방화벽", 0, 0, C);
+  else if (kind === "bb") inner = _deviceSymbol("백본", 0, 0, C);
+  else if (kind === "l3") inner = _deviceSymbol("L3", 0, 0, C);
+  else if (kind === "l4") inner = _deviceSymbol("L4", 0, 0, C);
+  else inner = _deviceSymbol("L2", 0, 0, C);
+  return "<svg class='znode__ic' width='40' height='40' viewBox='0 0 34 34'>" + inner + "</svg>";
+}
+function _zoneIconKind(n) {
+  var r = _coreRank(n), dt = n.device_type || "", nm = (n.name || "").toUpperCase();
+  if (n.kind === "fw" || dt === "Firewall" || r === 0) return "fw";
+  if (r === 1) return "bb";
+  if (dt === "L4 Switch" || /\bL4\b|SLB|ADC/.test(nm)) return "l4";
+  if (r === 2) return "l3";
+  return "sw";
+}
+function _renderZoneMap(host) {
+  var nodes = _topoData.nodes || [], links = _topoData.links || [];
+  if (!nodes.length) {
+    host.innerHTML = _zoneLegend() + "<p style='color:#94a3b8;padding:20px'>표시할 장비가 없습니다.</p>";
+    _bindTopoModeButtons();
+    return;
+  }
+  var byId = {};
+  nodes.forEach(function (n) { byId[n.id] = n; });
+  var adj = {};
+  links.forEach(function (l) { (adj[l.a] = adj[l.a] || []).push(l.b); (adj[l.b] = adj[l.b] || []).push(l.a); });
+  function rk(n) { return _coreRank(n); }        // 0 FW,1 Core,2 L3/L4,3 L2
+  function nbrRank(id, r) {
+    return (adj[id] || []).map(function (x) { return byId[x]; })
+      .filter(function (x) { return x && rk(x) === r; });
+  }
+  var firewalls = nodes.filter(function (n) { return rk(n) === 0; });
+  var cores = nodes.filter(function (n) { return rk(n) === 1; });
+  function reName(re, arr) { return (arr || nodes).filter(function (n) { return re.test(n.name || ""); }); }
+  // 중심축 특수 장비(호스트명 패턴)
+  var isp = reName(/ISP|GATEWAY|\bGW\b|\bWAN\b/i)[0] || null;
+  var internetSw = nodes.filter(function (n) {
+    return rk(n) >= 1 && n.kind !== "fw" && /INTERNET|\bINT[_-]?SW\b/i.test(n.name || "");
+  })[0] || null;
+  // OA Backbone: 이름 패턴 우선, 없으면 전체 코어
+  var bbMatch = reName(/OA|BACKBONE|\bBB\b|OABB|CORE/i, cores);
+  var backbones = bbMatch.length ? bbMatch : cores;
+  var bbIds = {}; backbones.forEach(function (n) { bbIds[n.id] = true; });
+  // Internet FW(경계): 이름 패턴 or 백본에 붙고 L3/L4 없는 방화벽
+  var internetFw = reName(/INTERNET|\bINT[_-]?FW\b|경계|EXT|BOUNDARY/i, firewalls)[0] ||
+    firewalls.filter(function (f) {
+      return nbrRank(f.id, 2).length === 0 && (adj[f.id] || []).some(function (x) { return bbIds[x]; });
+    })[0] || null;
+
+  // Zone 방화벽 = 아래 L3/L4/L2를 둔 방화벽(경계 FW 제외)
+  var zoneFws = firewalls.filter(function (f) {
+    return f !== internetFw && (nbrRank(f.id, 2).length || nbrRank(f.id, 3).length);
+  });
+  if (!zoneFws.length) zoneFws = firewalls.filter(function (f) { return f !== internetFw; });
+
+  // 각 Zone FW 아래 L3/L4(dist) BFS 수집(rank>=2만 통과)
+  function distsUnder(fwId) {
+    var out = [], seen = {}; seen[fwId] = 1;
+    var q = [fwId];
+    while (q.length) {
+      var id = q.shift();
+      (adj[id] || []).forEach(function (nb) {
+        var nn = byId[nb];
+        if (!nn || seen[nb] || rk(nn) < 2) return;
+        seen[nb] = 1; q.push(nb);
+        if (rk(nn) === 2) out.push(nn);
+      });
+    }
+    return out;
+  }
+  // dist(L3/L4) 밑 대역 = 자기 subnets(config SVI) + 아래 L2들의 /24
+  function subnetsUnder(startId, startRank) {
+    var start = byId[startId], set = {};
+    ((start && start.subnets) || []).forEach(function (c) { set[c] = 1; });
+    var seen = {}; seen[startId] = 1;
+    var q = [startId];
+    while (q.length) {
+      var id = q.shift();
+      (adj[id] || []).forEach(function (nb) {
+        var nn = byId[nb];
+        if (!nn || seen[nb] || rk(nn) <= startRank) return;
+        seen[nb] = 1; q.push(nb);
+        var c = _ipBand(nn.ip); if (c) set[c] = 1;
+      });
+    }
+    return Object.keys(set).sort();
+  }
+
+  var assigned = {};
+  [isp, internetSw, internetFw].forEach(function (n) { if (n) assigned[n.id] = 1; });
+  backbones.forEach(function (n) { assigned[n.id] = 1; });
+  var zones = zoneFws.map(function (fw) {
+    assigned[fw.id] = 1;
+    var dists = distsUnder(fw.id);
+    dists.forEach(function (d) { assigned[d.id] = 1; });
+    dists.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
+    return { fw: fw, dists: dists.map(function (d) { return { node: d, subs: subnetsUnder(d.id, 2) }; }),
+      fwSubs: dists.length ? [] : subnetsUnder(fw.id, 0) };
+  });
+  zones.sort(function (a, b) { return (a.fw.name || "").localeCompare(b.fw.name || ""); });
+  // 미분류(어느 Zone에도 못 들어간 L3/L4)
+  var orphanDists = nodes.filter(function (n) { return rk(n) === 2 && !assigned[n.id]; });
+
+  // ── 렌더 ──
+  function nodeCard(n, kindOverride, cls) {
+    var kind = kindOverride || _zoneIconKind(n);
+    return "<div class='znode " + (cls || "") + "' data-swid='" + n.id + "' data-kind='" + (n.kind || "sw") +
+      "' title='" + escHtml((n.name || "") + " · " + (n.ip || "")) + "'>" +
+      _zoneIcon(kind) + "<span class='znode__lbl'>" + escHtml((n.name || "").slice(0, 22)) + "</span></div>";
+  }
+  function subsBox(title, subs) {
+    var body = subs.length
+      ? subs.map(function (c) { return "<div class='zsub'>🌐 " + escHtml(c) + "</div>"; }).join("")
+      : "<div class='zsub zsub--none'>대역 정보 없음 (config 미수집)</div>";
+    return "<div class='zsubs'>" + (title ? "<div class='zsubs__t'>" + escHtml(title) + " 하위 대역</div>" : "") + body + "</div>";
+  }
+  function distBlock(d) {
+    return "<div class='zdist'>" + nodeCard(d.node) + subsBox(d.node.name, d.subs) + "</div>";
+  }
+  function zoneBox(z) {
+    var g = (z.fw.group || "").trim();
+    var s = "<div class='zonebox'><div class='zonebox__head'>🗂 " + escHtml((g ? g + " · " : "") + (z.fw.name || "Zone")) + "</div>";
+    s += nodeCard(z.fw, "fw", "znode--fw");
+    s += "<div class='zarrow'>▼</div>";
+    if (z.dists.length) s += "<div class='zdists'>" + z.dists.map(distBlock).join("") + "</div>";
+    else s += subsBox("", z.fwSubs);
+    s += "</div>";
+    return s;
+  }
+
+  var html = _zoneLegend() + "<div class='zone-scroll'>";
+  // 중심축(세로): ISP GW → Internet SW → Internet FW → OA Backbone
+  var spine = [];
+  if (isp) spine.push(nodeCard(isp, "isp"));
+  if (internetSw) spine.push(nodeCard(internetSw, "sw"));
+  if (internetFw) spine.push(nodeCard(internetFw, "fw"));
+  backbones.forEach(function (n) { spine.push(nodeCard(n, "bb")); });
+  if (spine.length) {
+    html += "<div class='zspine'><div class='zspine__t'>중심축</div>" +
+      spine.join("<div class='zarrow'>▼</div>") + "</div>" +
+      "<div class='zarrow zarrow--big'>▼ OA Backbone에서 Zone별 분기 ▼</div>";
+  }
+  // Zone 그리드
+  html += "<div class='zone-grid'>" + zones.map(zoneBox).join("");
+  if (orphanDists.length) {
+    html += "<div class='zonebox zonebox--orphan'><div class='zonebox__head'>🗂 미분류 (방화벽 링크 미수집)</div>" +
+      "<div class='zdists'>" + orphanDists.map(function (d) {
+        return distBlock({ node: d, subs: subnetsUnder(d.id, 2) });
+      }).join("") + "</div></div>";
+  }
+  html += "</div>";
+  if (!zones.length && !orphanDists.length) {
+    html += "<p style='color:#94a3b8;padding:16px'>Zone 방화벽/L3를 인식하지 못했습니다. 스위치 '구분'을 방화벽/백본/L3/L4로 지정하고 재수집하면 자동 구성됩니다.</p>";
+  }
+  html += "</div>";   // .zone-scroll
+  host.innerHTML = html;
+  _bindTopoModeButtons();
+  _bindZoneMapEvents(host);
+}
+function _zoneLegend() {
+  return "<div style='display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:8px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +
+    "<span style='color:#38bdf8'>☁ ISP GW</span><span style='color:#38bdf8'>🔷 Internet SW</span>" +
+    "<span style='color:#ef4444'>🛡 방화벽</span><span style='color:#a855f7'>◆ OA Backbone</span>" +
+    "<span style='color:#8b5cf6'>⬛ L3</span><span style='color:#f59e0b'>⬡ L4</span><span style='color:#14b8a6'>🌐 대역(L3 하위)</span>" +
+    "<span style='margin-left:auto'>중심축: ISP GW→Internet SW→Internet FW→OA Backbone · Zone 분기 · L2는 대역 정보로 · 카드 클릭=상세</span></div>";
+}
+function _bindZoneMapEvents(host) {
+  host.querySelectorAll(".znode").forEach(function (el) {
+    el.addEventListener("click", function () {
+      var id = el.getAttribute("data-swid");
+      if (el.getAttribute("data-kind") === "fw") { showFirewallDetail(parseInt(String(id).slice(1), 10)); return; }
       var sw = (_switches || []).find(function (s) { return String(s.id) === String(id); });
       if (sw) openDetailPanel(sw);
     });

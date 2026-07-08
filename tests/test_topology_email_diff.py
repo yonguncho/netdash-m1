@@ -286,6 +286,20 @@ def test_topology_l2_band_ui():
     assert 'kind === "band"' in js              # 대역 유사노드 처리
 
 
+def test_topology_zone_view():
+    """존·대역 BOX형 뷰(아이콘형): 모드 버튼 + 중심축 + Zone별 방화벽 + L3 하위 대역 정보."""
+    js = APP_JS.read_text(encoding="utf-8")
+    html = HTML.read_text(encoding="utf-8")
+    assert 'data-mode="zone"' in html           # 존·대역 모드 버튼
+    assert "_renderZoneMap" in js               # 존·대역 렌더러
+    assert "_zoneIcon" in js and "_zoneIconKind" in js  # 장비 아이콘
+    assert "zoneFws" in js and "internetFw" in js  # Zone/경계(Internet) 방화벽 분류
+    assert "internetSw" in js and "backbones" in js  # 중심축: Internet SW / OA Backbone
+    assert "zspine" in js                       # ISP GW→Internet SW→Internet FW→OA BB 중심축
+    assert "subnetsUnder" in js                 # L3/L4 밑 대역 정보만(L2 아이콘 없음)
+    assert "zsubs" in js                        # 대역 정보 박스
+
+
 def test_serial_c9300l_formats():
     """C9300L: show inventory SN / 스위치 표(Serial No.) / System Serial 모두 파싱."""
     from core.collector import _parse_serial

@@ -424,3 +424,46 @@ body {
 .band-detail__tbl th { text-align: left; padding: 6px 12px; color: #64748b; border-bottom: 1px solid #14343433; font-weight: 600; }
 .band-detail__tbl td { padding: 6px 12px; color: #e2e8f0; border-bottom: 1px solid #0f2a2a; }
 .band-l2-row:hover td { background: #0e2a2a; }
+
+/* 존·대역 뷰(BOX형 토폴로지) */
+.zone-scroll { flex: 1; overflow: auto; padding: 14px 16px; }
+.zone-spine { background: #0b1f33; border: 1px solid #1e3a5f; border-radius: 10px; padding: 10px 14px; margin-bottom: 4px; }
+.zone-spine__label { color: #60a5fa; font-size: 11px; font-weight: 700; margin-bottom: 6px; }
+.zone-spine__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.zone-grid { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.zone-box { background: #0f172a; border: 2px solid #334155; border-radius: 10px; padding: 10px; min-width: 240px; max-width: 340px; }
+.zone-box--orphan { border-style: dashed; border-color: #475569; }
+.zone-box__head { color: #e2e8f0; font-weight: 700; font-size: 13px; text-align: center; padding: 4px 0 8px; border-bottom: 1px solid #1e293b; margin-bottom: 8px; }
+.zone-row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.zone-row--fw { margin-bottom: 2px; }
+.zone-arrow { color: #475569; text-align: center; font-size: 11px; line-height: 1.4; }
+.zone-arrow--h { display: inline; }
+.zone-arrow--big { color: #60a5fa; text-align: center; font-size: 12px; font-weight: 700; margin: 8px 0; }
+.zone-bands { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.zone-band { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: #0e2a2a; border: 1px solid #14b8a6; border-radius: 6px; padding: 5px 9px; font-size: 11px; color: #5eead4; cursor: pointer; }
+.zone-band:hover { background: #113535; }
+.zone-band__cnt { color: #94a3b8; font-weight: 700; }
+.zone-band__list { display: flex; gap: 5px; flex-wrap: wrap; padding: 4px 2px 2px; }
+.zone-chip { display: inline-flex; align-items: center; gap: 5px; background: #1e293b; border: 1.5px solid #64748b; border-radius: 6px; padding: 3px 8px; font-size: 11px; color: #f1f5f9; cursor: pointer; white-space: nowrap; }
+.zone-chip:hover { filter: brightness(1.3); }
+.zone-chip i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+
+/* 존·대역 뷰 v2 (아이콘형) */
+.zspine { display: flex; flex-direction: column; align-items: center; gap: 2px; width: fit-content; margin: 0 auto 4px; background: #0b1f33; border: 1px solid #1e3a5f; border-radius: 12px; padding: 10px 26px; }
+.zspine__t { color: #60a5fa; font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+.znode { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; padding: 4px 6px; border-radius: 8px; }
+.znode:hover { background: #1e293b55; }
+.znode__ic { display: block; }
+.znode__lbl { color: #e2e8f0; font-size: 11px; font-weight: 700; text-align: center; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.znode--fw { align-self: center; }
+.zarrow { color: #475569; text-align: center; font-size: 11px; line-height: 1.2; }
+.zarrow--big { color: #60a5fa; font-weight: 700; font-size: 12px; margin: 8px 0; }
+.zonebox { background: #0f172a; border: 2px solid #334155; border-radius: 12px; padding: 10px; min-width: 250px; max-width: 360px; display: flex; flex-direction: column; align-items: center; }
+.zonebox--orphan { border-style: dashed; border-color: #475569; }
+.zonebox__head { color: #e2e8f0; font-weight: 700; font-size: 13px; text-align: center; padding: 2px 0 8px; border-bottom: 1px solid #1e293b; margin-bottom: 8px; width: 100%; }
+.zdists { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; width: 100%; }
+.zdist { display: flex; flex-direction: column; align-items: center; gap: 4px; background: #0b1220; border: 1px solid #1e293b; border-radius: 10px; padding: 8px; min-width: 190px; }
+.zsubs { width: 100%; background: #0e2a2a; border: 1px solid #14b8a6; border-radius: 8px; padding: 6px 8px; margin-top: 2px; }
+.zsubs__t { color: #5eead4; font-size: 10px; font-weight: 700; margin-bottom: 4px; }
+.zsub { color: #a7f3d0; font-size: 11px; padding: 1px 0; }
+.zsub--none { color: #64748b; font-style: italic; }
