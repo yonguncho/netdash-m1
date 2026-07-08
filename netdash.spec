@@ -9,8 +9,6 @@ hiddenimports += ['requests']
 hiddenimports += ['flask_sock', 'simple_websocket', 'wsproto']
 # PPTX 구성도 자동 생성
 hiddenimports += ['pptx', 'PIL', 'PIL.Image', 'PIL.ImageDraw', 'PIL.ImageFont']
-_pptx_d, _pptx_b, _pptx_h = collect_all('pptx')
-datas += _pptx_d; binaries += _pptx_b; hiddenimports += _pptx_h
 # DPAPI 자격증명 암호화(win32crypt). 미번들 시 암호화가 None→자격증명 저장 실패.
 hiddenimports += ['win32crypt', 'win32api', 'pywintypes']
 
@@ -19,7 +17,7 @@ binaries = []
 
 # 스위치/방화벽 SSH·REST가 함수 내부에서 lazy import → 전체 수집 필요.
 # netmiko는 서브모듈 + ntc-templates 데이터 파일까지 있어야 동작(collect_all).
-for _pkg in ('netmiko', 'paramiko'):
+for _pkg in ('netmiko', 'paramiko', 'pptx'):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b
