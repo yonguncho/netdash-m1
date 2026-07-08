@@ -94,7 +94,8 @@ def test_appjs_no_inline_onclick():
 def test_collector_read_timeout_moved_to_send_command():
     """read_timeout은 ConnectHandler 생성자가 아닌 send_command 인자여야 함."""
     src = (Path(__file__).parent.parent / "core" / "collector.py").read_text(encoding="utf-8")
-    assert "send_command(command, read_timeout=read_timeout)" in src
+    # read_timeout이 send_command 인자로 전달됨(detail/errors는 _rt로 확장)
+    assert "send_command(command, read_timeout=_rt)" in src
     # device dict 정의에 read_timeout 키가 없어야(생성자 인자 금지)
     import re
     device_block = re.search(r'device = \{.*?\}', src, re.DOTALL)

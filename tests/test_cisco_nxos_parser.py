@@ -108,6 +108,25 @@ def test_nxos_full_interface_down_state_and_errors():
     assert e12["status"] == "up" and e12["speed"] == "40G"
 
 
+def test_nxos_full_abbreviates_name():
+    """show interface 헤더 'Ethernet1/9'가 MAC/설명과 같은 'Eth1/9'로 축약."""
+    r = cisco_nxos.parse({"detail": SH_INT_FULL}, 1)
+    names = {p["name"] for p in r["ports"]}
+    assert "Eth1/1" in names and "Ethernet1/1" not in names
+
+
+def test_nxos_status_desc_with_down_word_not_misread():
+    """폴백(status): Name/설명에 'down' 단어가 있어도 상태를 오인식하지 않음."""
+    status = (
+        "Port          Name               Status    Vlan   Duplex  Speed   Type\n"
+        "Eth1/9        LINK-TO-DOWNSTREAM connected trunk  full    40G     40G\n"
+    )
+    r = cisco_nxos.parse({"status": status}, 1)   # detail 없음 → status 폴백
+    e9 = next(p for p in r["ports"] if "1/9" in p["name"])
+    assert e9["status"] == "up"        # 'DOWNSTREAM'의 down을 상태로 오인식하지 않음
+    assert e9["vlan"] == 1             # trunk → 숫자 아님 → 1
+
+
 def test_nxos_status_fallback_vlan_speed():
     """detail 없을 때 폴백: show interface status에서 VLAN·속도 파싱."""
     r = cisco_nxos.parse(_outputs(), 1)   # _outputs()엔 detail 없음 → status 폴백

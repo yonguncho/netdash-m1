@@ -817,7 +817,10 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 cmd_success = 0
                 for key, command in commands.items():
                     try:
-                        outputs[key] = conn.send_command(command, read_timeout=read_timeout)
+                        # 'show interface'(전체)는 포트 많은 섀시(N9508 등)에서 출력이
+                        # 매우 커 60초로 부족 → detail/errors 계열은 타임아웃을 늘린다.
+                        _rt = max(read_timeout, 150) if key in ("detail", "errors") else read_timeout
+                        outputs[key] = conn.send_command(command, read_timeout=_rt)
                         cmd_success += 1
                         utils.log_event("debug", "command_executed", command=command)
                     except Exception as _ce:

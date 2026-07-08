@@ -2789,7 +2789,17 @@ function escHtml(s) {
 }
 function fmtTime(ts) {
   if (!ts) return "-";
-  try { return new Date(ts).toLocaleString("ko-KR"); } catch(e) { return String(ts); }
+  try {
+    // DB 시각은 UTC(SQLite datetime('now')/CURRENT_TIMESTAMP, TZ 표기 없음).
+    // 'Z'를 붙여 UTC로 해석 후 EST(America/New_York)로 표시.
+    var s = String(ts).trim().replace(" ", "T");
+    if (!/[zZ]|[+\-]\d\d:?\d\d$/.test(s)) s += "Z";
+    var d = new Date(s);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString("en-US", { timeZone: "America/New_York",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + " EST";
+  } catch (e) { return String(ts); }
 }
 // 넷마스크/프리픽스 → "/N" 표기. 변환 불가 시 원문(있으면 앞에 /) 반환.
 function _fmtPrefix(mask) {

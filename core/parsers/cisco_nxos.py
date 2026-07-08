@@ -28,6 +28,17 @@ COMMANDS = {
 _IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
 
 
+def _abbr_nxos(port):
+    """NX-OS 포트명을 MAC/description 파서와 동일한 축약형으로 정규화.
+
+    'Ethernet1/9'→'Eth1/9', 'port-channel1'→'Po1'. 파서 간 이름 불일치 방지.
+    """
+    p = utils.normalize_port(port) or ""
+    p = re.sub(r"^Ethernet", "Eth", p, flags=re.IGNORECASE)
+    p = re.sub(r"^port-channel", "Po", p, flags=re.IGNORECASE)
+    return p
+
+
 def parse(outputs, switch_id):
     utils.log_event("info", "parse_cisco_nxos", switch_id=switch_id)
     descriptions = _parse_descriptions(outputs.get("description", ""))
@@ -110,16 +121,20 @@ def _vlan_map_from_status(status_output):
         m = re.match(r"^" + _IFACE + r"\s+(.*)$", line)
         if not m:
             continue
-        port = utils.normalize_port(m.group(1))
+        port = _abbr_nxos(m.group(1))
         if not port:
             continue
-        sm = re.search(r"\b(connected|notconnec\w*|disabled|err-?disabled|"
-                       r"noOperMem|sfpAbsent|xcvrAbsen|up|down)\b", m.group(2), re.IGNORECASE)
-        tail = m.group(2)[sm.end():].split() if sm else m.group(2).split()
-        if tail:
-            v = utils.normalize_vlan(tail[0])
-            if v:
-                vmap[port] = v
+        # status 다음이 vlan — 컬럼 기반(Name의 단어 오인식 방지)
+        toks = m.group(2).split()
+        _SW = ("connected", "notconnect", "notconnec", "disabled", "err-disabled",
+               "errdisabled", "noOperMem", "sfpAbsent", "xcvrAbsen", "inactive")
+        for j in range(len(toks) - 1):
+            tl = toks[j].lower()
+            if any(tl.startswith(s.lower()) for s in _SW) and re.match(r"^(\d+|trunk|routed|--)$", toks[j + 1], re.IGNORECASE):
+                v = utils.normalize_vlan(toks[j + 1])
+                if v:
+                    vmap[port] = v
+                break
     return vmap
 
 
@@ -147,7 +162,7 @@ def _parse_full(detail_output, descriptions, vlan_map, switch_id):
         # 인터페이스 헤더: "Ethernet1/1 is up" / "... is down (reason)"
         mh = re.match(r"^(" + _IFACE.strip("()") + r")\s+is\s+(up|down)\b(.*)$", line, re.IGNORECASE)
         if mh:
-            port = utils.normalize_port(mh.group(1))
+            port = _abbr_nxos(mh.group(1))       # Ethernet1/9 → Eth1/9 (파서 간 일치)
             if not port:
                 cur = None
                 continue
@@ -233,21 +248,26 @@ def _parse_ports(status_output, descriptions, switch_id, errors=None):
         if not port_name:
             continue
         rest = m.group(2)
-        # 상태 키워드(뒤쪽에서 vlan/duplex/speed 앞) — connected/notconnec/disabled/...
-        sm = re.search(r"\b(connected|notconnec\w*|disabled|err-?disabled|"
-                       r"noOperMem|sfpAbsent|linkFlapE|xcvrAbsen|up|down)\b", rest, re.IGNORECASE)
-        status = _map_status(sm.group(1)) if sm else "unknown"
-        # 상태 뒤 토큰: Vlan Duplex Speed Type
-        tail = rest[sm.end():].split() if sm else rest.split()
+        # 컬럼 기반: status는 vlan 토큰(숫자/trunk/routed/--) 바로 '앞' 토큰이다.
+        # (설명/Name 컬럼에 든 'down' 등 단어를 상태로 오인식하던 문제 수정)
+        toks = rest.split()
+        _STATUS_WORDS = ("connected", "notconnect", "notconnec", "disabled",
+                         "err-disabled", "errdisabled", "noOperMem", "sfpAbsent",
+                         "linkFlapE", "xcvrAbsen", "xcvrAbsent", "inactive", "suspended")
+        _VLAN_LIKE = re.compile(r"^(\d+|trunk|routed|--|monitor|access)$", re.IGNORECASE)
+        status = "unknown"
         vlan = 1
-        if tail:
-            v = utils.normalize_vlan(tail[0])       # 'trunk'/'routed'는 None → 1 유지
-            vlan = v if v else 1
         spd = ""
-        if len(tail) >= 3:
-            spd = tail[2]
-        elif len(tail) >= 2:
-            spd = tail[1]
+        for j in range(len(toks) - 1):
+            tl = toks[j].lower()
+            if any(tl.startswith(sw.lower()) for sw in _STATUS_WORDS) and _VLAN_LIKE.match(toks[j + 1]):
+                status = _map_status(toks[j])
+                v = utils.normalize_vlan(toks[j + 1])
+                vlan = v if v else 1
+                # 상태 뒤: Vlan Duplex Speed Type → speed는 +3
+                if j + 3 < len(toks):
+                    spd = toks[j + 3]
+                break
         speed = spd if spd and spd not in ("--", "auto") else (spd or "unknown")
         err = errors.get(port_name, {})
         ports.append({
