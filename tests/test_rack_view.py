@@ -53,6 +53,29 @@ def test_serverroom_rack_xlsx_layout():
     assert dev_cell.fill.fgColor.rgb == "FFEF4444"        # 방화벽=빨강 채움
 
 
+def test_serverroom_rack_xlsx_letter_grouping():
+    """같은 열(A)의 랙 3개 이상이 한 줄에 모두 나란히 표기(2개 제한 없음)."""
+    from core import serverroom
+    from openpyxl import load_workbook
+    import io
+    devs = [
+        {"name": "A3", "ip": "10.1.1.1", "rack": "A03", "unit": 36, "device_type": "Firewall"},
+        {"name": "A4", "ip": "10.1.1.2", "rack": "A04", "unit": 30, "device_type": "L3 Switch"},
+        {"name": "A6", "ip": "10.1.1.3", "rack": "A06", "unit": 20, "device_type": "L4 Switch"},
+        {"name": "B3", "ip": "10.1.1.4", "rack": "B03", "unit": 10, "device_type": "L2 Switch"},
+    ]
+    ws = load_workbook(io.BytesIO(serverroom.build_rack_xlsx(devs))).active
+    # 첫 줄(A열) 헤더에 A03/A04/A06 모두 존재
+    row1 = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    assert "A03" in row1 and "A04" in row1 and "A06" in row1
+    # 전체에서 B03도 존재(다른 letter 블록)
+    allv = set()
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            allv.add(ws.cell(row=r, column=c).value)
+    assert "B03" in allv
+
+
 def test_serverroom_export_endpoint_404_when_empty(client):
     """서버실 소속 장비 없으면 404 + 안내."""
     r = client.get("/api/serverroom/export")

@@ -78,6 +78,16 @@ def build_rack_xlsx(devices):
         racks.setdefault(rk, {})[u] = d
     rack_names = sorted(racks.keys())
 
+    # 열(letter: A/B...)별 그룹핑 — 랙뷰와 동일하게 같은 열의 랙을 한 줄에 나란히.
+    import re as _re
+    by_letter = {}
+    for rk in rack_names:
+        m = _re.match(r"[A-Za-z]+", rk)
+        letter = m.group(0).upper() if m else "#"
+        by_letter.setdefault(letter, []).append(rk)
+    letters = sorted(by_letter)
+    max_racks_row = max((len(by_letter[l]) for l in letters), default=1)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "ServerRoom"
@@ -94,8 +104,8 @@ def build_rack_xlsx(devices):
     # 각 랙 블록: 2컬럼(U라벨, 장비명) + 1컬럼 간격
     BLOCK_COLS = 3
     row0 = 1
-    for ri in range(0, len(rack_names), _RACKS_PER_ROW):
-        chunk = rack_names[ri:ri + _RACKS_PER_ROW]
+    for letter in letters:
+        chunk = sorted(by_letter[letter])   # 이 열의 모든 랙(A03,A04,A06...)을 나란히
         # 이 줄에서 사용할 최대 U (기본 42, 초과 시 확장)
         max_u = _RACK_U
         for rk in chunk:
@@ -136,8 +146,8 @@ def build_rack_xlsx(devices):
                         dc.fill = PatternFill("solid", fgColor=fill)
         row0 = row0 + 1 + max_u + 2  # 다음 랙-줄 블록(간격 2행)
 
-    # 컬럼 너비
-    ncols = _RACKS_PER_ROW * BLOCK_COLS
+    # 컬럼 너비 — 한 줄 최대 랙 수 기준
+    ncols = max_racks_row * BLOCK_COLS
     for c in range(1, ncols + 1):
         col = get_column_letter(c)
         if (c - 1) % BLOCK_COLS == 0:
