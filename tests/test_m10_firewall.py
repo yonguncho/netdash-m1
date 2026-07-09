@@ -113,6 +113,23 @@ def test_fortigate_parse_hbdev_formats():
     assert _parse_hbdev(None) == []
 
 
+def test_paloalto_parse_ha_state():
+    """PAN-OS show high-availability state → mode/hbdev(HA1·HA2 포트) 파싱."""
+    from core.firewall.paloalto import parse_ha_state
+    out = ("Group 1:\n  Mode: Active-Passive\n  Local Information:\n    State: active\n"
+           "  HA1 Control Links:\n    Link Info:\n      Port: ethernet1/5\n"
+           "  HA2 Datalinks:\n    Link Info:\n      Port: ethernet1/6\n")
+    r = parse_ha_state(out)
+    assert r["mode"] == "active-passive"
+    assert r["hbdev"] == ["ethernet1/5", "ethernet1/6"]
+    # 축약 표기 폴백
+    r2 = parse_ha_state("Mode: Active-Active\nHA1: ha1-a\nHA2: ethernet1/8\n")
+    assert "ethernet1/8" in r2["hbdev"]
+    # 비 HA
+    assert parse_ha_state("HA not enabled") is None
+    assert parse_ha_state("") is None
+
+
 def test_firewall_ha_info_roundtrip(temp_db):
     """HA 구성 저장 → list_firewalls로 조회 → topology 노드에 ha 주입."""
     import json

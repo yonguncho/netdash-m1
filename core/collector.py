@@ -497,6 +497,7 @@ def _worker_loop():
         prev_status = None
         prev_alert = None
         sw_name = str(switch_id)
+        sw_disp = sw_name            # 알람 메시지용(이름+IP) — 예외 조기 발생 대비 초기화
         try:
             utils.log_event("info", "collect_start", switch_id=switch_id)
             # 이전 상태/경보를 먼저 확보(전이 감지용) 후 collecting 표시
@@ -506,6 +507,8 @@ def _worker_loop():
             prev_status = _sw0.get("status")
             prev_alert = _sw0.get("alert")
             sw_name = _sw0.get("name") or sw_name
+            # 알람 메시지 표기용: 이름 + IP (label은 이름 그대로 유지)
+            sw_disp = ("%s (%s)" % (sw_name, _sw0["ip"])) if _sw0.get("ip") else sw_name
             db.set_switch_status(db_path, switch_id, "collecting")
 
             switch = db.get_switch(db_path, switch_id)
@@ -728,7 +731,7 @@ def _worker_loop():
                             _kko = "루프(looping)" if _kind == "looping" else "플래핑(flapping)"
                             db.save_device_event(db_path, _kind, la["alert"], switch_id=switch_id,
                                                  label=sw_name,
-                                                 message="%s 감지: %s%s" % (_kko, sw_name, _pstr))
+                                                 message="%s 감지: %s%s" % (_kko, sw_disp, _pstr))
                 except Exception as e:
                     utils.log_event("warning", "log_analyze_skipped",
                                     error=_sanitize_error_msg(str(e)))
@@ -741,7 +744,7 @@ def _worker_loop():
                     if changed and not first:
                         db.save_device_event(db_path, "config_changed", "warning",
                                              switch_id=switch_id, label=sw_name,
-                                             message="설정 변경 감지: " + sw_name)
+                                             message="설정 변경 감지: " + sw_disp)
                 except Exception as _e:
                     utils.log_event("warning", "config_backup_skipped",
                                     error=_sanitize_error_msg(str(_e)))
@@ -750,7 +753,7 @@ def _worker_loop():
             # 이전에 실패였다가 이번에 성공 → 복구 알람
             if prev_status == "failed":
                 db.save_device_event(db_path, "switch_recovered", "info", switch_id=switch_id,
-                                     label=sw_name, message="스위치 복구: " + sw_name)
+                                     label=sw_name, message="스위치 복구: " + sw_disp)
             utils.log_event("info", "collect_done", switch_id=switch_id, snapshot_id=snapshot_id)
 
         except Exception as e:
@@ -764,7 +767,7 @@ def _worker_loop():
                 try:
                     db.save_device_event(db_path, "switch_unreachable", "warning",
                                          switch_id=switch_id, label=sw_name,
-                                         message="스위치 연결 실패: " + sw_name)
+                                         message="스위치 연결 실패: " + sw_disp)
                 except Exception:
                     pass
         finally:

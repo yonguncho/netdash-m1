@@ -61,14 +61,16 @@ def _sweep(db_path):
             _state[sid] = ok
         if prev is None:
             return                       # 첫 관측은 이벤트 없이 기준만 설정
+        # 알람에 이름+IP 함께 표기(어느 장비인지 즉시 특정)
+        sw_disp = "%s (%s)" % (sw.get("name") or sid, sw.get("ip") or "-")
         if prev and not ok:
             db.save_device_event(db_path, "switch_unreachable", "warning",
                                  switch_id=sid, label=sw.get("name"),
-                                 message="스위치 도달 불가(TCP-22): %s" % (sw.get("name") or sid))
+                                 message="스위치 도달 불가(TCP-22): %s" % sw_disp)
         elif ok and not prev:
             db.save_device_event(db_path, "switch_recovered", "info",
                                  switch_id=sid, label=sw.get("name"),
-                                 message="스위치 도달 복구: %s" % (sw.get("name") or sid))
+                                 message="스위치 도달 복구: %s" % sw_disp)
 
     # 방화벽도 함께 감시 — 관리 포트(등록 포트, 기본 443)로 TCP 핸드셰이크만
     try:
@@ -85,15 +87,16 @@ def _sweep(db_path):
             _fw_state[fid] = ok
         if prev is None:
             return
+        fw_disp = "%s (%s)" % (fw.get("name") or fid, fw.get("host") or "-")
         if prev and not ok:
             db.save_device_event(db_path, "firewall_unreachable", "warning",
                                  label=fw.get("name"),
                                  message="방화벽 도달 불가(TCP-%s): %s" % (
-                                     fw.get("port") or 443, fw.get("name") or fid))
+                                     fw.get("port") or 443, fw_disp))
         elif ok and not prev:
             db.save_device_event(db_path, "firewall_recovered", "info",
                                  label=fw.get("name"),
-                                 message="방화벽 도달 복구: %s" % (fw.get("name") or fid))
+                                 message="방화벽 도달 복구: %s" % fw_disp)
 
     for sw in switches:
         t = threading.Thread(target=_one, args=(sw,), daemon=True)

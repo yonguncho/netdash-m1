@@ -1,5 +1,19 @@
 # NetDash 릴리스 노트
 
+## v3.69.0 (2026-07-09) — Palo Alto HA 포트 수집 + 알람 메시지에 IP 표기
+
+### 🔌 Palo Alto HA 수집 추가
+- 수집 시 **`show high-availability state`** 실행 → 모드(Active-Passive/Active-Active)와
+  **HA1/HA2 링크 포트**(예: ethernet1/5, ha1-a) 파싱 → 토폴로지 이중화 연결선에 표기.
+  (FortiGate와 동일한 UX — `이중화 ethernet1/5·ethernet1/6`)
+- 비 HA 장비/파싱 실패 시 수집 흐름에 영향 없음.
+
+### 🏷 알람/변경 이벤트에 IP 표기
+- 알람 메시지가 **이름 (IP)** 형식으로 표시 — 어느 장비인지 즉시 특정.
+  - 예: `스위치 복구: SKBA_Jefferson_Main_FASW1 (10.92.128.11)`
+  - 적용: 스위치 도달 불가/복구, 수집 복구/연결 실패, 설정 변경 감지, 루프/플래핑 감지,
+    방화벽 도달 불가/복구.
+
 ## v3.68.0 (2026-07-09) — HA(VIP 공유) 방화벽: 토폴로지 이중화 표현 + HA 포트 표기
 
 ### 🔗 같은 VIP 방화벽 = 이중화로 표현

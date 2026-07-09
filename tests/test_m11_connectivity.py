@@ -64,6 +64,17 @@ def test_public_ip_allowed_without_whitelist():
         validate_ipv4("169.254.169.254", [])                          # 링크로컬(메타데이터) 차단
 
 
+def test_alarm_messages_include_ip():
+    """알람/변경 이벤트 메시지에 이름+IP 표기(사용자가 장비를 즉시 특정)."""
+    from pathlib import Path
+    reach = (Path(__file__).parent.parent / "core" / "reachability.py").read_text(encoding="utf-8")
+    assert 'sw_disp = "%s (%s)"' in reach          # 스위치: 이름 (IP)
+    assert 'fw_disp = "%s (%s)"' in reach          # 방화벽: 이름 (host)
+    coll = (Path(__file__).parent.parent / "core" / "collector.py").read_text(encoding="utf-8")
+    assert 'sw_disp = ("%s (%s)"' in coll          # 수집 알람(복구/실패/설정변경/루프)도 IP 포함
+    assert '"스위치 복구: " + sw_disp' in coll
+
+
 def test_is_reachable_gate(monkeypatch):
     """등록 게이트: TCP 또는 ICMP 중 하나라도 응답하면 도달 가능."""
     from core import collector

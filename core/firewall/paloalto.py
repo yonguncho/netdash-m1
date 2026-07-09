@@ -103,10 +103,41 @@ def parse_logical_interfaces(output):
     return ifaces
 
 
-def collect(host, username, password, port=22, timeout=30, source_ip=None):
-    """netmiko SSH로 PAN-OS 방화벽 인터페이스/ARP 수집 (source_ip로 출발지 바인딩).
+def parse_ha_state(output):
+    """PAN-OS 'show high-availability state' 출력 → {mode, group_name, hbdev, monitor} | None.
 
-    Returns: {"interfaces": [...], "arp": [...]}
+    비 HA 장비는 출력에 'HA not enabled' 류가 나오거나 mode가 없음 → None.
+    hbdev = HA1/HA2 링크에 지정된 포트(예: ethernet1/5, dedicated ha1).
+    """
+    t = output or ""
+    if not t.strip() or re.search(r"not\s+enabled|disabled", t, re.I) and "Mode:" not in t:
+        return None
+    m_mode = re.search(r"Mode:[ \t]*([\w/-]+(?:[ \t]+[\w-]+)?)", t)
+    mode = (m_mode.group(1).strip().lower() if m_mode else "")
+    if not mode:
+        return None
+    ports = []
+    # 'HA1 Control Links' / 'HA2 Datalinks' 섹션의 Port 필드 또는 ha1-port 표기
+    for m in re.finditer(r"(?:HA[12][^\n]*link[^\n]*\n(?:\s+[^\n]*\n)*?\s*Port:\s*(\S+))"
+                         r"|(?:ha([12])[-_ ]?port\s*[:=]\s*(\S+))", t, re.I):
+        p = m.group(1) or m.group(3)
+        if p and p not in ports:
+            ports.append(p.rstrip(",;"))
+    # 폴백: 'HA1: ethernet1/5' 같은 축약 표기
+    if not ports:
+        for m in re.finditer(r"\bHA([12])\b\s*[:=]?\s*((?:ethernet|ae|ha)[\w/.-]*)", t, re.I):
+            p = m.group(2)
+            if p and p.lower() not in ("up", "down") and p not in ports:
+                ports.append(p)
+    m_grp = re.search(r"Group\s*(?:ID|Name)?\s*[:=]\s*(\S+)", t, re.I)
+    return {"mode": mode, "group_name": (m_grp.group(1) if m_grp else ""),
+            "hbdev": ports, "monitor": []}
+
+
+def collect(host, username, password, port=22, timeout=30, source_ip=None):
+    """netmiko SSH로 PAN-OS 방화벽 인터페이스/ARP/HA 수집 (source_ip로 출발지 바인딩).
+
+    Returns: {"interfaces": [...], "arp": [...], "ha": {...}|None}
     """
     from netmiko import ConnectHandler
     device = {
@@ -121,10 +152,16 @@ def collect(host, username, password, port=22, timeout=30, source_ip=None):
         arp_out = conn.send_command("show arp all")
         if_out = conn.send_command("show interface all")
         logical_out = conn.send_command("show interface logical")
+        try:
+            ha_out = conn.send_command("show high-availability state")
+        except Exception:
+            ha_out = ""
     # 논리 인터페이스(IP 보유)를 우선 사용, 없으면 하드웨어 인터페이스(IP 없음)
     logical = parse_logical_interfaces(logical_out)
     interfaces = logical if logical else parse_interfaces(if_out)
-    result = {"interfaces": interfaces, "arp": parse_arp(arp_out)}
-    logger.info("paloalto host=%s interfaces=%d arp=%d",
-                host, len(result["interfaces"]), len(result["arp"]))
+    ha = parse_ha_state(ha_out)
+    result = {"interfaces": interfaces, "arp": parse_arp(arp_out), "ha": ha}
+    logger.info("paloalto host=%s interfaces=%d arp=%d ha=%s",
+                host, len(result["interfaces"]), len(result["arp"]),
+                (ha or {}).get("mode"))
     return result
