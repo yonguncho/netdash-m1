@@ -98,6 +98,35 @@ def test_save_firewall_ha_same_vip_diff_name(temp_db):
     assert len(fws) == 2
     assert {f["name"] for f in fws} == {"FW_ACTIVE", "FW_BACKUP"}
     assert all(f["host"] == "10.92.1.1" for f in fws)
+    # HA 쌍 각각에 인터페이스 저장 → FK 정상(FOREIGN KEY constraint 회귀 방지)
+    db.save_firewall_interfaces(temp_db, a, [{"name": "port1", "ip": "10.92.1.1"}])
+    db.save_firewall_interfaces(temp_db, b, [{"name": "port1", "ip": "10.92.1.1"}])
+
+
+def test_firewalls_unique_migration_preserves_fk(tmp_path):
+    """구버전(host UNIQUE) DB 마이그레이션 후 FK가 firewalls를 참조하고 인터페이스 저장 가능."""
+    import sqlite3
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    c.execute("""CREATE TABLE firewalls (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                 vendor TEXT NOT NULL, host TEXT NOT NULL UNIQUE, port INTEGER, auth_type TEXT DEFAULT 'token',
+                 status TEXT DEFAULT 'new', last_collected TIMESTAMP,
+                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, cred_blob TEXT, location TEXT)""")
+    c.execute("""CREATE TABLE firewall_interfaces (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 firewall_id INTEGER NOT NULL, name TEXT, ip TEXT, mask TEXT, vdom_zone TEXT,
+                 FOREIGN KEY (firewall_id) REFERENCES firewalls(id))""")
+    c.execute("INSERT INTO firewalls (name,vendor,host,port) VALUES ('FW_BACKUP','fortigate','10.92.1.1',443)")
+    c.commit(); c.close()
+    db.init_schema(p)
+    c = sqlite3.connect(p)
+    assert not c.execute("SELECT name FROM sqlite_master WHERE name='firewalls_old'").fetchone()
+    assert not c.execute("SELECT name FROM sqlite_master WHERE sql LIKE '%firewalls_old%'").fetchall()
+    assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+    c.close()
+    # ACTIVE 등록 + 인터페이스 저장(사용자가 겪은 FOREIGN KEY constraint 시나리오)
+    a = db.save_firewall(p, "FW_ACTIVE", "fortigate", "10.92.1.1", 443)
+    db.save_firewall_interfaces(p, a, [{"name": "port1", "ip": "10.92.1.1"}])
+    assert len(db.list_firewalls(p)) == 2
 
 
 def test_firewall_status(temp_db):

@@ -1,5 +1,15 @@
 # NetDash 릴리스 노트
 
+## v3.67.1 (2026-07-09) — HA 등록 "FOREIGN KEY constraint failed" 수정 (긴급)
+
+- **v3.67.0에서 Backup 등록 후 Active 등록 시 FOREIGN KEY constraint failed 나던 버그 수정.**
+  - 원인: v3.67.0의 UNIQUE 제거 마이그레이션이 `ALTER TABLE ... RENAME`을 사용 →
+    SQLite가 자식 테이블(firewall_interfaces/firewall_arp)의 FK 참조를 `firewalls_old`로
+    따라가게 바꿔 새 firewalls의 id로 인터페이스 저장 시 FK 실패.
+  - 수정: 정석 절차(새 테이블 생성→복사→기존 DROP→RENAME, FK OFF)로 마이그레이션 재작성.
+- **v3.67.0으로 이미 깨진 DB 자동 복구**: `firewalls_old` 잔해 제거 + 자식 테이블 FK를
+  firewalls로 재구성(secondary_ips 등 후기 컬럼 포함, 데이터 보존). 앱 시작 시 자동 실행.
+
 ## v3.67.0 (2026-07-09) — 방화벽 HA/VRRP 이중화: 같은 VIP + 다른 hostname 각각 등록
 
 - **HA/HSRP/VRRP 이중화 방화벽(같은 VIP 하나만 사용)의 Active/Backup을 각각 등록** 가능하게 함.

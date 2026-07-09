@@ -457,20 +457,59 @@ def init_schema(db_path):
             except Exception:
                 pass
             # HA/VRRP 이중화(같은 VIP) 방화벽을 Active/Backup 둘 다 등록할 수 있도록
-            # firewalls.host의 UNIQUE 제약 제거(테이블 재구성). 기존 DB만 대상.
+            # firewalls.host의 UNIQUE 제약 제거. SQLite 정석 절차:
+            # FK OFF → 새 테이블(_new) 생성 → 복사 → 기존 DROP → _new RENAME.
+            # (RENAME이 자식 FK를 따라가지 않도록 기존 테이블은 rename 대신 drop)
             try:
+                # ① 지난 버전(RENAME 방식) 마이그레이션이 남긴 잔해 복구:
+                #    firewalls_old가 남아 있고 자식 FK가 firewalls_old를 참조하는 상태
+                #    → 자식 테이블 재구성으로 FK를 firewalls로 복원.
+                cursor.execute("PRAGMA foreign_keys=OFF")
+                leftover = cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='firewalls_old'").fetchone()
+                if leftover:
+                    for child, create_sql in (
+                            ("firewall_interfaces", CREATE_FIREWALL_INTERFACES_TABLE),
+                            ("firewall_arp", CREATE_FIREWALL_ARP_TABLE)):
+                        csql = cursor.execute(
+                            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (child,)).fetchone()
+                        if csql and csql[0] and "firewalls_old" in csql[0]:
+                            cursor.execute("ALTER TABLE %s RENAME TO %s_bak" % (child, child))
+                            cursor.execute(create_sql)
+                            ccols = [r[1] for r in cursor.execute(
+                                "PRAGMA table_info(%s_bak)" % child).fetchall()]
+                            # 후기 마이그레이션으로 추가된 컬럼(secondary_ips 등)을 새 테이블에 보강
+                            newcols = {r[1] for r in cursor.execute(
+                                "PRAGMA table_info(%s)" % child).fetchall()}
+                            for col in ccols:
+                                if col not in newcols:
+                                    cursor.execute("ALTER TABLE %s ADD COLUMN %s TEXT" % (child, col))
+                            clist = ", ".join(ccols)
+                            cursor.execute("INSERT INTO %s (%s) SELECT %s FROM %s_bak"
+                                           % (child, clist, clist, child))
+                            cursor.execute("DROP TABLE %s_bak" % child)
+                    cursor.execute("DROP TABLE firewalls_old")
+                    utils.log_event("info", "firewalls_old_leftover_repaired")
+                # ② UNIQUE 제약 제거(정석: _new 생성→복사→기존 drop→rename)
                 row = cursor.execute(
                     "SELECT sql FROM sqlite_master WHERE type='table' AND name='firewalls'").fetchone()
                 if row and row[0] and "UNIQUE" in row[0].upper():
-                    cursor.execute("ALTER TABLE firewalls RENAME TO firewalls_old")
-                    cursor.execute(CREATE_FIREWALLS_TABLE)   # UNIQUE 없는 새 정의
-                    cols = [r[1] for r in cursor.execute("PRAGMA table_info(firewalls_old)").fetchall()]
+                    cursor.execute(CREATE_FIREWALLS_TABLE.replace(
+                        "CREATE TABLE IF NOT EXISTS firewalls", "CREATE TABLE firewalls_new"))
+                    cols = [r[1] for r in cursor.execute("PRAGMA table_info(firewalls)").fetchall()]
                     collist = ", ".join(cols)
-                    cursor.execute("INSERT INTO firewalls (%s) SELECT %s FROM firewalls_old" % (collist, collist))
-                    cursor.execute("DROP TABLE firewalls_old")
+                    cursor.execute("INSERT INTO firewalls_new (%s) SELECT %s FROM firewalls"
+                                   % (collist, collist))
+                    cursor.execute("DROP TABLE firewalls")   # 자식 FK는 'firewalls' 참조 유지(잠시 무효)
+                    cursor.execute("ALTER TABLE firewalls_new RENAME TO firewalls")
                     utils.log_event("info", "firewalls_host_unique_dropped")
             except Exception as _e:
                 utils.log_event("warning", "firewalls_migration_skip", error=str(_e))
+            finally:
+                try:
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                except Exception:
+                    pass
             conn.commit()
             utils.log_event("info", "schema_created", tables=8)
 
