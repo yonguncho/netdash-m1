@@ -79,13 +79,25 @@ def test_save_and_list_firewall(temp_db):
     assert got["host"] == "10.0.0.1"
 
 
-def test_save_firewall_upsert_by_host(temp_db):
+def test_save_firewall_upsert_by_name_host(temp_db):
+    # 같은 name+host → upsert(1개)
     fid1 = db.save_firewall(temp_db, "FW-01", "fortigate", "10.0.0.1")
-    fid2 = db.save_firewall(temp_db, "FW-01-renamed", "paloalto", "10.0.0.1", 22, "password")
-    assert fid1 == fid2  # 동일 host → upsert
+    fid2 = db.save_firewall(temp_db, "FW-01", "paloalto", "10.0.0.1", 22, "password")
+    assert fid1 == fid2
     fws = db.list_firewalls(temp_db)
     assert len(fws) == 1
     assert fws[0]["vendor"] == "paloalto"
+
+
+def test_save_firewall_ha_same_vip_diff_name(temp_db):
+    """HA/VRRP: 같은 VIP라도 hostname이 다르면 Active/Backup 각각 등록."""
+    a = db.save_firewall(temp_db, "FW_ACTIVE", "fortigate", "10.92.1.1", 443)
+    b = db.save_firewall(temp_db, "FW_BACKUP", "fortigate", "10.92.1.1", 443)
+    assert a != b
+    fws = db.list_firewalls(temp_db)
+    assert len(fws) == 2
+    assert {f["name"] for f in fws} == {"FW_ACTIVE", "FW_BACKUP"}
+    assert all(f["host"] == "10.92.1.1" for f in fws)
 
 
 def test_firewall_status(temp_db):

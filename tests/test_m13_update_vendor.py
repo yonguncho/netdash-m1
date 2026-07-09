@@ -126,9 +126,10 @@ def test_update_switch_duplicate_name_conflict(client):
     assert r.status_code == 409
 
 
-def test_update_firewall_duplicate_host_conflict(client):
-    """host 중복 수정 시 409."""
+def test_update_firewall_same_host_diff_name_allowed(client):
+    """HA/VRRP: 같은 host라도 hostname이 다르면 수정 허용(이중화 대응)."""
     client.post("/api/firewalls", json={"vendor": "fortigate", "host": "10.1.1.1", "name": "FA"})
     fb = client.post("/api/firewalls", json={"vendor": "fortigate", "host": "10.1.1.2", "name": "FB"}).get_json()["firewall_id"]
+    # FB(name=FB)를 FA와 같은 VIP(10.1.1.1)로 변경 → 이름이 달라 허용
     r = client.put(f"/api/firewalls/{fb}", json={"host": "10.1.1.1"})
-    assert r.status_code == 409
+    assert r.status_code == 200

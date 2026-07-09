@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS firewalls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     vendor TEXT NOT NULL,
-    host TEXT NOT NULL UNIQUE,
+    host TEXT NOT NULL,
     port INTEGER,
     auth_type TEXT DEFAULT 'token',
     status TEXT DEFAULT 'new',
@@ -456,6 +456,21 @@ def init_schema(db_path):
                 cursor.execute("ALTER TABLE firewall_interfaces ADD COLUMN secondary_ips TEXT")
             except Exception:
                 pass
+            # HA/VRRP 이중화(같은 VIP) 방화벽을 Active/Backup 둘 다 등록할 수 있도록
+            # firewalls.host의 UNIQUE 제약 제거(테이블 재구성). 기존 DB만 대상.
+            try:
+                row = cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='firewalls'").fetchone()
+                if row and row[0] and "UNIQUE" in row[0].upper():
+                    cursor.execute("ALTER TABLE firewalls RENAME TO firewalls_old")
+                    cursor.execute(CREATE_FIREWALLS_TABLE)   # UNIQUE 없는 새 정의
+                    cols = [r[1] for r in cursor.execute("PRAGMA table_info(firewalls_old)").fetchall()]
+                    collist = ", ".join(cols)
+                    cursor.execute("INSERT INTO firewalls (%s) SELECT %s FROM firewalls_old" % (collist, collist))
+                    cursor.execute("DROP TABLE firewalls_old")
+                    utils.log_event("info", "firewalls_host_unique_dropped")
+            except Exception as _e:
+                utils.log_event("warning", "firewalls_migration_skip", error=str(_e))
             conn.commit()
             utils.log_event("info", "schema_created", tables=8)
 
@@ -1880,8 +1895,9 @@ def delete_firewall(db_path, firewall_id):
 
 # ── M10: 방화벽 (Palo Alto / Fortinet) ────────────────────────────
 def save_firewall(db_path, name, vendor, host, port=None, auth_type="token", location=None):
-    """방화벽 장비 등록 (host 기준 upsert). 반환: firewall id.
+    """방화벽 장비 등록 ((name, host) 복합 기준 upsert). 반환: firewall id.
 
+    HA/VRRP 이중화(같은 VIP)라도 hostname(name)이 다르면 Active/Backup을 각각 등록.
     location 컬럼이 없는 구버전 DB도 안전하도록 존재 컬럼만 동적 사용.
     """
     with _db_lock:
@@ -1889,18 +1905,18 @@ def save_firewall(db_path, name, vendor, host, port=None, auth_type="token", loc
             cur = conn.cursor()
             cols = {r[1] for r in cur.execute("PRAGMA table_info(firewalls)").fetchall()}
             has_loc = "location" in cols
-            # FIX: ON CONFLICT(host) 의존 제거. host 기준 수동 UPSERT.
-            cur.execute("SELECT id FROM firewalls WHERE host=?", (host,))
+            # (name, host) 복합 UPSERT — 같은 host라도 name이 다르면 별도 등록(이중화 대응)
+            cur.execute("SELECT id FROM firewalls WHERE name=? AND host=?", (name, host))
             existing = cur.fetchone()
             if existing:
                 if has_loc and location is not None:
                     cur.execute(
-                        "UPDATE firewalls SET name=?, vendor=?, port=?, auth_type=?, location=? WHERE host=?",
-                        (name, vendor, port, auth_type, location, host))
+                        "UPDATE firewalls SET vendor=?, port=?, auth_type=?, location=? WHERE id=?",
+                        (vendor, port, auth_type, location, existing[0]))
                 else:
                     cur.execute(
-                        "UPDATE firewalls SET name=?, vendor=?, port=?, auth_type=? WHERE host=?",
-                        (name, vendor, port, auth_type, host))
+                        "UPDATE firewalls SET vendor=?, port=?, auth_type=? WHERE id=?",
+                        (vendor, port, auth_type, existing[0]))
                 return existing[0]
             if has_loc:
                 cur.execute(
