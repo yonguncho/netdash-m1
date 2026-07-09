@@ -1,5 +1,19 @@
 # NetDash 릴리스 노트
 
+## v3.68.0 (2026-07-09) — HA(VIP 공유) 방화벽: 토폴로지 이중화 표현 + HA 포트 표기
+
+### 🔗 같은 VIP 방화벽 = 이중화로 표현
+- **같은 host(VIP)를 공유하는 방화벽들을 HA 쌍으로 자동 인식** — 이름 패턴 무관(VIP 공유가 확실한 근거).
+  - Zone 안에 **나란히 배치** + **이중화 연결선(═)**. Zone 키는 쌍 이름의 공통 토큰(예: OASVR_FGT).
+  - **인터넷 방화벽도 HA면 쌍 전체를 중심축에** 표시(참조 구성도의 방화벽#1 ═ 방화벽#2).
+- **Backup 중복 링크 제거**: Backup은 VIP로 수집돼 데이터가 Active와 동일 → 같은 상대로의
+  연결선은 **VIP 그룹당 1회만** 그림(중복 곡선 방지). 쌍 관계는 이중화 선으로 표현.
+
+### 🔌 이중화 연결선에 HA 포트 표기 (FortiGate)
+- 수집 시 **`cmdb/system/ha`에서 HA 구성(hbdev heartbeat 포트·모드) 자동 수집** (기존 세션 재사용).
+- 이중화 연결선 라벨에 HA 포트 표시(예: **이중화 ha1·ha2**), 호버 시 heartbeat 포트·모드 툴팁.
+- standalone(비 HA)이나 수집 실패 시 기존처럼 "이중화"만 표시(흐름 영향 없음).
+
 ## v3.67.1 (2026-07-09) — HA 등록 "FOREIGN KEY constraint failed" 수정 (긴급)
 
 - **v3.67.0에서 Backup 등록 후 Active 등록 시 FOREIGN KEY constraint failed 나던 버그 수정.**

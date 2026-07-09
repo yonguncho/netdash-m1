@@ -103,6 +103,32 @@ def test_save_firewall_ha_same_vip_diff_name(temp_db):
     db.save_firewall_interfaces(temp_db, b, [{"name": "port1", "ip": "10.92.1.1"}])
 
 
+def test_fortigate_parse_hbdev_formats():
+    """FortiOS hbdev 표현(문자열/리스트/딕셔너리) 모두 포트 목록으로 파싱."""
+    from core.firewall.fortigate import _parse_hbdev
+    assert _parse_hbdev('"ha1" 50 "ha2" 50 ') == ["ha1", "ha2"]
+    assert _parse_hbdev([["ha1", 50], ["ha2", 50]]) == ["ha1", "ha2"]
+    assert _parse_hbdev([{"name": "port9"}, {"name": "port10"}]) == ["port9", "port10"]
+    assert _parse_hbdev(["ha1", "50", "ha2", "50"]) == ["ha1", "ha2"]
+    assert _parse_hbdev(None) == []
+
+
+def test_firewall_ha_info_roundtrip(temp_db):
+    """HA 구성 저장 → list_firewalls로 조회 → topology 노드에 ha 주입."""
+    import json
+    fid = db.save_firewall(temp_db, "FW_M", "fortigate", "10.92.1.1", 443)
+    db.set_firewall_ha_info(temp_db, fid, json.dumps({"mode": "a-p", "hbdev": ["ha1", "ha2"]}))
+    fw = db.get_firewall(temp_db, fid)
+    assert json.loads(fw["ha_info"])["hbdev"] == ["ha1", "ha2"]
+    from core import topology
+    topo = topology.build_topology_firewall_only(temp_db) if hasattr(topology, "build_topology_firewall_only") else None
+    # build_topology는 스위치 없으면 빈 결과 → 스위치 1대 추가 후 확인
+    db.save_switch(temp_db, "SW1", "10.0.0.1", "cisco_ios")
+    topo = topology.build_topology(temp_db)
+    fw_node = next(n for n in topo["nodes"] if n.get("kind") == "fw")
+    assert fw_node["ha"]["hbdev"] == ["ha1", "ha2"]
+
+
 def test_firewalls_unique_migration_preserves_fk(tmp_path):
     """구버전(host UNIQUE) DB 마이그레이션 후 FK가 firewalls를 참조하고 인터페이스 저장 가능."""
     import sqlite3

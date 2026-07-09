@@ -456,6 +456,11 @@ def init_schema(db_path):
                 cursor.execute("ALTER TABLE firewall_interfaces ADD COLUMN secondary_ips TEXT")
             except Exception:
                 pass
+            # 방화벽 HA 구성(JSON: mode/hbdev/monitor) — 이중화 연결선에 HA 포트 표기용
+            try:
+                cursor.execute("ALTER TABLE firewalls ADD COLUMN ha_info TEXT")
+            except Exception:
+                pass
             # HA/VRRP 이중화(같은 VIP) 방화벽을 Active/Backup 둘 다 등록할 수 있도록
             # firewalls.host의 UNIQUE 제약 제거. SQLite 정석 절차:
             # FK OFF → 새 테이블(_new) 생성 → 복사 → 기존 DROP → _new RENAME.
@@ -497,6 +502,11 @@ def init_schema(db_path):
                     cursor.execute(CREATE_FIREWALLS_TABLE.replace(
                         "CREATE TABLE IF NOT EXISTS firewalls", "CREATE TABLE firewalls_new"))
                     cols = [r[1] for r in cursor.execute("PRAGMA table_info(firewalls)").fetchall()]
+                    # 후기 마이그레이션 컬럼(ha_info 등)이 기존에 있으면 새 테이블에도 보강
+                    newcols = {r[1] for r in cursor.execute("PRAGMA table_info(firewalls_new)").fetchall()}
+                    for col in cols:
+                        if col not in newcols:
+                            cursor.execute("ALTER TABLE firewalls_new ADD COLUMN %s TEXT" % col)
                     collist = ", ".join(cols)
                     cursor.execute("INSERT INTO firewalls_new (%s) SELECT %s FROM firewalls"
                                    % (collist, collist))
@@ -2005,6 +2015,13 @@ def set_firewall_status(db_path, firewall_id, status):
                 "UPDATE firewalls SET status=?, last_collected=datetime('now') WHERE id=?",
                 (status, firewall_id),
             )
+
+
+def set_firewall_ha_info(db_path, firewall_id, ha_json):
+    """방화벽 HA 구성(JSON 문자열: mode/hbdev/monitor) 저장 — 이중화 표기용."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("UPDATE firewalls SET ha_info=? WHERE id=?", (ha_json, firewall_id))
 
 
 def save_firewall_interfaces(db_path, firewall_id, interfaces):

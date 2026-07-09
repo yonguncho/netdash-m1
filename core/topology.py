@@ -283,11 +283,20 @@ def build_topology(db_path):
                     fw_ifaces.append("%s %s%s" % (it.get("name") or "", it["ip"], pfx))
         except Exception:
             pass
+        # HA 구성(수집된 hbdev 포트) — 이중화 연결선 라벨용
+        ha = None
+        try:
+            import json as _json
+            if fw.get("ha_info"):
+                ha = _json.loads(fw["ha_info"])
+        except Exception:
+            ha = None
         nodes.append({
             "id": fw_id, "kind": "fw", "name": fw.get("name"),
             "ip": fw.get("host"), "vendor": fw.get("vendor"),
             "status": fw.get("status"), "alert": "none",
             "device_type": "Firewall", "interfaces": fw_ifaces[:12],
+            "ha": ha,
             "group": fw.get("location") or "", "depth": None,
         })
         linked_switches = set()

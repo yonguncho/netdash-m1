@@ -1783,6 +1783,13 @@ def create_app(demo_mode=None):
             )
             db.save_firewall_interfaces(db_path, fid, result["interfaces"])
             db.save_firewall_arp(db_path, fid, result["arp"])
+            # HA 구성(FortiGate cmdb/system/ha) — 이중화 연결선에 HA 포트 표기용
+            if result.get("ha"):
+                try:
+                    import json as _json
+                    db.set_firewall_ha_info(db_path, fid, _json.dumps(result["ha"]))
+                except Exception:
+                    pass
             # 수집 모달에서 처음 입력한 자격증명은 저장해 다음 수집부터 재입력 불필요.
             if provided:
                 try:

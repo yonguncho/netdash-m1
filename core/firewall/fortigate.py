@@ -244,17 +244,63 @@ def get_interfaces(host, port=443, token="", username="", password="", verify_ss
     return _fetch_interfaces(s, base, host)
 
 
+def _parse_hbdev(raw):
+    """FortiOS hbdev 표현 → 포트 이름 목록.
+
+    버전에 따라 '"ha1" 50 "ha2" 50 ' 문자열 / [["ha1",50],...] / [{"name":"ha1"},...] 형태.
+    """
+    ports = []
+    if isinstance(raw, str):
+        ports = re.findall(r'"([^"]+)"', raw) or [t for t in raw.split() if not t.isdigit()]
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str) and not item.isdigit():
+                ports.append(item)
+            elif isinstance(item, (list, tuple)) and item and isinstance(item[0], str):
+                ports.append(item[0])
+            elif isinstance(item, dict) and item.get("name"):
+                ports.append(item["name"])
+    return [p for p in ports if p]
+
+
+def _fetch_ha(s, base, host):
+    """HA 구성 조회(cmdb/system/ha) → {mode, group_name, hbdev, monitor} | None.
+
+    standalone(비 HA)·권한/버전 문제로 실패하면 None(수집 흐름에 영향 없음).
+    hbdev = HA heartbeat 포트(이중화 연결선에 표기).
+    """
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/cmdb/system/ha")
+        if r is None or r.status_code != 200:
+            return None
+        res = r.json().get("results") or {}
+        if isinstance(res, list):
+            res = res[0] if res else {}
+        mode = (res.get("mode") or "").lower()
+        if mode in ("", "standalone"):
+            return None
+        info = {"mode": mode,
+                "group_name": res.get("group-name") or "",
+                "hbdev": _parse_hbdev(res.get("hbdev")),
+                "monitor": _parse_hbdev(res.get("monitor"))}
+        logger.info("fortigate_ha host=%s mode=%s hbdev=%s", host, mode, info["hbdev"])
+        return info
+    except Exception:
+        return None
+
+
 def collect(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
-    """인터페이스 + ARP를 '세션 1개'로 수집.
+    """인터페이스 + ARP + HA 구성을 '세션 1개'로 수집.
 
     이전엔 인터페이스/ARP가 각자 로그인해 세션 2개를 만들었고, FortiGate의
     로그인·API 속도 제한에 걸려 429(Too Many Requests)가 발생했다.
-    Returns: {"interfaces": [...], "arp": [...]}
+    Returns: {"interfaces": [...], "arp": [...], "ha": {...}|None}
     """
     s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
     interfaces = _fetch_interfaces(s, base, host)
     arp = _fetch_arp(s, base, host)
-    return {"interfaces": interfaces, "arp": arp}
+    ha = _fetch_ha(s, base, host)
+    return {"interfaces": interfaces, "arp": arp, "ha": ha}
 
 
 def parse_arp_cli(output):

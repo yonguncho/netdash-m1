@@ -2622,9 +2622,21 @@ function _renderZoneMap(host) {
     internetSw = (adj[internetFw.id] || []).map(function (x) { return byId[x]; })
       .filter(function (n) { return n && n.kind !== "fw" && !bbIds[n.id]; })[0] || null;
   }
+  // ── HA(VIP 공유) 그룹: 같은 host(ip)의 방화벽들 = 이중화 쌍.
+  //    Backup은 VIP로 수집돼 데이터가 Active와 동일 → 링크로 판단하지 않고 쌍으로만 표현.
+  var vipGroup = {};   // ip → [fw...]
+  firewalls.forEach(function (f) { if (f.ip) (vipGroup[f.ip] = vipGroup[f.ip] || []).push(f); });
+  var haPartner = {};  // fwId → 같은 VIP의 파트너들
+  Object.keys(vipGroup).forEach(function (ip) {
+    if (vipGroup[ip].length >= 2) vipGroup[ip].forEach(function (f) { haPartner[f.id] = vipGroup[ip]; });
+  });
+  // 인터넷 방화벽도 HA면 쌍 전체를 중심축에
+  var internetFwGroup = internetFw ? (haPartner[internetFw.id] || [internetFw]) : [];
+  var internetFwIds = {};
+  internetFwGroup.forEach(function (f) { internetFwIds[f.id] = 1; });
 
   // ── Zone 분류: 방화벽 hostname 토큰 기준(1순위) + 링크(보조) ──
-  var zoneFws = firewalls.filter(function (f) { return f !== internetFw; });
+  var zoneFws = firewalls.filter(function (f) { return !internetFwIds[f.id]; });
   if (!zoneFws.length) zoneFws = firewalls.slice();
   // 방화벽 공통 토큰(회사/사이트 접두어, 예: SKBA)은 구분에서 제외
   var fwTok = {};
@@ -2636,8 +2648,26 @@ function _renderZoneMap(host) {
   });
   common = common || [];
   function distinctive(tokens) { return tokens.filter(function (t) { return common.indexOf(t) < 0; }); }
-  function zoneKeyOf(f) { var d = distinctive(fwTok[f.id]); return d.length ? d.join("_") : (f.name || String(f.id)); }
-  // zoneKey로 방화벽 병합(이중화 쌍 M/B 등 → 한 Zone)
+  function zoneKeyOf(f) {
+    // HA(VIP 공유) 파트너는 항상 같은 Zone — 멤버 공통 토큰(교집합)을 키로
+    // (예: OASVR_FGT_PRIMARY ∩ OASVR_FGT_SECONDARY → OASVR_FGT)
+    var grp = haPartner[f.id];
+    if (grp) {
+      var inter = null;
+      grp.forEach(function (m) {
+        var d0 = distinctive(fwTok[m.id] || _hostTokens(m.name));
+        inter = (inter === null) ? d0.slice() : inter.filter(function (t) { return d0.indexOf(t) >= 0; });
+      });
+      if (inter && inter.length) return inter.join("_");
+      for (var i = 0; i < grp.length; i++) {
+        var d1 = distinctive(fwTok[grp[i].id] || _hostTokens(grp[i].name));
+        if (d1.length) return d1.join("_");
+      }
+    }
+    var d = distinctive(fwTok[f.id]);
+    return d.length ? d.join("_") : (f.name || String(f.id));
+  }
+  // zoneKey로 방화벽 병합(이중화 쌍 M/B·VIP 공유 → 한 Zone)
   var zoneMap = {}, zoneOrder = [];
   zoneFws.forEach(function (f) {
     var k = zoneKeyOf(f);
@@ -2661,10 +2691,13 @@ function _renderZoneMap(host) {
   });
   // ── CDP/LLDP 확정 링크 우선(있으면 실제 물리 구성으로 배정) ──
   var internetFwId0 = internetFw ? internetFw.id : null;
+  function linkedToInternetFw(id) {
+    return (adj[id] || []).some(function (x) { return internetFwIds[x]; });
+  }
   // 중심 OA BB 후보: 인터넷 방화벽에 링크됨 or 구별 토큰 없는 백본(VISS 등)
   var centralBBids = {};
   backbones.forEach(function (bb) {
-    var linkedInt = internetFwId0 && (adj[bb.id] || []).indexOf(internetFwId0) >= 0;
+    var linkedInt = linkedToInternetFw(bb.id);
     if (linkedInt || !distinctive(_hostTokens(bb.name)).length) centralBBids[bb.id] = 1;
   });
   // 직결 확정 인접: CDP/LLDP 확정 + '양방향 MAC 확인(mutual)' 링크.
@@ -2678,7 +2711,7 @@ function _renderZoneMap(host) {
   });
   // 경계(중심 OA BB·인터넷 FW·다른 Zone FW)에서 멈추는 확정링크 BFS → 소유 Zone
   var blocked = {};
-  if (internetFwId0) blocked[internetFwId0] = 1;
+  internetFwGroup.forEach(function (f) { blocked[f.id] = 1; });
   Object.keys(centralBBids).forEach(function (id) { blocked[id] = 1; });
   zoneFws.forEach(function (f) { blocked[f.id] = 1; });
   var confirmedOwner = {};
@@ -2715,7 +2748,8 @@ function _renderZoneMap(host) {
   }
 
   var assigned = {};
-  [isp, internetSw, internetFw].forEach(function (n) { if (n) assigned[n.id] = 1; });
+  [isp, internetSw].forEach(function (n) { if (n) assigned[n.id] = 1; });
+  internetFwGroup.forEach(function (f) { assigned[f.id] = 1; });
   zoneFws.forEach(function (f) { assigned[f.id] = 1; });
   // 백본(cores) → 중심 OA BB vs Zone 백본 구분:
   //  · 인터넷 방화벽에 링크된 백본 = 중심 OA BB(중심축)
@@ -2813,7 +2847,7 @@ function _renderZoneMap(host) {
   var yy = 46;
   if (isp) { placeRow([isp], cx, yy); yy += 78; }
   if (internetSw) { placeRow([internetSw], cx, yy); yy += 78; }
-  if (internetFw) { placeRow([internetFw], cx, yy); yy += 78; }
+  if (internetFwGroup.length) { placeRow(internetFwGroup, cx, yy); yy += 78; }
   if (centralBBs.length) { placeRow(centralBBs, cx, yy); yy += 78; }
   var FW_Y = yy + 46, BB_Y = FW_Y + 74, L3_Y = BB_Y + 74, SUB_Y = L3_Y + 32;
   var zx = PADX, boxes = [];
@@ -2848,11 +2882,18 @@ function _renderZoneMap(host) {
       "' font-size='12' font-weight='700' text-anchor='middle'>🗂 " + escHtml(b.label) + "</text>");
   });
   // 연결선 + 포트(그려진 노드끼리만): 확정=실선, 추론=점선
+  // HA(VIP 공유) 방화벽: Backup의 수집 데이터는 Active와 동일(같은 VIP·MAC) →
+  // 같은 상대로의 링크는 VIP 그룹당 1회만 그림(중복 곡선 방지). 쌍 관계는 이중화 선으로 표현.
   var drawn = {};
+  function _vipKey(id) {
+    var n = byId[id];
+    return (n && n.kind === "fw" && n.ip && haPartner[id]) ? ("vip:" + n.ip) : String(id);
+  }
   (_topoData.links || []).forEach(function (l) {
     var A = pos[l.a], B = pos[l.b];
     if (!A || !B) return;
-    var kk = (String(l.a) < String(l.b)) ? l.a + "~" + l.b : l.b + "~" + l.a;
+    var ka = _vipKey(l.a), kb = _vipKey(l.b);
+    var kk = (ka < kb) ? ka + "~" + kb : kb + "~" + ka;
     if (drawn[kk]) return; drawn[kk] = 1;
     var confirmed = l.source === "cdp/lldp";
     var macDirect = l.source === "mac" && l.mutual;   // 양방향 MAC 확인 = 실제 직결로 신뢰
@@ -2880,13 +2921,22 @@ function _renderZoneMap(host) {
   });
   // 이중화 연결선(같은 pairKey 인접 장비): 링크 데이터 없어도 쌍을 청록 선으로 표시
   function _redunPairs(list) {
-    var g = {}, order = [], pairs = [];
+    var g = {}, order = [], pairs = [], paired = {};
     list.forEach(function (n) { var k = _pairKey(n.name); if (!g[k]) { g[k] = []; order.push(k); } g[k].push(n); });
     // 정확히 2대인 그룹만 이중화 쌍으로 간주(3대 이상은 별개 장비들로 취급)
-    order.forEach(function (k) { if (g[k].length === 2) pairs.push([g[k][0], g[k][1]]); });
+    order.forEach(function (k) {
+      if (g[k].length === 2) { pairs.push([g[k][0], g[k][1]]); paired[g[k][0].id] = paired[g[k][1].id] = 1; }
+    });
+    // HA(VIP 공유): 같은 ip 방화벽 2대도 이중화 쌍(이름 패턴 무관 — VIP 공유가 확실한 근거)
+    var byIp = {};
+    list.forEach(function (n) { if (n.kind === "fw" && n.ip) (byIp[n.ip] = byIp[n.ip] || []).push(n); });
+    Object.keys(byIp).forEach(function (ip) {
+      var grp = byIp[ip];
+      if (grp.length === 2 && !paired[grp[0].id] && !paired[grp[1].id]) pairs.push([grp[0], grp[1]]);
+    });
     return pairs;
   }
-  var redun = _redunPairs(centralBBs);
+  var redun = _redunPairs(centralBBs).concat(_redunPairs(internetFwGroup));
   zones.forEach(function (z) {
     redun = redun.concat(_redunPairs(z.fws), _redunPairs(z.bbs),
       _redunPairs(z.dists.map(function (d) { return d.node; })));
@@ -2896,10 +2946,22 @@ function _renderZoneMap(host) {
     if (!A || !B || Math.abs(A.y - B.y) > 4) return;
     var kk = (String(pr[0].id) < String(pr[1].id)) ? pr[0].id + "~" + pr[1].id : pr[1].id + "~" + pr[0].id;
     if (drawn[kk]) return; drawn[kk] = 1;
-    svg.push("<path d='M" + (Math.min(A.x, B.x) + IC / 2) + "," + A.y + " L" + (Math.max(A.x, B.x) - IC / 2) +
+    // 수집된 HA 구성(hbdev)이 있으면 이중화 선에 HA 포트 표기 (예: 이중화 ha1·ha2)
+    var haPorts = [];
+    [pr[0], pr[1]].forEach(function (n) {
+      if (n.ha && n.ha.hbdev) n.ha.hbdev.forEach(function (p) {
+        if (haPorts.indexOf(p) < 0) haPorts.push(p);
+      });
+    });
+    var label = haPorts.length ? ("이중화 " + haPorts.slice(0, 3).join("·")) : "이중화";
+    var tip = (pr[0].name || "") + " ═ " + (pr[1].name || "") +
+      (haPorts.length ? "\nHA heartbeat: " + haPorts.join(", ") : "") +
+      (pr[0].ha && pr[0].ha.mode ? "\n모드: " + pr[0].ha.mode : "");
+    svg.push("<path class='topo-edge' data-tip=\"" + escHtml(tip) + "\" d='M" +
+      (Math.min(A.x, B.x) + IC / 2) + "," + A.y + " L" + (Math.max(A.x, B.x) - IC / 2) +
       "," + B.y + "' stroke='#22d3ee' stroke-width='2.5' fill='none'/>");
     svg.push("<text x='" + ((A.x + B.x) / 2) + "' y='" + (A.y - IC / 2 - 1) +
-      "' fill='#22d3ee' font-size='7.5' text-anchor='middle'>이중화</text>");
+      "' fill='#22d3ee' font-size='7.5' text-anchor='middle'>" + escHtml(label) + "</text>");
   });
   // 노드(아이콘+라벨)
   function drawNode(nd, kindOverride) {
@@ -2914,7 +2976,7 @@ function _renderZoneMap(host) {
   }
   if (isp) drawNode(isp, "isp");
   if (internetSw) drawNode(internetSw, "sw");
-  if (internetFw) drawNode(internetFw, "fw");
+  internetFwGroup.forEach(function (f) { drawNode(f, "fw"); });
   centralBBs.forEach(function (n) { drawNode(n, "bb"); });
   zones.forEach(function (z) {
     z.fws.forEach(function (f) { drawNode(f, "fw"); });

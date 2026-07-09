@@ -305,6 +305,10 @@ def test_topology_zone_view():
     assert "orphanDists" in js
     assert 'n.device_type || n.kind === "fw" || rk(n) <= 3' in js
     assert "EXT[_-]?SW" in js                    # 인터넷 스위치 감지 패턴 확장
+    # HA(VIP 공유) 방화벽: 쌍 인식·나란히 배치·이중화 선·링크 중복 제거
+    assert "vipGroup" in js and "haPartner" in js   # 같은 host = HA 쌍
+    assert "internetFwGroup" in js                  # 인터넷 FW 쌍 중심축 표시
+    assert "_vipKey" in js                          # Backup 중복 링크 제거(VIP 그룹당 1회)
 
 
 def test_serial_c9300l_formats():
