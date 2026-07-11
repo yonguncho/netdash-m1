@@ -1781,23 +1781,17 @@ def create_app(demo_mode=None):
         fw = db.get_firewall(db_path, fid)
         if not fw:
             return jsonify({"error": "not found"}), 404
-        # 동시 수집 가드: 같은 방화벽에 대한 중복 요청은 409(스위치 collect와 동일 정책)
-        with _collecting_fw_lock:
-            if fid in _collecting_firewalls:
-                return jsonify({"error": "이미 수집 중입니다"}), 409
-            _collecting_firewalls.add(fid)
-        # SSRF(CWE-918): collect 시점에도 저장된 host/port를 재검증한다(스위치 collect와
-        # 동일 정책). legacy/seed 데이터나 우회 저장이 요청 대상이 되는 것을 차단.
+        # SSRF(CWE-918) 재검증 + 입력 파싱은 동시수집 가드 획득 '전'에 수행 —
+        # 이 구간에서 예외(malformed JSON 등)가 나도 잠금이 누수되지 않도록.
+        # (이전엔 add(fid) 후 get_json 예외 시 fid가 set에 영구 잔류 → 영구 409 버그)
         try:
             validate_ipv4(fw.get("host"), config.collector.get("allowed_ip_ranges"))
         except ValueError as e:
-            _collecting_firewalls.discard(fid)
             db.set_firewall_status(db_path, fid, "failed")
             log_event("warning", "firewall_collect_blocked_invalid_ip", firewall_id=fid, reason=str(e))
             return jsonify({"error": f"firewall host rejected: {e}"}), 400
         fw_port = fw.get("port")
         if fw_port is not None and not (isinstance(fw_port, int) and 1 <= fw_port <= 65535):
-            _collecting_firewalls.discard(fid)
             db.set_firewall_status(db_path, fid, "failed")
             return jsonify({"error": "stored firewall port is invalid"}), 400
         data = request.get_json() or {}
@@ -1819,6 +1813,11 @@ def create_app(demo_mode=None):
                         password = saved.get("password", "")
                     except (ValueError, TypeError):
                         pass
+        # 동시 수집 가드 — 이후 전 구간을 try/finally로 감싸 잠금 해제를 보장.
+        with _collecting_fw_lock:
+            if fid in _collecting_firewalls:
+                return jsonify({"error": "이미 수집 중입니다"}), 409
+            _collecting_firewalls.add(fid)
         db.set_firewall_status(db_path, fid, "collecting")
         try:
             result = firewall_mod.collect_firewall(

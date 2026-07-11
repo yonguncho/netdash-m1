@@ -59,7 +59,10 @@ def _loop(db_path):
                 if hhmm in times and slot != last_slot:
                     last_slot = slot
                     utils.log_event("info", "auto_collect_trigger", time=hhmm)
-                    collector.collect_all_registered(db_path)
+                    # 별도 스레드로 실행 — 수집이 수 분 걸려도 스케줄러 루프가
+                    # 블로킹되지 않아 같은 창의 설비 스캔·다른 슬롯을 놓치지 않는다.
+                    threading.Thread(target=collector.collect_all_registered,
+                                     args=(db_path,), daemon=True).start()
 
             # 2) 설비 대역 자동 스캔(1일 1회, 대역별 순차 — 부하 분산)
             if db.get_setting(db_path, "facility_auto_enabled", "0") == "1":

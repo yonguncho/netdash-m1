@@ -1,5 +1,27 @@
 # NetDash 릴리스 노트
 
+## v3.75.0 (2026-07-11) — 2차 감사: 수정 회귀 2건 + 미검토 영역 버그
+
+v3.72~v3.74 수정으로 도입된 회귀와 지난 감사에서 안 본 영역을 병렬 재검증(3영역 에이전트 + 실행 교차검증)한 결과 수정.
+
+### 🔴 수정 회귀 (v3.72~74에서 내가 도입)
+- **NX-OS LLDP 이웃 remote_port 밀림 수정**: `Local Port id:`를 블록 분할점으로 쓰면서 NX-OS 실제 순서(Chassis→Port id(remote)→Local Port id(local))에서 remote 포트가 한 칸씩 밀리고 마지막 이웃이 유실되던 문제 — NX-OS는 `Chassis id`로 이웃 경계를 잡도록 재설계. IOS/Arista/EXOS는 기존 유지.
+- **방화벽 동시수집 가드 잠금 누수 수정**: `add(fid)` 이후 `get_json()` 등에서 예외 시 fid가 영구 잔류해 이후 계속 409가 되던 문제 — 입력 파싱을 가드 획득 전으로 옮기고 가드 이후 전 구간을 try/finally로 보호.
+
+### 🟡 미검토 영역 버그
+- **fortigate REST 세션 누수 수정**: `collect()`가 requests.Session을 닫지 않아 자동수집 반복 시 연결 풀 누수 → try/finally로 close.
+- **scheduler auto_collect 블로킹 수정**: 장비 수집이 스케줄러 루프를 블로킹해 같은 창의 설비 스캔·다른 슬롯을 놓칠 수 있던 문제 → 별도 스레드로 분리.
+- **openpyxl 빌드 안정화**: spec에 collect_all 추가(엑셀 내보내기 부속 모듈 번들).
+
+### 정리
+- 죽은 코드 제거: 호출되지 않는 `renderEventsTab`(null 크래시 소지), HTML에 없는 요소를 참조하던 토폴로지 모드/존 툴바 바인딩(no-op화).
+
+### 검토 결론
+- webshell 인증/SSRF, db 방화벽 CRUD·cred 차단, topology 안전성, paloalto 파싱, 전 라우트↔DB↔UI 연결은 **이상 없음** 확인.
+- 참고: 장부 대조(reconcile) UI는 과거 사용자 요청으로 의도적으로 숨긴 상태를 유지(백엔드 정상).
+
+테스트 579개 통과(신규 7). 2차 감사 발견 전량 반영.
+
 ## v3.74.0 (2026-07-11) — 감사 low 버그 13건 수정 (보안 하드닝·견고성·표기)
 
 v3.73.0 감사 보고서의 low 건들을 마무리. 실사용 임팩트는 작지만 보안·견고성 개선.

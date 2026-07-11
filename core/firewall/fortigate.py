@@ -297,10 +297,17 @@ def collect(host, port=443, token="", username="", password="", verify_ssl=False
     Returns: {"interfaces": [...], "arp": [...], "ha": {...}|None}
     """
     s, base = _make_session(host, port, token, username, password, verify_ssl, source_ip)
-    interfaces = _fetch_interfaces(s, base, host)
-    arp = _fetch_arp(s, base, host)
-    ha = _fetch_ha(s, base, host)
-    return {"interfaces": interfaces, "arp": arp, "ha": ha}
+    try:
+        interfaces = _fetch_interfaces(s, base, host)
+        arp = _fetch_arp(s, base, host)
+        ha = _fetch_ha(s, base, host)
+        return {"interfaces": interfaces, "arp": arp, "ha": ha}
+    finally:
+        # requests.Session 연결 풀 정리(자동수집 반복 시 핸들 누수 방지)
+        try:
+            s.close()
+        except Exception:
+            pass
 
 
 def parse_arp_cli(output):

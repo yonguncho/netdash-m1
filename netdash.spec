@@ -17,7 +17,9 @@ binaries = []
 
 # 스위치/방화벽 SSH·REST가 함수 내부에서 lazy import → 전체 수집 필요.
 # netmiko는 서브모듈 + ntc-templates 데이터 파일까지 있어야 동작(collect_all).
-for _pkg in ('netmiko', 'paramiko', 'pptx'):
+# openpyxl은 보고서/설비 엑셀 내보내기(함수 내부 lazy import)에 쓰이고 et_xmlfile
+# 등 부속 모듈이 있어야 저장 가능 → collect_all로 안전하게 번들.
+for _pkg in ('netmiko', 'paramiko', 'pptx', 'openpyxl'):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b

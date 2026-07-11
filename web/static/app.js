@@ -441,16 +441,6 @@ function renderArpsTab(arps) {
     }).join("") + "</tbody></table>";
 }
 
-function renderEventsTab(events) {
-  var el = document.getElementById("dtab-events");
-  if (!events.length) { el.innerHTML = "<p style='color:#64748b'>감지된 이벤트 없음</p>"; return; }
-  el.innerHTML = "<table class='data-table'><thead><tr><th>포트</th><th>유형</th><th>횟수</th><th>최초</th><th>최근</th></tr></thead><tbody>" +
-    events.map(function(e) {
-      return "<tr><td>" + escHtml(e.port_name) + "</td><td><span class='status-badge status-badge--" +
-        (e.event_type === "looping" ? "critical" : "warning") + "'>" + escHtml(e.event_type) + "</span></td><td>" +
-        e.count + "</td><td>" + fmtTime(e.first_seen) + "</td><td>" + fmtTime(e.last_seen) + "</td></tr>";
-    }).join("") + "</tbody></table>";
-}
 
 // ─── 스위치 카드 렌더링 ──────────────────────────────────────────
 var _viewMode = "card";  // card | rack
@@ -3425,29 +3415,10 @@ function _topoWinClear() {
   _topoWinListeners = [];
 }
 
-function _bindTopoModeButtons() {
-  document.querySelectorAll(".topo-mode").forEach(function (b) {
-    if (b._bound) return; b._bound = true;
-    b.addEventListener("click", function () { _topoMode = b.getAttribute("data-mode"); renderTopology(); });
-  });
-  var zsel = document.getElementById("topo-zone-select");
-  if (zsel && !zsel._bound) {
-    zsel._bound = true;
-    zsel.addEventListener("change", function () {
-      _topoZone = zsel.value.replace(/\s*\(\d+\)\s*$/, "");
-      renderTopology();
-    });
-  }
-  var l2b = document.getElementById("btn-topo-l2");
-  if (l2b && !l2b._bound) {
-    l2b._bound = true;
-    l2b.addEventListener("click", function () {
-      _topoExpandL2 = !_topoExpandL2;
-      _topoOpenBand = null;
-      renderTopology();
-    });
-  }
-}
+// 토폴로지 모드/존/L2 툴바 UI는 현재 제공하지 않는다(단일 존·대역 뷰 + ghost
+// 클릭 전환만 사용). 관련 DOM 요소(.topo-mode·topo-zone-select·btn-topo-l2)가
+// HTML에 없어 예전 바인딩은 전부 죽은 코드였다 → no-op로 정리(호출부는 무해).
+function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
 
 (function () {
   var b = document.getElementById("btn-topo-refresh");

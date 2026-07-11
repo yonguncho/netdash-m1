@@ -81,15 +81,20 @@ def parse_lldp_detail(output):
     neighbors = []
     if not output or len(output) > 5_000_000:
         return neighbors
-    # 로컬 인터페이스 헤더로 블록 분할
-    #  Arista: "Interface Ethernet1 detected 1 LLDP neighbors:"
-    #  EXOS:   "LLDP Port 1 detected 1 neighbor" / "Port: 1"
-    #  IOS:    "Local Intf: Gi1/0/1"
-    #  NX-OS:  "Local Port id: Eth1/1"
-    parts = re.split(
-        r"(?=Interface\s+\S+\s+detected|LLDP Port\s+\S+|"
-        r"^Local Port\s*:|Local Intf\s*:|Local Port id\s*:|\nPort\s+\d)",
-        output, flags=re.IGNORECASE | re.MULTILINE)
+    # 블록 분할 — 벤더별로 local/remote 순서가 다르다:
+    #  Arista: "Interface Ethernet1 detected"(local 먼저) → Chassis → Port ID(remote)
+    #  IOS:    "Local Intf:"(local 먼저) → Chassis → Port id(remote)
+    #  EXOS:   "LLDP Port N"/"Port: N"(local 먼저)
+    #  NX-OS:  Chassis → "Port id:"(remote 먼저) → "Local Port id:"(local 나중)
+    # NX-OS는 local이 remote 뒤라 local로 분할하면 remote가 이전 블록에 붙어
+    # 한 칸씩 밀린다 → NX-OS(=Local Port id 라벨 존재)는 이웃 경계를 Chassis id로 잡는다.
+    if re.search(r"Local Port id\s*:", output, re.IGNORECASE):
+        parts = re.split(r"(?=Chassis id\s*:)", output, flags=re.IGNORECASE)
+    else:
+        parts = re.split(
+            r"(?=Interface\s+\S+\s+detected|LLDP Port\s+\S+|"
+            r"^Local Port\s*:|Local Intf\s*:|\nPort\s+\d)",
+            output, flags=re.IGNORECASE | re.MULTILINE)
     for blk in parts:
         lm = (re.search(r"Interface\s+(\S+)\s+detected", blk) or
               re.search(r"LLDP Port\s+(\S+)", blk) or

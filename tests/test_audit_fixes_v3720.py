@@ -116,13 +116,28 @@ def test_b8_ios_lldp_detail():
 
 
 def test_b8_nxos_lldp_local_remote_distinct():
-    """NX-OS 'Local Port id'가 remote_port로 오인되지 않아야."""
-    nxos = ("Local Port id: Eth1/1\nChassis id: 001c.7302.abcd\n"
-            "Port id: Eth1/5\nSystem Name: core-nx\n")
+    """NX-OS 실제 순서(Chassis→Port id(remote)→Local Port id(local))에서
+    remote/local이 정확히 분리되어야."""
+    nxos = ("Chassis id: 001c.7302.abcd\nPort id: Eth1/5\n"
+            "Local Port id: Eth1/1\nSystem Name: core-nx\n")
     nb = neighbors.parse_lldp_detail(nxos)
     assert len(nb) == 1
     assert nb[0]["local_port"] == "Eth1/1"
     assert nb[0]["remote_port"] == "Eth1/5"
+
+
+def test_b8_nxos_lldp_two_neighbors_no_shift():
+    """NX-OS 다중 이웃에서 remote_port가 한 칸씩 밀리지 않아야(v3.72 회귀 방지)."""
+    nxos = ("Chassis id: 00c1.6401.0a01\nPort id: Ethernet1/10\n"
+            "Local Port id: Eth1/1\nSystem Name: leaf-a\n"
+            "Chassis id: 00c1.6402.0b01\nPort id: Ethernet2/20\n"
+            "Local Port id: Eth1/2\nSystem Name: leaf-b\n")
+    nb = neighbors.parse_lldp_detail(nxos)
+    by = {n["local_port"]: n for n in nb}
+    assert by["Eth1/1"]["remote_port"] == "Ethernet1/10"
+    assert by["Eth1/1"]["remote_name"] == "leaf-a"
+    assert by["Eth1/2"]["remote_port"] == "Ethernet2/20"
+    assert by["Eth1/2"]["remote_name"] == "leaf-b"
 
 
 def test_b8_arista_lldp_regression():
