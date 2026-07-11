@@ -1,5 +1,33 @@
 # NetDash 릴리스 노트
 
+## v3.72.0 (2026-07-11) — 전체 감사 버그 수정 11건 (파서 정확성·보안·UI·데이터 보존)
+
+4개 영역 병렬 정밀 리뷰에서 재현 확정된 버그를 일괄 수정. IPAM 비교·SWOT는 docs/design/netdash-ipam-swot.md.
+
+### 🔴 파서 정확성 (실측 신뢰성 직결)
+- **Arista MAC 테이블 전량 유실 수정**: 현대 EOS의 `Moves`/`Last Move` 컬럼이 있으면 정규식 `$` 앵커가 거부해 MAC 테이블이 통째로 빠지던 문제. 포트 뒤 추가 컬럼 허용.
+- **Arista ARP 유실 수정**: `Vlan100, Ethernet2` L3(SVI)+물리 이중 인터페이스 형식 지원(물리 포트 우선).
+- **NX-OS port-channel 포트 누락 수정**: `port-channel10 is up` 헤더를 `_IFACE`가 매칭하도록 → Po 포트가 포트 목록에 정상 표시.
+- **IOS/NX-OS LLDP 이웃 복구**: `Local Intf:`(IOS)·`Local Port id:`(NX-OS) 라벨 지원 → CDP 비활성 장비에서 LLDP 폴백이 이웃 0건이던 문제. NX-OS local/remote 포트 혼동도 교정.
+
+### 🔴 수집 안정성
+- **허위 disconnect 대량 이벤트 방지**: `mac` 명령 1회 실패 시 이전 스냅샷 전체가 disconnect 이벤트(수천 건)로 저장되던 문제 — 원시 mac 출력이 비었으면 판정 스킵.
+- **파서 내부 예외 오분류 수정**: `_parse_outputs`가 파서 내부 ValueError를 'parser_not_found'로 둔갑시켜 빈 데이터로 "성공" 처리하던 문제 → 상위 전파로 정확히 failed 처리.
+
+### 🔴 보안
+- **raw_outputs 경로 탈출(path traversal) 차단**: 스위치 이름에 `..\`/절대경로가 들어가면 running-config(비밀 포함)를 드라이브 임의 위치에 기록할 수 있던 문제. 이름 정제 + 루트 이탈 최종 방어.
+
+### 🔴 웹 UI
+- **작은따옴표 데이터로 인한 버튼 파손·주입 방지**: `escHtml`에 작은따옴표 이스케이프 추가 + `data-payload`를 `payloadAttr`로 안전화(SSH 오류 메시지 등에 `'` 포함 시 상세/수정 버튼 무반응 + 삭제버튼 위조 가능하던 문제).
+- **스위치 표 체크박스 선택 유지**: 5초 자동 폴링 재렌더 시 선택이 소실되던 문제 — `_tblSel`로 선택 상태 보존.
+
+### 🔴 데이터 보존
+- **엑셀 재업로드 데이터 손실 방지**: `import_switches_bulk`가 재업로드 시 값 없는 컬럼을 빈값/'unknown'으로 덮어써 사용자 입력 note/location·자동 교정 vendor를 리셋하던 문제 — 새 값이 의미 있을 때만 갱신.
+
+### 기타 (내 v3.71 회귀 2건)
+- log_analyzer 연말 경계 flap 억제(롤오버 보정), extreme _parse_port_errors 유니코드 숫자 크래시(isascii 가드).
+- 테스트 553개 통과(신규 14). 미수정 잔여는 docs/design/netdash-audit-2026-07-11.md 참조(medium/low 다수 + 실장비 검증 필요분).
+
 ## v3.71.0 (2026-07-11) — 후속작업 일괄 정리 (멀티벤더 세분화·flap 시간윈도우·enable secret·보고서 예열)
 
 ### 🔍 멀티벤더 포트상태 세분화·에러 카운터 (기존 cisco_ios 전용 → Arista/EXOS 확대)

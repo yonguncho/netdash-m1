@@ -713,10 +713,19 @@ def _worker_loop():
             # M3: Detect disconnected MAC entries before saving new snapshot
             prev_snapshot_id = db.latest_snapshot_id(db_path, switch_id)
             if prev_snapshot_id is not None:
-                # Build (vlan, mac, port) tuples from current parsed data
-                curr_macs = [(m.get("vlan"), m.get("mac"), m.get("port"))
-                            for m in parsed_data.get("macs", [])]
-                db._detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs)
+                # BUGFIX: 'mac' 명령이 실패(타임아웃 등)하면 outputs["mac"]="" →
+                # curr_macs=[]가 되어 이전 스냅샷의 모든 MAC이 허위 disconnect
+                # 이벤트(수천 건)로 저장된다. 원시 mac 출력이 비었으면(수집 실패)
+                # disconnect 판정을 건너뛴다(진짜 빈 MAC 테이블도 헤더는 남으므로
+                # 완전 공백 = 명령 실패로 간주).
+                mac_raw = (outputs.get("mac", "") or "").strip()
+                if mac_raw:
+                    curr_macs = [(m.get("vlan"), m.get("mac"), m.get("port"))
+                                for m in parsed_data.get("macs", [])]
+                    db._detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs)
+                else:
+                    utils.log_event("warning", "skip_disconnect_empty_mac",
+                                    switch_id=switch_id)
 
             snapshot_id = db.save_snapshot(db_path, switch_id)
             db.save_ports(db_path, snapshot_id, switch_id, parsed_data.get("ports", []))
@@ -1213,12 +1222,31 @@ def _alteon_collect(switch, username, password, source_ip=None):
     return outputs
 
 
+def _safe_dir_name(name, fallback):
+    """경로 컴포넌트로 안전한 이름으로 정제.
+
+    스위치 이름은 사용자 입력이라 '..\\' 또는 'C:\\evil' 같은 절대/상위 경로가
+    들어오면 raw_outputs 루트 밖(드라이브 임의 위치)에 running-config(비밀 포함)를
+    기록할 수 있다(path traversal). 경로 구분자·드라이브 문자·제어문자를 제거하고
+    선행 점을 없앤다. app.py:1069의 sanitize와 동일 정책.
+    """
+    import re as _re
+    safe = _re.sub(r"[^A-Za-z0-9._-]", "_", str(name or "").strip())
+    safe = safe.lstrip(".")  # '..' / 선행 점 제거
+    return safe or fallback
+
+
 def _save_raw_outputs(db_path, switch_id, switch_name, outputs):
     config = get_config()
     raw_outputs_root = Path(config.get_raw_outputs_path())
 
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = raw_outputs_root / switch_name / now
+    safe_name = _safe_dir_name(switch_name, "switch_%s" % switch_id)
+    output_dir = raw_outputs_root / safe_name / now
+    # 최종 방어: 정제 후에도 루트 밖으로 벗어나면 거부(심볼릭 링크 등 대비)
+    root_resolved = raw_outputs_root.resolve()
+    if root_resolved not in output_dir.resolve().parents:
+        raise ValueError("raw_outputs path escape blocked: %r" % switch_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for key, content in outputs.items():
@@ -1232,13 +1260,17 @@ def _save_raw_outputs(db_path, switch_id, switch_name, outputs):
 def _parse_outputs(vendor, outputs, switch_id):
     utils.log_event("info", "parse_outputs", vendor=vendor, switch_id=switch_id)
 
+    from . import parsers
+    # BUGFIX: get_parser만 ValueError로 폴백해야 한다. 이전엔 parser.parse()까지
+    # try에 있어 파서 내부 ValueError(예: 유니코드 노이즈)가 'parser_not_found'로
+    # 둔갑해 빈 데이터로 "성공" 처리 → 허위 disconnect 캐스케이드. 파서 내부
+    # 예외는 상위로 전파해 수집이 정확히 failed 처리되도록 한다.
     try:
-        from . import parsers
         parser = parsers.get_parser(vendor)
-        return parser.parse(outputs, switch_id)
     except ValueError:
         utils.log_event("warning", "parser_not_found", vendor=vendor)
         return {"ports": [], "macs": [], "arps": []}
+    return parser.parse(outputs, switch_id)
 
 
 def _ip_allowed(ip, allowed_ranges):

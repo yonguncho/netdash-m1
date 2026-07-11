@@ -84,19 +84,29 @@ def parse_lldp_detail(output):
     # 로컬 인터페이스 헤더로 블록 분할
     #  Arista: "Interface Ethernet1 detected 1 LLDP neighbors:"
     #  EXOS:   "LLDP Port 1 detected 1 neighbor" / "Port: 1"
-    parts = re.split(r"(?=Interface\s+\S+\s+detected|LLDP Port\s+\S+|^Local Port\s*:|\nPort\s+\d)", output)
+    #  IOS:    "Local Intf: Gi1/0/1"
+    #  NX-OS:  "Local Port id: Eth1/1"
+    parts = re.split(
+        r"(?=Interface\s+\S+\s+detected|LLDP Port\s+\S+|"
+        r"^Local Port\s*:|Local Intf\s*:|Local Port id\s*:|\nPort\s+\d)",
+        output, flags=re.IGNORECASE | re.MULTILINE)
     for blk in parts:
         lm = (re.search(r"Interface\s+(\S+)\s+detected", blk) or
               re.search(r"LLDP Port\s+(\S+)", blk) or
-              re.search(r"Local Port\s*:\s*(\S+)", blk) or
+              re.search(r"Local Intf\s*:\s*(\S+)", blk, re.IGNORECASE) or
+              re.search(r"Local Port id\s*:\s*(\S+)", blk, re.IGNORECASE) or
+              re.search(r"Local Port\s*:\s*(\S+)", blk, re.IGNORECASE) or
               re.search(r"(?:^|\n)Port\s+(\d[\w/]*)", blk))
         if not lm:
             continue
         local = _norm(lm.group(1))
-        name = re.search(r'System Name\s*[:=]?\s*"?([^"\n]+?)"?\s*$', blk, re.MULTILINE) or \
-            re.search(r'SysName\s*[:=]\s*(\S+)', blk)
-        rport = re.search(r'Port ID\s*[:=]?\s*(?:.*?)"?([\w/.:-]+)"?\s*$', blk, re.MULTILINE) or \
-            re.search(r'Port ID\s*[:=]\s*(\S+)', blk)
+        # IOS/NX-OS는 소문자 'Port id:'/'System Name:'도 씀 → IGNORECASE
+        name = re.search(r'System Name\s*[:=]?\s*"?([^"\n]+?)"?\s*$', blk, re.MULTILINE | re.IGNORECASE) or \
+            re.search(r'SysName\s*[:=]\s*(\S+)', blk, re.IGNORECASE)
+        # 줄 시작 앵커: NX-OS 'Local Port id:'(local)의 'Port id'를 remote로
+        # 오인하지 않도록 — remote는 들여쓰기 후 'Port ID'로 시작하는 줄만.
+        rport = re.search(r'^\s*Port ID\s*[:=]?\s*(?:.*?)"?([\w/.:-]+)"?\s*$', blk, re.MULTILINE | re.IGNORECASE) or \
+            re.search(r'^\s*Port ID\s*[:=]\s*(\S+)', blk, re.MULTILINE | re.IGNORECASE)
         ip = re.search(r"Management Address(?:es)?\s*[:=]?\s*([\d.]+)", blk)
         plat = re.search(r"System Description\s*[:=]?\s*([^\n]+)", blk)
         if not name:

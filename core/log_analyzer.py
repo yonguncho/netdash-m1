@@ -64,9 +64,34 @@ def _parse_ts(line):
     return None
 
 
+def _fix_year_rollover(ts_list):
+    """연도 없는 syslog(연도 2000 고정)에서 12월→1월 롤오버를 +1년으로 보정.
+
+    로그는 시간 오름차순이라는 가정. 인접 타임스탬프가 큰 음의 점프(>300일)면
+    연도 롤오버로 간주해 이후 전부 +1년. NX-OS/EXOS(연도 포함) 형식은 애초에
+    점프가 없어 영향 없음. 로그 출현 순서를 신뢰하므로 정렬 전에 적용.
+    """
+    if len(ts_list) < 2:
+        return list(ts_list)
+    out = [ts_list[0]]
+    bump = 0
+    for prev, cur in zip(ts_list, ts_list[1:]):
+        if (cur - prev).total_seconds() < -300 * 86400:
+            bump += 1
+        try:
+            out.append(cur.replace(year=cur.year + bump) if bump else cur)
+        except ValueError:  # 2/29 등 — 보정 실패 시 원본 유지
+            out.append(cur)
+    return out
+
+
 def _max_in_window(ts_list, window_min):
-    """정렬된 타임스탬프에서 window_min 분 윈도우 내 최대 이벤트 수 (투 포인터)."""
-    ts = sorted(ts_list)
+    """window_min 분 윈도우 내 최대 이벤트 수 (투 포인터).
+
+    연말 롤오버 보정 후 정렬. 연도 없는 syslog에서 12월/1월 혼재 시
+    ~364일 오간격으로 실제 flap이 억제되던 회귀를 방지.
+    """
+    ts = sorted(_fix_year_rollover(ts_list))
     best, lo = 0, 0
     for hi in range(len(ts)):
         while (ts[hi] - ts[lo]).total_seconds() > window_min * 60:

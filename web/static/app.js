@@ -446,6 +446,7 @@ function renderEventsTab(events) {
 // ─── 스위치 카드 렌더링 ──────────────────────────────────────────
 var _viewMode = "card";  // card | rack
 var _bulkSel = {};        // 일괄 수집 선택 집합 {switch_id: true} — 재렌더에도 유지
+var _tblSel = {};         // 스위치 표 선택 집합(선택 삭제/구분변경용) — 5초 재렌더에도 유지
 var _dashStatusFilter = "all";  // all | ok | failed | new — 현황판 상태 필터 탭
 
 // 상태 분류: 오류 = 수집 실패 또는 도달 불가, 미수집 = 아직 한 번도 수집 안 됨
@@ -556,7 +557,7 @@ function renderRackView(switches) {
         var sw = d.o, cls = swStatusClass(sw);
         var sel = _bulkSel[sw.id] ? " style='outline:2px solid #38bdf8'" : "";
         return "<div class='rack-unit rack-unit--" + cls + "'" + sel +
-          " data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>" +
+          " data-action='detail-switch' data-payload='" + payloadAttr((sw)) + "'>" +
           "<span class='rack-unit__name'>" + escHtml(sw.name) + "</span>" +
           "<span class='rack-unit__ip'>" + escHtml(sw.ip) + "</span></div>";
       }).join("");
@@ -731,7 +732,7 @@ function renderRoomRackView(switches, firewalls) {
         var obj = d.o, isFw = d.k === "fw";
         var down = isFw ? (obj.reachable === false) : (obj.status === "failed" || obj.reachable === false);
         var act = isFw ? ("data-action='detail-fw' data-id='" + obj.id + "'")
-                       : ("data-action='detail-switch' data-payload='" + encodeURIComponent(JSON.stringify(obj)) + "'");
+                       : ("data-action='detail-switch' data-payload='" + payloadAttr((obj)) + "'");
         slots += "<div class='ru ru--dev' " + act +
           " style='background:" + k.c + "22;border-left:4px solid " + k.c + "'" +
           " title='" + escHtml((obj.name || "") + " · " + (obj.ip || obj.host || "") + " · U" + u) + "'>" +
@@ -817,7 +818,7 @@ function swCardHTML(sw, withCheck) {
     : sw.status === "failed" ? "오류"
     : "미수집";
 
-  var swJson = encodeURIComponent(JSON.stringify(sw));
+  var swJson = payloadAttr((sw));
 
   return "<div id='swcard-" + sw.id + "' class='sw-card " + alertClass + "' title='" +
     escHtml(sw.ip) + (sw.hostname ? "\n" + escHtml(sw.hostname) : "") + "'>" +
@@ -974,7 +975,8 @@ function renderSwitchTable(switches) {
       }).join("") + "</select>";
     // 모델·버전(수집 시 show version에서 자동 추출) — 별도 컬럼
     return "<tr>" +
-      "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'></td>" +
+      "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'" +
+      (_tblSel[sw.id] ? " checked" : "") + "></td>" +
       "<td>" + typeSel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(_vendorLabel(sw.vendor)) +
       _nbrSrcBadge(sw) + "</td><td>" +
@@ -994,7 +996,7 @@ function renderSwitchTable(switches) {
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
-      "data-action='edit-switch' data-payload='" + encodeURIComponent(JSON.stringify(sw)) + "'>수정</button> " +
+      "data-action='edit-switch' data-payload='" + payloadAttr((sw)) + "'>수정</button> " +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
       "title='실제 배너/프롬프트/show version 응답을 확인(벤더 미인식 원인 파악)' " +
       "data-action='diagnose-switch' data-id='" + sw.id + "'>진단</button> " +
@@ -1003,8 +1005,13 @@ function renderSwitchTable(switches) {
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
       "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button></td></tr>";
   }).join("");
+  // _tblSel에 있으나 현재 목록에 없는 id는 정리(삭제된 스위치)
+  var visible = {};
+  switches.forEach(function (s) { visible[s.id] = true; });
+  Object.keys(_tblSel).forEach(function (id) { if (!visible[id]) delete _tblSel[id]; });
   var allChk = document.getElementById("sw-check-all");
-  if (allChk) allChk.checked = false;
+  if (allChk) allChk.checked = switches.length > 0 &&
+    switches.every(function (s) { return _tblSel[s.id]; });
   _updateBulkDeleteBtn();
 }
 
@@ -1023,14 +1030,22 @@ function _updateBulkDeleteBtn() {
   if (allChk) allChk.addEventListener("change", function () {
     document.querySelectorAll("#switch-table-body .sw-check").forEach(function (c) {
       // 검색 필터로 숨겨진 행은 선택 제외
-      if (c.closest("tr").style.display !== "none") c.checked = allChk.checked;
+      if (c.closest("tr").style.display !== "none") {
+        c.checked = allChk.checked;
+        var id = parseInt(c.value, 10);
+        if (allChk.checked) _tblSel[id] = true; else delete _tblSel[id];
+      }
     });
     _updateBulkDeleteBtn();
   });
   // 개별 체크박스 변경 위임
   var tbody = document.getElementById("switch-table-body");
   if (tbody) tbody.addEventListener("change", function (e) {
-    if (e.target && e.target.classList.contains("sw-check")) _updateBulkDeleteBtn();
+    if (e.target && e.target.classList.contains("sw-check")) {
+      var id = parseInt(e.target.value, 10);
+      if (e.target.checked) _tblSel[id] = true; else delete _tblSel[id];
+      _updateBulkDeleteBtn();
+    }
   });
   // 선택 삭제
   var del = document.getElementById("btn-sw-bulk-delete");
@@ -1531,7 +1546,7 @@ function renderFirewalls(firewalls) {
   }
   tbody.innerHTML = firewalls.map(function(f) {
     var sc = _fwStatusMeta[f.status] || "new";
-    var fjson = encodeURIComponent(JSON.stringify(f));
+    var fjson = payloadAttr((f));
     var locCell = f.room_label
       ? "<span style='color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
       : escHtml(f.location || "-");
@@ -1551,7 +1566,7 @@ function renderFirewalls(firewalls) {
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
         "data-action='detail-fw' data-id='" + f.id + "'>상세</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
-        "data-action='edit-fw' data-payload='" + encodeURIComponent(JSON.stringify(f)) + "'>수정</button> " +
+        "data-action='edit-fw' data-payload='" + payloadAttr((f)) + "'>수정</button> " +
         "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
         "data-action='delete-fw' data-id='" + f.id + "'>삭제</button>" +
       "</td></tr>";
@@ -3724,7 +3739,15 @@ function showDiagnostics(diagnostics) {
 // ─── 유틸 ────────────────────────────────────────────────────────
 function escHtml(s) {
   if (s == null) return "";
-  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  // 작은따옴표(&#39;)도 이스케이프 — 단일따옴표 속성(title='...', data-*='...')에
+  // 장비 유래 문자열(SSH 오류 메시지 등)이 들어가 속성을 파괴/주입하던 버그 방지.
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+                  .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+// data-payload용: encodeURIComponent는 작은따옴표를 인코딩하지 않아 단일따옴표
+// 속성을 깨뜨린다 → %27로 추가 치환(decodeURIComponent가 다시 ' 로 복원).
+function payloadAttr(obj) {
+  return encodeURIComponent(JSON.stringify(obj)).replace(/'/g, "%27");
 }
 function fmtTime(ts) {
   if (!ts) return "-";

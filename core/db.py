@@ -567,7 +567,27 @@ def import_switches_bulk(db_path, rows):
                 cursor.execute("SELECT id FROM switches WHERE name = ?", (name,))
                 existing = cursor.fetchone()
                 if existing:
-                    set_cols = [k for k in vals if k != "name"]
+                    # BUGFIX: 엑셀 재업로드 시 값 없는 컬럼이 기존 note/location/vendor를
+                    # 빈값/'unknown'으로 덮어써 데이터 손실. 새 값이 의미 있을 때만 갱신
+                    # (save_ledger_hosts의 'new or 기존값' 보존 패턴과 일치).
+                    cand_cols = [k for k in vals if k != "name"]
+                    old = {}
+                    if cand_cols:
+                        cursor.execute(
+                            f"SELECT {', '.join(cand_cols)} FROM switches WHERE name=?", (name,))
+                        orow = cursor.fetchone()
+                        if orow:
+                            old = {c: orow[i] for i, c in enumerate(cand_cols)}
+                    set_cols = []
+                    for c in cand_cols:
+                        newv = vals[c]
+                        # 빈 값이거나 vendor 자리표시자('unknown')면 기존값 보존
+                        if newv in (None, ""):
+                            continue
+                        if c == "vendor" and str(newv).strip().lower() == "unknown" \
+                                and old.get(c):
+                            continue
+                        set_cols.append(c)
                     if set_cols:
                         assignments = ", ".join(f"{c}=?" for c in set_cols)
                         cursor.execute(

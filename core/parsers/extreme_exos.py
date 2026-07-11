@@ -63,7 +63,9 @@ def _parse_port_errors(rx_output, tx_output):
             # 첫 토큰이 포트(slot:port 또는 standalone)여야 함 — 헤더/구분선 배제
             if not toks or not re.match(r"^(?:\d+:)?\d+$", toks[0]):
                 continue
-            nums = [int(t) for t in toks[1:] if t.isdigit()]
+            # ASCII 숫자만(str.isdigit()은 '²' 같은 유니코드 숫자에 True지만
+            # int()는 ValueError — SSH decode replace 노이즈 유입 대비).
+            nums = [int(t) for t in toks[1:] if t.isascii() and t.isdigit()]
             if not nums:
                 continue
             port = utils.normalize_port(toks[0], vendor="extreme_exos")

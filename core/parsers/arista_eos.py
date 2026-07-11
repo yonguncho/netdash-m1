@@ -170,9 +170,11 @@ def _parse_macs(mac_output, switch_id):
         if len(line) > 500:  # Reject oversized lines
             continue
         # MAC은 콜론/점/대시/무구분 모두 허용(Arista 표준은 dot: 0011.2233.44aa).
-        # 이전엔 콜론-페어만 매칭해 Arista MAC 테이블이 전량 유실됐다.
+        # 포트 뒤 $ 앵커를 두면 현대 EOS의 'Moves  Last Move' 컬럼
+        # (예: "  1  001c.7301.9e01  DYNAMIC  Et1  1  0:01:13 ago")이 전량 유실됨
+        # → 포트 토큰 뒤 나머지 컬럼을 선택적으로 허용.
         match = re.match(
-            r"^\s*(\d+)\s+([0-9a-fA-F][0-9a-fA-F.:\-]{10,18}[0-9a-fA-F])\s+(\w+)\s+([A-Za-z0-9/:._-]+)$",
+            r"^\s*(\d+)\s+([0-9a-fA-F][0-9a-fA-F.:\-]{10,18}[0-9a-fA-F])\s+(\w+)\s+([A-Za-z0-9/:._-]+)(?:\s+.*)?$",
             line, re.IGNORECASE)
         if match:
             vlan_str, mac_addr, mac_type, port_name = match.groups()
@@ -206,16 +208,19 @@ def _parse_arps(arp_output, switch_id):
             break
         if len(line) > 500:  # Reject oversized lines
             continue
-        # MAC 형식 무관(dot/colon/dash) — 콜론-페어만 매칭하던 ARP 유실 수정
+        # MAC 형식 무관(dot/colon/dash). 인터페이스는 'Vlan100, Ethernet2'처럼
+        # L3(SVI)+물리 이중 표기가 흔함 → 마지막 그룹을 전체 캡처 후 분리.
         match = re.match(
-            r"^\s*([\d.]+)\s+\S+\s+([0-9a-fA-F][0-9a-fA-F.:\-]{10,18}[0-9a-fA-F])\s+([A-Za-z0-9/:._-]+)$",
+            r"^\s*([\d.]+)\s+\S+\s+([0-9a-fA-F][0-9a-fA-F.:\-]{10,18}[0-9a-fA-F])\s+(.+?)\s*$",
             line, re.IGNORECASE)
         if match:
-            ip, mac_addr, interface = match.groups()
+            ip, mac_addr, iface_raw = match.groups()
 
             if utils.validate_ip(ip):
                 mac = utils.normalize_mac(mac_addr)  # normalize_mac handles all separator formats
-                interface = utils.normalize_port(interface)
+                # 'Vlan100, Ethernet2' → 물리 인터페이스(마지막)를 MAC 대조용으로 우선
+                iface_tok = iface_raw.split(",")[-1].strip()
+                interface = utils.normalize_port(iface_tok)
 
                 if mac and interface:
                     arps.append({

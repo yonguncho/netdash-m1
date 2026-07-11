@@ -27,7 +27,9 @@ COMMANDS = {
     "lldp": "show lldp neighbors detail",
 }
 
-_IFACE = r"(Eth\S+|mgmt\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
+# port-channel 전체 이름을 Po보다 먼저(길게) 매칭해야 'show interface' 헤더
+# "port-channel10 is up"가 잡힌다. _abbr_nxos가 port-channel10→Po10 정규화.
+_IFACE = r"(Eth\S+|mgmt\d+|port-channel\d+|Po\d+|Vlan\d+|Lo\d+|Tunnel\d+)"
 
 
 def _abbr_nxos(port):
