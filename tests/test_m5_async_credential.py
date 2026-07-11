@@ -18,6 +18,24 @@ from core import collector, credentials, db
 from core.config_loader import Config
 
 
+@pytest.fixture(autouse=True)
+def _stop_leftover_workers(temp_db):
+    """워커 테스트가 띄운 데몬 워커를 매 테스트 후 종료(sentinel)하고 join.
+
+    플레이크 원인 2가지:
+    ① 남은 워커가 전역 _worker_queue를 매 반복 다시 읽어 다음 테스트의
+       격리 큐 아이템(switch 11)까지 소비 → 자격증명 삭제 오염.
+    ② temp_db 임시폴더 삭제가 워커 종료보다 먼저 실행되면 워커가 아직
+       잡고 있는 test.db에서 WinError 32 → teardown PermissionError.
+    temp_db에 의존해 teardown 순서를 보장한다(워커 join → 폴더 삭제).
+    """
+    yield
+    collector.shutdown_workers()
+    collector._worker_queue = None
+    collector._collecting_switches = set()
+    credentials.clear_session()
+
+
 @pytest.fixture
 def isolated_collector():
     """워커 없는 큐와 깨끗한 자격증명 저장소를 제공 (페이로드 직접 검사용)."""

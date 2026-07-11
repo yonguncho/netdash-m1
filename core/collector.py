@@ -408,6 +408,28 @@ def init_collector():
     utils.log_event("info", "collector_init", workers=max_workers)
 
 
+def shutdown_workers(timeout=5):
+    """살아있는 워커 스레드에 종료 sentinel(None)을 보내고 join.
+
+    테스트 격리용(남은 워커가 다음 테스트의 큐를 가로채는 오염 방지).
+    프로덕션은 데몬 스레드라 프로세스 종료 시 자동 정리되므로 호출 불필요.
+    """
+    global _worker_threads
+    q = _worker_queue
+    threads = [t for t in (_worker_threads or []) if t.is_alive()]
+    if q is None or not threads:
+        _worker_threads = []
+        return
+    for _ in threads:
+        try:
+            q.put(None, block=False)
+        except queue.Full:
+            break
+    for t in threads:
+        t.join(timeout=timeout)
+    _worker_threads = []
+
+
 def collect_switch(db_path, switch_id, username=None, password=None, enable_secret=None):
     """Enqueue an async collection for a switch.
 
@@ -491,7 +513,13 @@ def _worker_loop():
         # Worker will block indefinitely until task arrives, reducing CPU usage
         # Note: No timeout means queue.Empty will never be raised (unreachable code removed)
         # M5 (async_credential): payload carries no credentials, only identifiers.
-        db_path, switch_id = _worker_queue.get()
+        item = _worker_queue.get()
+        # 종료 sentinel: None을 받으면 스레드 종료. 테스트가 남긴 워커가
+        # 다음 테스트의 격리 큐를 가로채 자격증명을 지우는 오염 방지
+        # (프로덕션은 sentinel을 넣지 않으므로 동작 불변).
+        if item is None:
+            return
+        db_path, switch_id = item
 
         username = None
         password = None
