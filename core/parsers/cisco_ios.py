@@ -36,6 +36,7 @@ _STATUS_MAP = {
     "sfpabsent": "notconnect", "xcvrabsen": "notconnect",
     "disabled": "disabled",
     "err-disabled": "err-disabled", "errdisable": "err-disabled",
+    "errdisabled": "err-disabled",  # Arista 철자
     "inactive": "inactive", "suspended": "suspended", "monitoring": "up",
     "down": "down",
 }

@@ -122,7 +122,7 @@ def test_worker_hard_timeout_moves_to_next(temp_db, monkeypatch):
     credentials.save_credential(alive, "u", "p")
 
     def fake_ssh(switch, username, password, vendor, source_ip=None,
-                 detect_vendor=False, max_retries=3):
+                 detect_vendor=False, max_retries=3, **kwargs):
         if switch["ip"] == "10.98.0.1":
             time.sleep(30)   # 무한 대기 시뮬레이션
         return ({"status": "", "mac": "", "arp": ""}, vendor)

@@ -12,6 +12,8 @@ COMMANDS = {
     "logging": "show log messages memory-buffer",
     "sysinfo": "show switch",   # 모델(System Type:)은 show version이 아니라 여기 있음
     "lldp": "show lldp neighbors detailed",
+    "errors": "show ports rxerrors no-refresh",     # Rx Crc/Over/Under/Frag/Jabber/Align/Lost
+    "txerrors": "show ports txerrors no-refresh",   # Tx Coll/Late coll/Deferred/Errors/Lost/Parity
 }
 
 
@@ -24,12 +26,59 @@ def parse(outputs, switch_id):
     from . import neighbors as _nbr
     nbrs = _nbr.parse_lldp_detail(outputs.get("lldp", ""))
 
+    # CRC/입출력 오류 병합 (show ports rxerrors/txerrors)
+    errs = _parse_port_errors(outputs.get("errors", ""), outputs.get("txerrors", ""))
+    for p in ports:
+        e = errs.get(p["name"], {})
+        p["crc_errors"] = e.get("crc", 0)
+        p["in_errors"] = e.get("in_errors", 0)
+        p["out_errors"] = e.get("out_errors", 0)
+
     return {
         "ports": ports,
         "macs": macs,
         "arps": arps,
         "neighbors": nbrs
     }
+
+
+def _parse_port_errors(rx_output, tx_output):
+    """'show ports rxerrors/txerrors no-refresh' → {port: {crc, in_errors, out_errors}}.
+
+    rxerrors 컬럼: Port  Link  Rx Crc  Rx Over  Rx Under  Rx Frag  Rx Jabber  Rx Align  Rx Lost
+    txerrors 컬럼: Port  Link  Tx Coll  Tx Late coll  Tx Deferred  Tx Errors  Tx Lost  Tx Parity
+    첫 숫자 컬럼(Rx Crc)=crc, rx 합계=in_errors, tx 합계=out_errors.
+    """
+    errs = {}
+    if len(rx_output) > 1_000_000 or len(tx_output) > 1_000_000:
+        return errs
+
+    def _scan(output, kind):
+        for line_idx, line in enumerate(output.split("\n")):
+            if line_idx > 10000:
+                break
+            if len(line) > 500:
+                continue
+            toks = line.split()
+            # 첫 토큰이 포트(slot:port 또는 standalone)여야 함 — 헤더/구분선 배제
+            if not toks or not re.match(r"^(?:\d+:)?\d+$", toks[0]):
+                continue
+            nums = [int(t) for t in toks[1:] if t.isdigit()]
+            if not nums:
+                continue
+            port = utils.normalize_port(toks[0], vendor="extreme_exos")
+            if not port:
+                continue
+            e = errs.setdefault(port, {"crc": 0, "in_errors": 0, "out_errors": 0})
+            if kind == "rx":
+                e["crc"] = nums[0]
+                e["in_errors"] = sum(nums)
+            else:
+                e["out_errors"] = sum(nums)
+
+    _scan(rx_output, "rx")
+    _scan(tx_output, "tx")
+    return errs
 
 
 def _parse_ports(status_output, desc_output, switch_id):

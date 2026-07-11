@@ -19,7 +19,7 @@ def test_bulk_collect_queues_all(client, monkeypatch):
     from core import collector
     calls = []
 
-    def fake(db_path, sid, u, p):
+    def fake(db_path, sid, u, p, enable_secret=None):
         calls.append((sid, u, p))
         return {"status": "queued", "switch_id": sid}
 
@@ -39,7 +39,7 @@ def test_bulk_collect_queues_all(client, monkeypatch):
 def test_bulk_collect_skips_unknown_id(client, monkeypatch):
     from core import collector
     monkeypatch.setattr(collector, "collect_switch",
-                        lambda db_path, sid, u, p: {"status": "queued", "switch_id": sid})
+                        lambda db_path, sid, u, p, enable_secret=None: {"status": "queued", "switch_id": sid})
     id1 = _reg(client, "10.9.9.5", "A")
     r = client.post("/api/switches/bulk-collect",
                     json={"ids": [id1, 999999], "username": "admin", "password": "secret123"})
@@ -57,7 +57,7 @@ def test_bulk_collect_rejects_invalid_credentials(client, monkeypatch):
     """잘못된(과도하게 긴/부적합) 자격증명은 400 (데모 모드와 무관하게 검증)."""
     from core import collector
     monkeypatch.setattr(collector, "collect_switch",
-                        lambda db_path, sid, u, p: {"status": "queued", "switch_id": sid})
+                        lambda db_path, sid, u, p, enable_secret=None: {"status": "queued", "switch_id": sid})
     id1 = _reg(client, "10.9.9.7", "C")
     r = client.post("/api/switches/bulk-collect",
                     json={"ids": [id1], "username": "a" * 5000, "password": "b"})

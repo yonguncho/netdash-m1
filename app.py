@@ -1830,7 +1830,7 @@ def create_app(demo_mode=None):
     def bulk_collect_endpoint():
         """공통 계정으로 선택된 스위치들을 일괄(비동기 동시) 수집.
 
-        body: {ids:[...], username, password, persist?}
+        body: {ids:[...], username, password, persist?, enable_secret?}
         각 스위치를 워커 큐에 넣어 동시 수집한다. 계정은 세션 저장소 경유(평문 큐 비노출).
         """
         try:
@@ -1843,6 +1843,8 @@ def create_app(demo_mode=None):
             try:
                 username = validate_credential(data.get("username"))
                 password = validate_credential(data.get("password"))
+                enable_secret = validate_credential(data.get("enable_secret")) \
+                    if data.get("enable_secret") else None
             except ValueError as ve:
                 return jsonify({"error": str(ve)}), 400
             if not config.app.get("demo_mode") and (not username or not password):
@@ -1868,7 +1870,8 @@ def create_app(demo_mode=None):
                     except ValueError as e:
                         skipped.append({"id": sid, "reason": "ip rejected: %s" % e})
                         continue
-                result = collector.collect_switch(db_path, sid, username, password)
+                result = collector.collect_switch(db_path, sid, username, password,
+                                                  enable_secret=enable_secret)
                 if result.get("status") == "queued":
                     queued.append(sid)
                     if persist:
@@ -1878,6 +1881,13 @@ def create_app(demo_mode=None):
                                 db.update_cred_blob(db_path, sid, cred_blob)
                             except Exception:
                                 pass
+                        if enable_secret:
+                            es_blob = credentials.encrypt_text(enable_secret)
+                            if es_blob:
+                                try:
+                                    db.set_setting(db_path, "enable_secret_%d" % sid, es_blob)
+                                except Exception:
+                                    pass
                 else:
                     skipped.append({"id": sid, "reason": result.get("message", "enqueue failed")})
             log_event("info", "bulk_collect", queued=len(queued), skipped=len(skipped))
@@ -1898,6 +1908,9 @@ def create_app(demo_mode=None):
             try:
                 username = validate_credential(data.get("username"))
                 password = validate_credential(data.get("password"))
+                # enable secret(선택): enable 비밀번호가 로그인과 다른 장비만 입력
+                enable_secret = validate_credential(data.get("enable_secret")) \
+                    if data.get("enable_secret") else None
             except ValueError as validation_error:
                 log_event("warning", "collect_invalid_credentials", switch_id=switch_id, reason=str(validation_error))
                 return jsonify({"error": str(validation_error)}), 400
@@ -1925,7 +1938,8 @@ def create_app(demo_mode=None):
             # request can never overwrite or clear an active job's credential. It
             # also disposes the credential itself on any enqueue failure. The async
             # worker loads it at moment-of-use and clears it when collection finishes.
-            result = collector.collect_switch(db_path, switch_id, username, password)
+            result = collector.collect_switch(db_path, switch_id, username, password,
+                                              enable_secret=enable_secret)
 
             # M5 (W3): Map the async submission outcome to an accurate HTTP status.
             status = result.get("status")
@@ -1942,6 +1956,17 @@ def create_app(demo_mode=None):
                         except Exception as e:
                             sanitized = _sanitize_error_msg(str(e))
                             log_event("warning", "credential_persist_failed", switch_id=switch_id, error=sanitized)
+                    # enable secret도 함께 영속화(별도 blob — 자격증명 형식과 분리).
+                    # 저장돼 있으면 다음 수집(자동수집 포함)부터 자동 사용.
+                    if enable_secret:
+                        es_blob = credentials.encrypt_text(enable_secret)
+                        if es_blob:
+                            try:
+                                db.set_setting(db_path, "enable_secret_%d" % switch_id, es_blob)
+                                log_event("info", "enable_secret_persisted", switch_id=switch_id)
+                            except Exception as e:
+                                log_event("warning", "enable_secret_persist_failed",
+                                          switch_id=switch_id, error=_sanitize_error_msg(str(e)))
                 return jsonify(result), 202
             if "already being collected" in result.get("message", ""):
                 return jsonify(result), 409  # Conflict: collection in progress
@@ -2081,6 +2106,26 @@ def _open_browser_when_ready(url, port):
         pass
 
 
+def _warm_openpyxl():
+    """onefile exe 첫 /api/report ~15초 지연 해소(성능 이슈 후속).
+
+    openpyxl 모듈은 기동 시 import되지만, 첫 Workbook 저장 시점에 lazy 로드되는
+    writer/serializer 서브모듈이 onefile 압축 해제·로드로 오래 걸린다.
+    기동 직후 백그라운드에서 미니 워크북을 한 번 저장해 미리 데운다.
+    실패해도 무해 — 첫 보고서 요청이 기존처럼 로드할 뿐이다.
+    """
+    try:
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.active["A1"] = "warmup"
+        buf = io.BytesIO()
+        wb.save(buf)
+        log_event("info", "openpyxl_warmed")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     import traceback
     try:
@@ -2133,6 +2178,9 @@ if __name__ == "__main__":
             daemon=True,
         )
         browser_thread.start()
+
+        # 첫 /api/report 지연(openpyxl lazy 서브모듈) 예열 — 백그라운드, 실패 무해
+        threading.Thread(target=_warm_openpyxl, daemon=True).start()
 
         # threaded=True: 웹 SSH 터미널(WebSocket)이 요청당 스레드를 점유하므로 필수
         app.run(host=host, port=port, debug=debug, threaded=True)

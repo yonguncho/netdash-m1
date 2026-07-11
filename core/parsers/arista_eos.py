@@ -39,6 +39,63 @@ def parse(outputs, switch_id):
     }
 
 
+# 상세 형식 헤더: "Ethernet1 is up, line protocol is up (connected)"
+#   괄호 상태(connected/notconnect/errdisabled/disabled)가 세분화의 원천.
+_DETAIL_HDR = re.compile(
+    r"^(\S+) is ([A-Za-z][A-Za-z\s-]*?), line protocol is \w+"
+    r"(?:\s*\(([\w-]+)\))?", re.IGNORECASE)
+_DUP_RE = re.compile(r"\b(full|half|auto)-duplex\b", re.IGNORECASE)
+_SPD_RE = re.compile(r"\b(\d+(?:\.\d+)?\s*[MG]b(?:it)?/s(?:ec)?)\b", re.IGNORECASE)
+
+
+def _parse_ports_detail(status_output, descriptions, switch_id):
+    """'show interfaces' 상세 형식 → 포트 상태 세분화 + 속도/듀플렉스.
+
+    상태 우선순위: 괄호 상태(connected→up, notconnect, errdisabled, disabled)
+    → 'administratively down'=disabled → 관리 상태 up/down.
+    """
+    from . import cisco_ios
+    ports = []
+    cur = None
+    for line_idx, line in enumerate(status_output.split("\n")):
+        if line_idx > 100000:
+            break
+        if len(line) > 500:
+            continue
+        m = _DETAIL_HDR.match(line)
+        if m:
+            name, admin_st, paren = m.groups()
+            port = utils.normalize_port(name)
+            if not port:
+                cur = None
+                continue
+            admin_l = admin_st.lower()
+            if paren and paren.lower() in cisco_ios._STATUS_SET:
+                status = cisco_ios._STATUS_MAP[paren.lower()]
+            elif "administratively down" in admin_l:
+                status = "disabled"
+            elif admin_l.startswith("up"):
+                status = "up"
+            else:
+                status = "down"
+            cur = {"switch_id": switch_id, "name": port, "status": status,
+                   "vlan": 1, "speed": "unknown", "duplex": "", "port_type": "",
+                   "description": descriptions.get(port, "")
+                                  or descriptions.get(cisco_ios._abbr(port), "")}
+            ports.append(cur)
+        elif cur:
+            dm = _DUP_RE.search(line)
+            sm = _SPD_RE.search(line)
+            if dm and not cur["duplex"]:
+                cur["duplex"] = dm.group(1).lower()
+            if sm and cur["speed"] == "unknown":
+                cur["speed"] = sm.group(1).replace(" ", "")
+    for p in ports:  # cisco와 동일 표기: "1Gb/s · full"
+        spd = p["speed"] if p["speed"] != "unknown" else ""
+        p["speed"] = " · ".join(x for x in (spd, p["duplex"]) if x) or "unknown"
+    return utils.deduplicate_list(ports, lambda p: p["name"])
+
+
 def _parse_ports(status_output, desc_output, switch_id):
     ports = []
 
@@ -59,6 +116,20 @@ def _parse_ports(status_output, desc_output, switch_id):
             desc = " ".join(parts[3:]) if len(parts) > 3 else ""
             descriptions[port_name] = desc.strip()[:256]
 
+    # ① 상세 형식(show interfaces) — 괄호 상태로 세분화(connected/notconnect/
+    #    errdisabled/disabled) + Full-duplex, 1Gb/s 줄에서 속도/듀플렉스
+    if "line protocol is" in status_output:
+        detail = _parse_ports_detail(status_output, descriptions, switch_id)
+        if detail:
+            return detail
+    else:
+        # ② 상태표 형식(show interfaces status) — cisco와 동일 컬럼(토큰 파서 재사용)
+        from . import cisco_ios
+        tbl = cisco_ios._parse_ports(status_output, descriptions, switch_id)
+        if tbl:
+            return tbl
+
+    # ③ legacy 2컬럼(status/protocol) 형식 폴백
     for line_idx, line in enumerate(status_output.split("\n")):
         if line_idx > 10000:  # Prevent billion-line attacks
             break

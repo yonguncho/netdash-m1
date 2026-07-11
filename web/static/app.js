@@ -1760,6 +1760,7 @@ function openCredentialModal(sw) {
   var hp = document.getElementById("dash-cred-pass");
   document.getElementById("cred-username").value = hu ? hu.value.trim() : "";
   document.getElementById("cred-password").value = hp ? hp.value : "";
+  var ce = document.getElementById("cred-enable"); if (ce) ce.value = "";
   openModal("modal-credential");
 }
 
@@ -1769,8 +1770,10 @@ document.getElementById("btn-collect").addEventListener("click", function() {
   var password = document.getElementById("cred-password").value;
   if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
   var persist = document.getElementById("cred-persist");
+  var enEl = document.getElementById("cred-enable");
+  var enableSecret = enEl ? enEl.value : "";
   closeModal("modal-credential");
-  collectSwitch(_selectedSwitch.id, username, password, persist && persist.checked);
+  collectSwitch(_selectedSwitch.id, username, password, persist && persist.checked, enableSecret);
 });
 
 // ─── M11: 연결 테스트 (수집 전 선검증) ───────────────────────────
@@ -1801,11 +1804,13 @@ document.getElementById("btn-test-switch").addEventListener("click", function() 
     .catch(function(e) { console.error(e); document.getElementById("cred-test-result").textContent = "테스트 오류"; });
 });
 
-function collectSwitch(switchId, username, password, persist) {
+function collectSwitch(switchId, username, password, persist, enableSecret) {
+  var body = {username: username, password: password, persist: !!persist};
+  if (enableSecret) body.enable_secret = enableSecret;  // 선택 — 비우면 서버가 패스워드 사용
   fetch("/api/switches/" + switchId + "/collect", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({username: username, password: password, persist: !!persist}),
+    body: JSON.stringify(body),
   }).then(function(r) { return r.json(); }).then(function() {
     pollState();
   }).catch(function(e) { console.error("collect error:", e); });
@@ -1867,11 +1872,12 @@ document.addEventListener("change", function (e) {
   });
 
   // 일괄 수집 실행(공통) — 성공 시 선택 해제 + 안내
-  function _runBulkCollect(ids, username, password, persist) {
+  function _runBulkCollect(ids, username, password, persist, enableSecret) {
+    var body = {ids: ids, username: username, password: password, persist: !!persist};
+    if (enableSecret) body.enable_secret = enableSecret;  // 선택 — 비우면 서버가 패스워드 사용
     fetch("/api/switches/bulk-collect", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ids: ids, username: username, password: password,
-                            persist: !!persist}),
+      body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function (res) {
       closeModal("modal-bulk-collect");
       if (res.ok) {
@@ -1913,6 +1919,7 @@ document.addEventListener("change", function (e) {
       "<span style='font-size:12px;color:#475569'>" + names.map(escHtml).join(", ") + "</span>";
     document.getElementById("bulk-username").value = "";
     document.getElementById("bulk-password").value = "";
+    var be = document.getElementById("bulk-enable"); if (be) be.value = "";
     var bp = document.getElementById("bulk-persist"); if (bp) bp.checked = false;
     openModal("modal-bulk-collect");
   });
@@ -1926,7 +1933,9 @@ document.addEventListener("change", function (e) {
     var password = document.getElementById("bulk-password").value;
     if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
     var persist = document.getElementById("bulk-persist");
-    _runBulkCollect(ids, username, password, persist && persist.checked);
+    var be = document.getElementById("bulk-enable");
+    _runBulkCollect(ids, username, password, persist && persist.checked,
+                    be ? be.value : "");
   });
 })();
 

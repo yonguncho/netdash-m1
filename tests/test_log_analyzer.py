@@ -77,6 +77,52 @@ def test_extreme_log_flap_detected():
     assert r["alert"] in ("warning", "critical")
 
 
+def test_flap_window_dense_detected():
+    """10분 윈도우 내 3회 이상 → flapping (detail에 윈도우 표기)."""
+    log = "\n".join([
+        "Jul 11 09:00:01: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to down",
+        "Jul 11 09:03:00: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to up",
+        "Jul 11 09:07:00: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to down",
+        "Jul 11 09:09:00: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to up",
+    ])
+    r = log_analyzer.analyze(log, flap_threshold=3, flap_window_min=10)
+    flaps = [e for e in r["events"] if e["type"] == "flapping"]
+    assert flaps and flaps[0]["count"] >= 3
+    assert "/10분" in flaps[0]["detail"]
+
+
+def test_flap_window_sparse_not_flapping():
+    """총 4회여도 시간상 분산(1시간 간격)이면 flapping 아님."""
+    log = "\n".join([
+        "Jul 11 09:00:00: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to down",
+        "Jul 11 10:00:00: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to up",
+        "Jul 11 11:00:00: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to down",
+        "Jul 11 12:00:00: %LINK-3-UPDOWN: Interface Gi1/0/5, changed state to up",
+    ])
+    r = log_analyzer.analyze(log, flap_threshold=3, flap_window_min=10)
+    assert not [e for e in r["events"] if e["type"] == "flapping"]
+
+
+def test_flap_no_timestamp_fallback():
+    """타임스탬프 없는 로그는 기존 총횟수 판정 폴백."""
+    log = "\n".join([
+        "%LINK-3-UPDOWN: Interface Gi1/0/7, changed state to down",
+        "%LINK-3-UPDOWN: Interface Gi1/0/7, changed state to up",
+        "%LINK-3-UPDOWN: Interface Gi1/0/7, changed state to down",
+    ])
+    r = log_analyzer.analyze(log, flap_threshold=3)
+    flaps = [e for e in r["events"] if e["type"] == "flapping"]
+    assert flaps and flaps[0]["count"] == 3
+    assert "/분" not in flaps[0]["detail"].replace("회/", "/")
+
+
+def test_flap_nxos_exos_timestamps():
+    """NX-OS(연도 선행)·EXOS(MM/DD/YYYY) 타임스탬프 파싱."""
+    assert log_analyzer._parse_ts("2026 Jul 11 09:12:03 %ETHPORT-5-IF_DOWN") is not None
+    assert log_analyzer._parse_ts("07/11/2026 09:12:03.12 <Warn:vlan> Port 1:1 link down") is not None
+    assert log_analyzer._parse_ts("no timestamp here") is None
+
+
 def test_arista_errors_merge():
     """Arista show interfaces 상세에서 CRC/errors 병합."""
     from core.parsers import arista_eos

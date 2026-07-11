@@ -1,5 +1,34 @@
 # NetDash 릴리스 노트
 
+## v3.71.0 (2026-07-11) — 후속작업 일괄 정리 (멀티벤더 세분화·flap 시간윈도우·enable secret·보고서 예열)
+
+### 🔍 멀티벤더 포트상태 세분화·에러 카운터 (기존 cisco_ios 전용 → Arista/EXOS 확대)
+- **Arista EOS**: `show interfaces` 상세의 괄호 상태로 **connected/notconnect/errdisabled/disabled** 세분화
+  + `Full-duplex, 1Gb/s` 줄에서 속도/듀플렉스 추출. `show interfaces status` 상태표 형식도 지원
+  (cisco 토큰 파서 재사용, `errdisabled` 철자 매핑 추가). 기존 2컬럼 형식 폴백 유지.
+- **Extreme EXOS**: `show ports rxerrors/txerrors no-refresh` 수집 신설 → 포트별
+  **CRC(Rx Crc)·in_errors(rx 합계)·out_errors(tx 합계)** 병합. 포트 표 에러 컬럼이 EXOS에도 채워짐.
+- NX-OS는 v3.23~ 기존 구현으로 이미 동등 수준(변경 없음).
+
+### ⏱ flapping 판정 시간윈도우 (기존 총횟수 → 시간 밀도)
+- `log_analyzer`: 로그 타임스탬프 파싱(IOS/Arista syslog·NX-OS 연도선행·EXOS MM/DD/YYYY)
+  → **10분 윈도우 내 임계값(기본 3회) 이상**일 때만 flapping. 표기 `Gi1/0/5: link up/down 4회/10분`.
+- 총횟수는 많아도 시간상 분산(예: 1시간 간격)이면 flapping 아님 — 오탐 감소.
+- 타임스탬프를 못 읽는 로그는 기존 총횟수 판정으로 폴백(회귀 없음).
+
+### 🔑 Enable Secret 별도 입력 (v3.16.2 후속)
+- enable 비밀번호가 로그인과 다른 장비 지원: 수집·일괄수집 모달에 **Enable Secret(선택)** 필드.
+- 비우면 기존처럼 로그인 비밀번호 사용. 세션 저장소 동반(평문 큐 비노출, CWE-522 패턴 유지),
+  계정 저장 체크 시 DPAPI 별도 blob(`enable_secret_<id>`)으로 영속화 → 자동 수집에서도 사용.
+
+### 🚀 onefile exe 첫 보고서 ~15초 지연 해소
+- 원인: 첫 Workbook 저장 시 lazy 로드되는 openpyxl writer/serializer 서브모듈.
+- 기동 직후 백그라운드 스레드가 미니 워크북 저장으로 예열(`_warm_openpyxl`) — 첫 `/api/report` 즉시 응답.
+
+### 기타
+- retry 무효 버그(collector `device.clear()`)는 이전 릴리스에서 이미 수정 확인 — 메모리 기록 정리.
+- 테스트 539개 통과(신규 18: 멀티벤더 8·시간윈도우 4·enable secret 6).
+
 ## v3.70.0 (2026-07-10) — 토폴로지 인터랙티브화 (Juniper Contrail Command 스타일)
 
 Contrail Command 토폴로지처럼 **직접 배치하고 그 배치가 유지되는** 인터랙티브 뷰로 개선.

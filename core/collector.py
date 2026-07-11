@@ -408,7 +408,7 @@ def init_collector():
     utils.log_event("info", "collector_init", workers=max_workers)
 
 
-def collect_switch(db_path, switch_id, username=None, password=None):
+def collect_switch(db_path, switch_id, username=None, password=None, enable_secret=None):
     """Enqueue an async collection for a switch.
 
     M5 (async_credential): Credentials are NEVER placed in the queue payload.
@@ -442,9 +442,11 @@ def collect_switch(db_path, switch_id, username=None, password=None):
         # the queue payload stays free of plaintext. Kept INSIDE the try so any
         # failure here also releases the in-progress mark via _abort_enqueue.
         if username is not None or password is not None:
-            credentials.save_credential(switch_id, username, password)
+            credentials.save_credential(switch_id, username, password,
+                                        enable_secret=enable_secret)
             username = None
             password = None
+            enable_secret = None
         # M5: payload carries no credentials, only the work identifiers.
         _worker_queue.put((db_path, switch_id), block=False)
         position = _worker_queue.qsize()
@@ -532,6 +534,16 @@ def _worker_loop():
                     raise ValueError(f"No credentials available for switch {switch_id}")
                 username = cred.get("username")
                 password = cred.get("password")
+                # enable secret: 세션 우선, 없으면 영속 blob(app_settings) 복호화.
+                # 미설정이면 _ssh_collect가 로그인 비밀번호를 secret으로 사용(기존 동작).
+                enable_secret = cred.get("enable_secret")
+                if not enable_secret:
+                    try:
+                        _es_blob = db.get_setting(db_path, "enable_secret_%d" % switch_id)
+                        if _es_blob:
+                            enable_secret = credentials.decrypt_text(_es_blob)
+                    except Exception:
+                        enable_secret = None
                 # M12: 설정된 출발지 IP로 바인딩(장비 ACL 통과). 미설정이면 OS 기본 라우팅.
                 source_ip = db.get_setting(db_path, "source_ip") or None
                 # 응답 없는 장비는 즉시 실패(재시도 낭비 없이 다음 장비로)
@@ -555,7 +567,8 @@ def _worker_loop():
                         outputs, eff_vendor = _run_with_timeout(
                             _ssh_collect, hard_to,
                             switch, username, password, vendor,
-                            source_ip=source_ip, detect_vendor=True)
+                            source_ip=source_ip, detect_vendor=True,
+                            enable_secret=enable_secret)
                     except Exception as first_err:
                         # Alteon 프롬프트를 이미 감지했다면 프로브(추가 로그인) 없이
                         # 전용 수집으로 직행 — 구형 Alteon은 동시 관리 세션 제한이
@@ -600,7 +613,8 @@ def _worker_loop():
                                 outputs, eff_vendor = _run_with_timeout(
                                     _ssh_collect, hard_to,
                                     switch, username, password, probed,
-                                    source_ip=source_ip, detect_vendor=False, max_retries=1)
+                                    source_ip=source_ip, detect_vendor=False, max_retries=1,
+                                    enable_secret=enable_secret)
                                 eff_vendor = probed
                             # 프로브에서 읽은 show version을 버전/모델 파싱에 재활용
                             if probe_ver and not outputs.get("version"):
@@ -793,7 +807,7 @@ def _worker_loop():
 
 
 def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=None,
-                 detect_vendor=False):
+                 detect_vendor=False, enable_secret=None):
     """Collect outputs from network device via SSH with exponential backoff retry logic.
 
     Args:
@@ -804,6 +818,7 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
         max_retries: Max retry attempts (default: 3) - handles transient network failures
         source_ip: M12 — bind outbound SSH to this local IP (pass device ACL). None = OS default.
         detect_vendor: True면 접속 후 show version으로 실제 벤더를 학습해 명령/파서를 그에 맞춘다.
+        enable_secret: enable 비밀번호가 로그인과 다른 장비용(선택). None이면 password 사용.
 
     Returns:
         (outputs: dict, effective_vendor: str)  # 학습된 실제 벤더(미학습 시 입력 vendor)
@@ -830,8 +845,8 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
         "ip": switch["ip"],
         "username": username,
         "password": password,
-        # enable secret: 1차로 로그인 비밀번호를 사용(많은 환경에서 동일).
-        "secret": password,
+        # enable secret: 별도 지정 시 그 값을, 없으면 로그인 비밀번호(많은 환경에서 동일).
+        "secret": enable_secret or password,
         "conn_timeout": ssh_timeout,
         "fast_cli": False
     }
@@ -962,6 +977,7 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
                 conn_device.clear()
             username = None
             password = None
+            enable_secret = None
 
 
 def _alteon_read(shell, timeout=25, idle=0.6):

@@ -101,7 +101,7 @@ def test_worker_learns_vendor_and_updates_db(temp_db, monkeypatch):
     credentials.save_credential(sid, "admin", "pw")
 
     # 실제 SSH 대신: detect_vendor=True로 호출되면 (outputs, 'cisco_nxos') 반환
-    def fake_ssh(switch, username, password, vendor, source_ip=None, detect_vendor=False):
+    def fake_ssh(switch, username, password, vendor, source_ip=None, detect_vendor=False, **kwargs):
         assert detect_vendor is True  # unknown이라 학습 요청됨
         return ({"status": "", "mac": "", "arp": ""}, "cisco_nxos")
     monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
@@ -127,7 +127,7 @@ def test_worker_always_verifies_vendor(temp_db, monkeypatch):
 
     seen = {}
 
-    def fake_ssh(switch, username, password, vendor, source_ip=None, detect_vendor=False):
+    def fake_ssh(switch, username, password, vendor, source_ip=None, detect_vendor=False, **kwargs):
         seen["detect"] = detect_vendor
         return ({"status": "", "mac": "", "arp": ""}, vendor)
     monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
@@ -311,7 +311,7 @@ def test_worker_alteon_prompt_fallback(temp_db, monkeypatch):
     credentials.save_credential(sid, "admin", "pw")
 
     def fake_ssh(switch, username, password, vendor, source_ip=None,
-                 detect_vendor=False, max_retries=3):
+                 detect_vendor=False, max_retries=3, **kwargs):
         # 접속 직후 프롬프트 검사에서 Alteon으로 판정된 상황
         raise collector._DriverMismatchError("alteon 메뉴형 프롬프트 감지")
     monkeypatch.setattr(collector, "_ssh_collect", fake_ssh)
@@ -393,7 +393,7 @@ def test_worker_alteon_signature_recollect(temp_db, monkeypatch):
     credentials.save_credential(sid, "admin", "pw")
 
     def fake_ssh(switch, username, password, vendor, source_ip=None,
-                 detect_vendor=False, max_retries=3):
+                 detect_vendor=False, max_retries=3, **kwargs):
         # cisco 드라이버 접속 '성공' — 그러나 전부 메뉴 CLI 오류 텍스트
         err = "Error: unknown command\n>> Standalone SLB - Main#"
         return ({"status": err, "mac": err, "arp": err, "version": err}, vendor)
@@ -430,7 +430,7 @@ def test_worker_unknown_becomes_cisco_ios(temp_db, monkeypatch):
     credentials.save_credential(sid, "admin", "pw")
 
     def fake_ssh(switch, username, password, vendor, source_ip=None,
-                 detect_vendor=False, max_retries=3):
+                 detect_vendor=False, max_retries=3, **kwargs):
         # 세션 감지 성공: show version 출력 포함, eff_vendor는 접속 벤더와 동일
         return ({"status": "", "mac": "", "arp": "",
                  "version": "Cisco IOS XE Software, Version 17.09.01"}, vendor)
@@ -461,7 +461,7 @@ def test_worker_probe_fallback_on_driver_mismatch(temp_db, monkeypatch):
     calls = {"n": 0}
 
     def fake_ssh(switch, username, password, vendor, source_ip=None,
-                 detect_vendor=False, max_retries=3):
+                 detect_vendor=False, max_retries=3, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             assert vendor == "cisco_ios"
@@ -496,7 +496,7 @@ def test_worker_corrects_wrong_vendor(temp_db, monkeypatch):
     sid = db.save_switch(temp_db, "EXOS-MISREG", "10.0.0.9", "cisco")   # 잘못 등록
     credentials.save_credential(sid, "admin", "pw")
 
-    def fake_ssh(switch, username, password, vendor, source_ip=None, detect_vendor=False):
+    def fake_ssh(switch, username, password, vendor, source_ip=None, detect_vendor=False, **kwargs):
         assert detect_vendor is True
         # show version에서 ExtremeXOS 판별됐다고 가정 → 실제 OS 반환
         return ({"status": "", "mac": "", "arp": ""}, "extreme_exos")

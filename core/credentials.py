@@ -21,7 +21,7 @@ _session = {}
 _session_lock = threading.Lock()
 
 
-def save_credential(switch_id, username, password, persist=False):
+def save_credential(switch_id, username, password, persist=False, enable_secret=None):
     """Save credentials to session memory or DPAPI-encrypted DB.
 
     Args:
@@ -29,12 +29,15 @@ def save_credential(switch_id, username, password, persist=False):
         username: SSH username
         password: SSH password
         persist: If True, encrypt with DPAPI and save to DB (requires Windows)
+        enable_secret: enable 비밀번호가 로그인과 다른 장비용(선택).
+            세션에만 동반 저장 — 영속화는 호출부가 encrypt_text로 별도 처리.
 
     Returns:
         dict with 'ok' status and optional 'encrypted' flag
     """
     with _session_lock:
-        _session[switch_id] = {"username": username, "password": password}
+        _session[switch_id] = {"username": username, "password": password,
+                               "enable_secret": enable_secret or None}
 
     result = {"ok": True, "encrypted": False}
 

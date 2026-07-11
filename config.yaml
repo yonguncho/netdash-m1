@@ -48,6 +48,8 @@ collector:
       logging: "show log messages memory-buffer"
       sysinfo: "show switch"
       lldp: "show lldp neighbors detailed"
+      errors: "show ports rxerrors no-refresh"
+      txerrors: "show ports txerrors no-refresh"
     cisco_nxos:
       detail: "show interface"
       status: "show interface status"
