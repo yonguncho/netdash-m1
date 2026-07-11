@@ -25,15 +25,30 @@ def test_last_collected_set_on_done(temp_db):
 
 
 def test_client_ip_prefers_forwarded(client):
-    """접근 로그 IP: X-Forwarded-For가 있으면 실사용자 IP 기록(127.0.0.1 문제)."""
+    """접근 로그 IP: 신뢰(로컬/사설) 프록시 경유 시에만 XFF/X-Real-IP 채택.
+
+    보안(L): 외부 직접 접속에서 클라이언트가 헤더를 위조해 감사 로그를 오염시키지
+    않도록 remote_addr가 사설/루프백일 때만 포워딩 헤더를 신뢰한다.
+    """
     import app as _app
     ctx_app = client.application
+    # 신뢰 프록시(사설 remote_addr) → XFF 실사용자 IP 기록
     with ctx_app.test_request_context(
-            headers={"X-Forwarded-For": "10.92.170.55, 10.0.0.1"}):
+            headers={"X-Forwarded-For": "10.92.170.55, 10.0.0.1"},
+            environ_base={"REMOTE_ADDR": "127.0.0.1"}):
         assert _app._client_ip() == "10.92.170.55"
-    with ctx_app.test_request_context(headers={"X-Real-IP": "10.92.170.66"}):
+    with ctx_app.test_request_context(
+            headers={"X-Real-IP": "10.92.170.66"},
+            environ_base={"REMOTE_ADDR": "10.0.0.1"}):
         assert _app._client_ip() == "10.92.170.66"
-    with ctx_app.test_request_context():
+    # 외부(공인) 직접 접속 → XFF 위조 무시하고 remote_addr 기록
+    # (8.8.8.8은 실제 공인 = is_private False; 203.0.113.x 문서대역은 파이썬이
+    #  is_private True로 취급하므로 부적합)
+    with ctx_app.test_request_context(
+            headers={"X-Forwarded-For": "1.2.3.4"},
+            environ_base={"REMOTE_ADDR": "8.8.8.8"}):
+        assert _app._client_ip() == "8.8.8.8"
+    with ctx_app.test_request_context(environ_base={"REMOTE_ADDR": "10.0.0.5"}):
         assert _app._client_ip()  # remote_addr 폴백
 
 

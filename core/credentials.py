@@ -107,6 +107,13 @@ def encrypt_credential(username, password):
     if not IS_WINDOWS:
         return None
 
+    # 저장 포맷이 'username|password'라 username에 '|'가 있으면 decrypt 시
+    # split('|',1)에서 계정/비밀번호가 잘못 분리된다 → 저장을 생략(세션 수집은
+    # dict라 무관, 다음 수집 때 재입력). validate_credential은 '|'를 허용하므로 여기서 방어.
+    if username and "|" in username:
+        logger.warning("[DPAPI] username에 '|' 포함 — 저장 생략(파싱 충돌 방지)")
+        return None
+
     try:
         plaintext = f"{username}|{password}"
         encrypted_bytes = win32crypt.CryptProtectData(plaintext.encode("utf-8"), None, None, None, None, 0x01)

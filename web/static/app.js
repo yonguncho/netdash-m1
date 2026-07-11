@@ -969,7 +969,8 @@ function _applySwSearch(list) {
 function renderSwitchTable(switches) {
   switches = _applySwSearch(switches);
   var tbody = document.getElementById("switch-table-body");
-  if (tbody && !switches.length) {
+  if (!tbody) return;  // 요소 부재 시 조기 반환(가드 역전 → tbody.innerHTML 크래시 방지)
+  if (!switches.length) {
     tbody.innerHTML = "<tr><td colspan='13' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
     var allChk0 = document.getElementById("sw-check-all");
     if (allChk0) allChk0.checked = false;
@@ -1146,7 +1147,12 @@ function loadVlans() {
   }
   fetch("/api/vlans").then(function(r) { return r.json(); }).then(function(data) {
     renderVlanAccordion(data.vlans || []);
-  }).catch(function(e) { console.error("vlan load:", e); });
+  }).catch(function(e) {
+    console.error("vlan load:", e);
+    // 로딩 문구가 영구 잔류하지 않도록 실패 안내로 교체
+    var h = document.getElementById("vlan-accordion");
+    if (h) h.innerHTML = "<p style='color:#991b1b'>VLAN 현황을 불러오지 못했습니다. 새로고침 후 다시 시도하세요.</p>";
+  });
 }
 
 function renderVlanAccordion(rows) {
@@ -2149,7 +2155,11 @@ function loadTopology() {
   fetch("/api/topology").then(function (r) { return r.json(); }).then(function (data) {
     _topoData = { nodes: data.nodes || [], links: data.links || [] };
     renderTopology();
-  }).catch(function (e) { console.error("topology:", e); });
+  }).catch(function (e) {
+    console.error("topology:", e);
+    var h = document.getElementById("topology-canvas");
+    if (h) h.innerHTML = "<p style='color:#991b1b;padding:16px'>토폴로지를 불러오지 못했습니다. 새로고침 후 다시 시도하세요.</p>";
+  });
 }
 
 function renderTopology() {

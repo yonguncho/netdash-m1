@@ -1016,6 +1016,14 @@ def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=No
             # 바인딩 소켓도 사라져 재시도가 깨졌다. 원본 device는 retry 위해 유지하고,
             # 함수 종료(return/raise) 시 GC로 정리된다.
             if 'conn_device' in locals():
+                # source_ip 바인딩 소켓(netbind)은 접속/인증 실패 시 paramiko가
+                # 닫아주지 않아 재시도마다 핸들 누수 → 명시적 close(이중 close 무해).
+                _sock = conn_device.get("sock")
+                if _sock is not None:
+                    try:
+                        _sock.close()
+                    except Exception:
+                        pass
                 conn_device.clear()
             username = None
             password = None

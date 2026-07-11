@@ -13,14 +13,21 @@ from . import collector  # _sanitize_error_msg 재사용
 
 logger = logging.getLogger(__name__)
 
-# UI vendor 값 → netmiko device_type 매핑
+# UI vendor 값 → netmiko device_type 매핑. collector._NETMIKO_VENDOR와 별칭을
+# 맞춰 '수집은 되는데 연결 테스트만 실패'하는 불일치를 없앤다(alteon 계열은
+# netmiko 미지원이라 여기 없음 — 호출부에서 별도 처리).
 _NETMIKO_TYPE = {
     "cisco": "cisco_ios", "arista": "arista_eos", "extreme": "extreme_exos",
-    "juniper": "juniper_junos", "paloalto": "paloalto_panos",
+    "extremexos": "extreme_exos", "extreme_xos": "extreme_exos",
+    "extreme-xos": "extreme_exos", "exos": "extreme_exos",
+    "extremenetworks": "extreme_exos",
+    "juniper": "juniper_junos",
+    "paloalto": "paloalto_panos",
     "nexus": "cisco_nxos", "cisco_nexus": "cisco_nxos",
     "unknown": "cisco_ios", "": "cisco_ios",  # 미지정 → IOS로 시도
     "cisco_ios": "cisco_ios", "arista_eos": "arista_eos", "extreme_exos": "extreme_exos",
     "cisco_nxos": "cisco_nxos", "paloalto_panos": "paloalto_panos",
+    "juniper_junos": "juniper_junos",
 }
 
 

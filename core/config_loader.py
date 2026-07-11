@@ -162,10 +162,32 @@ def _ensure_local_token() -> str:
 
     try:
         token_path.write_text(token, encoding="utf-8")
+        _restrict_token_permissions(str(token_path))  # DB와 동일하게 owner-only
         utils.log_event("info", "api_token_persisted", path=str(token_path))
     except OSError:
         utils.log_event("warning", "api_token_persist_failed", path=str(token_path))
     return token
+
+
+def _restrict_token_permissions(path: str) -> None:
+    """토큰 파일을 소유자 전용으로 제한(외부 바인딩 시 유일한 인증 수단).
+
+    DB 파일(db._restrict_db_permissions)과 동일 정책. 실패해도 무해(best-effort).
+    """
+    import os
+    try:
+        if os.name == "nt":
+            import subprocess
+            CREATE_NO_WINDOW = 0x08000000
+            subprocess.run(
+                ["icacls", path, "/inheritance:r", "/grant:r",
+                 "%s:F" % os.getenv("USERNAME", "SYSTEM")],
+                check=False, capture_output=True, timeout=10,
+                creationflags=CREATE_NO_WINDOW)
+        else:
+            os.chmod(path, 0o600)
+    except Exception:
+        pass
 
 
 def load_config(path: str = "config.yaml", demo_mode: bool = False) -> Config:

@@ -122,17 +122,28 @@ def _server_eth_ip():
 def _client_ip():
     """실사용자 IP 판별 — 프록시/포워딩 뒤에서도 이더넷 IP가 기록되도록.
 
-    우선순위: X-Forwarded-For → X-Real-IP → remote_addr.
+    우선순위: (신뢰 프록시 경유 시) X-Forwarded-For → X-Real-IP → remote_addr.
     remote_addr가 루프백(127.0.0.1/localhost/::1 = 같은 PC 접속)이면 접근 로그에
     127.0.0.1 대신 서버 PC의 이더넷 IP로 표기(사용자 구분 목적).
+
+    보안: XFF/X-Real-IP는 클라이언트가 위조할 수 있으므로 remote_addr가 신뢰
+    가능한(로컬/사설) 프록시일 때만 채택한다. 외부에서 직접 접속(공인 remote_addr)한
+    경우 헤더를 무시하고 remote_addr를 기록해 감사 로그 위조를 막는다.
     """
-    xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-    if xff:
-        return xff[:64]
-    xri = (request.headers.get("X-Real-IP") or "").strip()
-    if xri:
-        return xri[:64]
     ra = request.remote_addr or "unknown"
+    _trusted = ra in ("127.0.0.1", "localhost", "::1")
+    if not _trusted:
+        try:
+            _trusted = ipaddress.ip_address(ra).is_private
+        except ValueError:
+            _trusted = False
+    if _trusted:
+        xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if xff:
+            return xff[:64]
+        xri = (request.headers.get("X-Real-IP") or "").strip()
+        if xri:
+            return xri[:64]
     if ra in ("127.0.0.1", "localhost", "::1"):
         eth = _server_eth_ip()
         if eth:
@@ -268,7 +279,10 @@ def create_app(demo_mode=None):
                 # Production mode requires api_token to be set in config
                 log_event("error", "api_token_not_configured", path=request.path)
                 return jsonify({"error": "server configuration error"}), 500
-            if not hmac.compare_digest(token, expected_token):
+            # bytes 비교: 비ASCII 토큰 헤더 쌍에서 compare_digest가 TypeError를
+            # 던져 500(미처리 예외)이 되던 것 방지 → 정상적으로 401 처리.
+            if not hmac.compare_digest(token.encode("utf-8", "replace"),
+                                       expected_token.encode("utf-8", "replace")):
                 log_event("warning", "api_invalid_token", path=request.path)
                 return jsonify({"error": "unauthorized"}), 401
 
@@ -290,7 +304,7 @@ def create_app(demo_mode=None):
                 return "방화벽 등록"
             if p == "/api/upload":
                 return "엑셀 업로드"
-            if p == "/api/import-inventory":
+            if p == "/api/switches/import-inventory":  # 실제 라우트(app.py:586)
                 return "장비 일괄등록"
             if p == "/api/facility/collect":
                 return "설비 대역 수집"
@@ -1289,6 +1303,20 @@ def create_app(demo_mode=None):
                 return jsonify({"error": "invalid subnet (CIDR)"}), 400
             if net.num_addresses > 1024:
                 return jsonify({"error": "대역이 너무 큽니다(/22 이하 권장)"}), 400
+            # SSRF 유사 차단: allowed_ip_ranges가 설정돼 있으면 스캔 대역이 그 안에
+            # 포함돼야 함(게이트웨이 스위치 경유로 임의 대역 ping sweep 지시 방지).
+            _allowed = config.collector.get("allowed_ip_ranges")
+            if _allowed:
+                _ok = False
+                for _cidr in _allowed:
+                    try:
+                        if net.subnet_of(ipaddress.IPv4Network(_cidr, strict=False)):
+                            _ok = True
+                            break
+                    except (ipaddress.AddressValueError, ValueError, TypeError):
+                        continue
+                if not _ok:
+                    return jsonify({"error": "허용되지 않은 대역입니다(allowed_ip_ranges)"}), 400
             sw = db.get_switch(db_path, switch_id)
             if not sw:
                 return jsonify({"error": "switch not found"}), 404
@@ -1421,6 +1449,11 @@ def create_app(demo_mode=None):
                     ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
                 except ValueError as e:
                     return jsonify({"error": str(e)}), 400
+            # device_type 화이트리스트 검증(bulk-set-type과 동일 정책) — 임의 값이
+            # 저장돼 UI 드롭다운/토폴로지 분류와 어긋나는 것 방지. 빈 값='미지정' 허용.
+            _dt = data.get("device_type") if "device_type" in data else None
+            if _dt not in (None, "") and _dt not in DEVICE_TYPES:
+                return jsonify({"error": "invalid device_type"}), 400
             try:
                 ok = db.update_switch(
                     db_path, switch_id,
@@ -1431,7 +1464,7 @@ def create_app(demo_mode=None):
                             if (data.get("vendor") or "").strip() else None),
                     location=(data.get("location") or "").strip() or None,
                     note=(data.get("note") if "note" in data else None),
-                    device_type=(data.get("device_type") if "device_type" in data else None),
+                    device_type=_dt,
                 )
             except sqlite3.IntegrityError:
                 return jsonify({"error": "이미 사용 중인 이름 또는 IP입니다"}), 409
@@ -1912,6 +1945,7 @@ def create_app(demo_mode=None):
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/<int:switch_id>/collect", methods=["POST"])
+    @rate_limit("collect_switch", max_requests=30, window_seconds=60)
     def collect_switch_endpoint(switch_id):
         log_event("info", "collect_requested", switch_id=switch_id)
 

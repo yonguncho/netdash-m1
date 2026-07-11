@@ -33,6 +33,7 @@ _KIND_KO = {
     "new_device": "새 설비", "device_offline": "설비 연결 끊김", "device_online": "설비 복구",
     "device_moved": "설비 이동", "config_changed": "설정 변경",
     "switch_unreachable": "스위치 연결 실패", "switch_recovered": "스위치 복구",
+    "firewall_unreachable": "방화벽 연결 실패", "firewall_recovered": "방화벽 복구",
     "flapping": "포트 flapping", "looping": "포트 looping",
 }
 
