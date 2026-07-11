@@ -1,7 +1,7 @@
 {
-  "stage": "m10_complete",
+  "stage": "v3.71.0_followups_complete",
   "status": "released",
-  "timestamp": "2026-06-29T00:00:00Z",
+  "timestamp": "2026-07-11T05:00:00Z",
   "milestone": "M10",
   "m10_firewall": {
     "date": "2026-06-29",
@@ -16,7 +16,11 @@
       "netdash.spec": "requests/paramiko/netmiko hiddenimports",
       "tests": "test_m10_firewall(13)+api(11)+ui(6) = 30개"
     },
-    "tests": {"total": 146, "passed": 146, "regression": 0},
+    "tests": {
+      "total": 146,
+      "passed": 146,
+      "regression": 0
+    },
     "code_review": {
       "reviewer": "Claude Opus 4.8",
       "rounds": 2,
@@ -26,60 +30,13 @@
   },
   "m9_milestone": "M9",
   "release": {
-    "latest": "v3.30.0",
-    "date": "2026-07-02",
-    "scope": "관제 월보드(/wall)+포트 이력+접근 로그. 누적: v3.19 서버실/VLAN그룹/일괄삭제, v3.20 일괄수집+설비 재매칭+SSH레거시(paramiko 3.5.1), v3.21 백본직결+FW IP/위치, v3.22 위치통합+검색강화+설비추출, v3.23 NX-OS 포트채널+엑셀SW/FW구분, v3.24 벤더학습+EXOS실명령, v3.25 Alteon, v3.26 알람(변경감지), v3.27 보고서재설계, v3.28 도달성감시+이동감지+자동스캔+config백업, v3.29 토폴로지+이메일알람+diff뷰어, v3.30 월보드+포트이력+감사로그",
-    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.30.0",
-    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.30.0/netdash.exe",
-    "facility_note": "core/facility.py: 11번 스위치 SSH→대역 ping sweep(repeat1 timeout1)→show ip arp→db.get_mac_to_switchport(최신스냅샷 MAC→스위치/포트) 대조→facility_hosts. 백그라운드 스레드+_status 진행률. POST /api/facility/collect(/22 제한, 저장cred), GET /api/facility. UI 설비현황 탭(2번째). ping은 11번 스위치가 직접(PC→설비 방화벽차단).",
-    "enable_note": "v3.16.2: user모드(>) 장비는 show 명령 거부(% Invalid input)→_ssh_collect가 secret=password+conn.enable() 진입. enable secret이 login과 다르면 별도 입력 필드 필요(후속).",
-    "followups": "①Arista/Extreme/NX-OS에 show logging·errors·포트상태세분화 동일 적용(현재 cisco_ios만) ②위치별 서버실 랙 뷰(CSS, TPS 위치 기반) ③log_analyzer flap 임계값 시간윈도우(현재 횟수만)",
-    "tps_location": "core/tps_location.py: F{phase}B{building}_{floor}F{tps} 패턴(접두 무관 search). Phase1/2 building 매핑. app /api/state·detail에 tps_location 라벨 주입. UI 카드/표/상세/위치필터.",
-    "pending_requests": "①엑셀 일괄등록(IP/SUBNET/HOSTNAME→스위치? 호스트?-사용자확인중) ②위치별 그룹핑/서버실 랙 뷰(CSS, TPS 위치 기반). Higgsfield는 아이디어만(미반영, 정적이미지용).",
-    "search_note": "최상단 검색=db.search_everywhere(LIKE). 소스 7종: 등록 스위치/방화벽(IP·이름), 스위치 ARP(IP·MAC), 방화벽 ARP(IP·MAC), MAC테이블(최신 스냅샷, MAC), 설비현황 facility_hosts(IP·MAC), 장부 hosts(IP·이름). v3.18.2에서 설비·MAC테이블·ARP-MAC 추가(이전엔 설비IP/MAC 검색시 0건 버그). /api/search 응답 {results,count}.",
-    "ios_cmd_note": "cisco_ios 명령 복수형(show interfaces status/description) — IOS/IOS-XE 공통. 단수는 IOS-XE/NX-OS만. NX-OS는 cisco_nxos(show interface brief). unknown/빈벤더→cisco_ios fallback.",
-    "recent_3_7_8": "v3.7.0 NX-OS벤더, v3.7.1 IOS-XE show interface status+dot MAC버그, v3.7.2 상세보기버그+검색(상세/방화벽ARP, tbl-search 위임), v3.8.0 VLAN이름(vlan_names테이블/parse_vlans/get_vlan_summary 합집합)",
-    "pending_user_verify": "실장비(NX-OS/IOS-XE) 수집으로 arp/status/description/vlan/mac 정상 확인 + IP검색(/api/search, 수집ARP 의존) 동작 확인 대기.",
-    "nxos_note": "'% Invalid command at ^ marker'=NX-OS 시그니처(IOS는 'Invalid input detected'). NX-OS는 show interface brief/description/show ip arp, mac은 dot형식+* 플래그. cisco_nxos 벤더(config/parser/_norm_vendor nexus→cisco_nxos/connectivity/UI). 파서는 표준 NX-OS 형식 기반(사용자 실장비 검증 필요).",
-    "dpapi_bug": "credentials.decrypt_text/decrypt_credential: win32crypt.CryptUnprotectData는 (설명str, 데이터bytes) 튜플 반환. 데이터는 [1]. [0](빈 설명)을 decode하면 'str has no attribute decode'→복호화 항상 실패. pywin32 설치 전엔 IS_WINDOWS=False로 가려졌다가 v3.6.0 설치 후 노출, v3.6.1 수정.",
-    "pywin32_rule": "빌드 PC에 pywin32 실설치 필수! 미설치면 win32crypt 미번들→encrypt_text None→DPAPI 자격증명 저장 실패(has_credential 항상 False). netmiko와 동일 패턴. spec hiddenimports에 win32crypt 명시. 빌드 전 `python -c \"import win32crypt\"` 확인.",
-    "fortigate_arp_rule": "FortiGate ARP REST 경로는 FortiOS 버전별 상이. _ARP_PATHS=(network/arp 7.x, router/arp) 순서 시도, 모두 404면 빈 리스트. 인터페이스는 cmdb/system/interface.",
-    "source_ip_note": "연결테스트는 db.get_setting('source_ip')로 접근IP 바인딩(코드 정상). v3.5.3에서 응답에 source_ip 노출+UI 표시. 미설정(자동)이면 OS 기본→127 등 임의 가능. 사용자는 헤더 '접근 IP' 드롭다운에서 이더넷 IP 선택 필수.",
-    "remaining_cosmetic": "renderFirewalls interface_count/arp_count는 list_firewalls SELECT *에 없어 항상 '-'(수집 개수 미표시). cosmetic, 추후 서브쿼리 조인.",
-    "csp_rule": "CSP: script-src 'self'(inline onclick 차단→이벤트위임 필수, test_appjs_no_inline_onclick 가드) + style-src 'self' 'unsafe-inline'(inline style 허용, v3.5.2). 동적 버튼은 data-action/data-payload.",
-    "netmiko_rule": "read_timeout은 send_command() 인자. ConnectHandler 생성자엔 conn_timeout만(read_timeout 넣으면 unexpected keyword argument 오류).",
-    "build_env_rule": "빌드 PC에 netmiko 실설치 필수! pytest는 netmiko를 monkeypatch해 미설치여도 통과하지만, PyInstaller collect_all('netmiko')은 미설치 시 빈 결과→exe에 netmiko 누락→런타임 'No module named netmiko'. 빌드 전 `python -c \"import netmiko\"` 확인. requirements.txt에 있어도 실제 pip install 됐는지 별개.",
-    "recent": [
-      "v3.3.1 스위치 등록 DB오류+삭제기능", "v3.3.2 방화벽 삭제 수정",
-      "v3.4.0 M12 출발지 IP 바인딩"
-    ],
-    "fixed_bug": "v3.4.2: collector._ssh_collect retry 버그 수정(conn_device 복사본만 정리, 원본 device 유지). source 바인딩이 retry에도 적용.",
-    "vendor_fix": "v3.5.0: 수집 'unsupported device_type' 원인=수집 경로가 raw vendor(cisco)를 netmiko device_type으로 사용(연결테스트는 매핑함). collector._norm_vendor(cisco→cisco_ios)로 정규화, _worker_loop에서 적용. 연결테스트는 OK인데 수집만 실패하면 이 매핑 누락 의심.",
-    "edit_feature": "v3.5.0: 스위치/방화벽 수정(PUT /api/switches|firewalls/<id>) + UI 수정 버튼(add 모달 재사용, _editSwitchId/_editFirewallId). 방화벽 수정은 cred_blob 보존. WARNING: 방화벽 vendor 변경 시 기존 cred 형식 불일치 가능(수용).",
-    "asset": "netdash.exe (29MB)",
-    "repo_visibility": "PUBLIC (외부 다운로드 가능, 익명 200 검증)",
-    "history": [
-      "v3.0.0 (M5~M8) — v2.0.0이 M4 점유로 메이저 건너뜀",
-      "v3.1.0 (M9) — 마이너",
-      "v3.1.1 — 핫픽스: 토큰 미설정 production 크래시 수정(loopback 자동 토큰)",
-      "v3.1.2 — 핫픽스: 브라우저 자동오픈 + icacls 콘솔 깜빡 제거",
-      "v3.1.3 — console=True 전환(백도어 패턴 회피, 미릴리스/v3.1.4에 통합)",
-      "v3.1.4 — console=True + 로컬 인증 면제(unauthorized 수정) + Juniper 제거",
-      "v3.2.0 — M10 방화벽 현황(Palo Alto / Fortinet)",
-      "v3.2.1 — 핫픽스: 수동 추가 ON CONFLICT 오류(구버전 DB) 수정",
-      "v3.2.2 — 핫픽스: ON CONFLICT 전면 제거(hosts/ledger/firewall 포함)",
-      "v3.3.0 — M11: 연결테스트 + 방화벽 자격증명 저장(DPAPI) + PC 이더넷 IP",
-      "v3.3.1 — 스위치 등록 DB오류(컬럼 누락) 수정 + 스위치/방화벽 삭제 기능"
-    ],
-    "db_legacy_rule": "구버전 스키마 DB 호환: ON CONFLICT 금지(수동 UPSERT) + 신규 INSERT/UPDATE는 PRAGMA table_info로 존재 컬럼만 동적 사용(import_switches_bulk 참고). 컬럼 누락 'no such column' 방지.",
-    "on_conflict_resolved": "db.py의 모든 ON CONFLICT를 수동 UPSERT로 전환 완료. 신규 INSERT 시 ON CONFLICT 사용 금지(구버전 DB 호환).",
-    "next_milestone": "M11 — 장비 연결성/등록 개선 (사용자 요청)",
-    "m11_plan": {
-      "f1_연결테스트": "스위치(netmiko)+방화벽(REST/SSH) IP+계정 입력 시 접근 가능 여부 선검증 엔드포인트",
-      "f2_방화벽_API_Key저장": "firewalls에 cred_blob(DPAPI 암호화) + 추가 모달 API Key 필드 + collect 시 저장 키 사용 + 연동상태 표시",
-      "f3_PC이더넷IP": "PC NIC IP 목록 조회·UI 표시/선택 (#3 = 정보 표시/선택으로 확정). 127.0.0.1이 아닌 실제 이더넷 IP 안내"
-    },
-    "known_issue": "onefile exe 첫 /api/report 요청은 openpyxl 초기 로드로 ~15s 지연(이후 빠름, 기능 정상). 성능 개선은 추후."
+    "latest": "v3.71.0",
+    "date": "2026-07-11",
+    "scope": "후속작업 일괄 정리: Arista 포트상태 세분화(상세 괄호상태+상태표)+속도/듀플렉스, EXOS rx/txerrors 에러카운터, flap 10분 시간윈도우(총횟수 폴백), enable secret 별도입력(DPAPI blob enable_secret_<id>), openpyxl 예열(첫 보고서 지연 해소). 상세 이력은 RELEASE_NOTES.md가 정본.",
+    "github": "https://github.com/yonguncho/netdash-m1/releases/tag/v3.71.0",
+    "download": "https://github.com/yonguncho/netdash-m1/releases/download/v3.71.0/netdash.exe",
+    "tests": "539 passed",
+    "followups_remaining": "①EXOS·Alteon 실장비 수집 raw_outputs 검증(하드웨어 필요) ②위치별 서버실 랙 뷰(CSS)"
   },
   "m9_report_builder": {
     "date": "2026-06-28",
