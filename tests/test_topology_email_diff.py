@@ -309,6 +309,11 @@ def test_topology_zone_view():
     assert "vipGroup" in js and "haPartner" in js   # 같은 host = HA 쌍
     assert "internetFwGroup" in js                  # 인터넷 FW 쌍 중심축 표시
     assert "_vipKey" in js                          # Backup 중복 링크 제거(VIP 그룹당 1회)
+    # Contrail식 인터랙티브: 드래그 재배치 + 위치 저장 + 화면맞춤/초기화
+    assert "_topoBindDrag" in js and "_topoLayout" in js   # 드래그 + 저장(persist)
+    assert "netdash_topo_layout" in js              # localStorage 저장 키
+    assert "svgEl._fit" in js                       # 화면 맞춤(fit-to-view)
+    assert 'id="btn-topo-fit"' in html and 'id="btn-topo-reset-layout"' in html
 
 
 def test_serial_c9300l_formats():

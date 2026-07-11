@@ -2046,6 +2046,16 @@ function doSearch() {
 // ─── 토폴로지: [서버실 구성도] / [TPS 구역도] 2탭 (중간 카드, 가시성 우선) ──
 var _topoData = null;    // {nodes, links}
 var _topoMode = "zone";  // 단일 뷰: 존·대역 구성도(SVG 선+포트). core/tps 코드는 보존(미노출)
+// Contrail식 인터랙티브: 드래그로 재배치한 노드 위치를 저장(세션 간 유지)
+var _topoLayout = (function () {
+  try { return JSON.parse(localStorage.getItem("netdash_topo_layout") || "{}") || {}; }
+  catch (e) { return {}; }
+})();
+var _topoRenderedPos = {};   // 현재 렌더의 노드 절대 위치(드래그 기준)
+function _saveTopoLayout() {
+  try { localStorage.setItem("netdash_topo_layout", JSON.stringify(_topoLayout)); } catch (e) {}
+}
+function _resetTopoLayout() { _topoLayout = {}; _saveTopoLayout(); renderTopology(); }
 var _topoZone = null;    // TPS 모드에서 선택된 구역
 var _topoExpandL2 = false;  // false=L2를 대역 뱃지로 접음(기본), true=개별 노드로 펼침
 var _topoOpenBand = null;   // 드릴다운으로 펼쳐본 대역 key
@@ -2849,7 +2859,8 @@ function _renderZoneMap(host) {
   if (internetSw) { placeRow([internetSw], cx, yy); yy += 78; }
   if (internetFwGroup.length) { placeRow(internetFwGroup, cx, yy); yy += 78; }
   if (centralBBs.length) { placeRow(centralBBs, cx, yy); yy += 78; }
-  var FW_Y = yy + 46, BB_Y = FW_Y + 74, L3_Y = BB_Y + 74, SUB_Y = L3_Y + 32;
+  var FW_Y = yy + 46, BB_Y = FW_Y + 74, L3_Y = BB_Y + 74;
+  var SUB_DY = 24;   // 대역 박스는 각 L3 노드 바로 아래(노드 위치 따라감)
   var zx = PADX, boxes = [];
   zones.forEach(function (z) {
     var zcx = zx + z._w / 2;
@@ -2860,21 +2871,57 @@ function _renderZoneMap(host) {
     var tw = slots * DW + (slots - 1) * DGAP, sx = zcx - tw / 2 + DW / 2;
     z.dists.forEach(function (d, i) { pos[d.node.id] = { x: sx + i * (DW + DGAP), y: L3_Y }; });
     z._extraX = z.zSubs.length ? (sx + z.dists.length * (DW + DGAP)) : null;
-    boxes.push({ x: zx, y: FW_Y - 32, w: z._w, h: (SUB_Y + z._maxSub * 15 + 20) - (FW_Y - 32), label: z.label });
+    var mem = z.fws.map(function (f) { return f.id; })
+      .concat(z.bbs.map(function (b) { return b.id; }))
+      .concat(z.dists.map(function (d) { return d.node.id; }));
+    boxes.push({ members: mem, dists: z.dists, extraX: z._extraX, extraN: z.zSubs.length,
+                 maxSub: z._maxSub, label: z.label });
     zx += z._w + ZGAP;
   });
   if (orphanDists.length) {
     var tw2 = orphanDists.length * DW, sx2 = zx + orphW / 2 - tw2 / 2 + DW / 2;
     orphanDists.forEach(function (d, i) { pos[d.id] = { x: sx2 + i * DW, y: L3_Y }; });
-    boxes.push({ x: zx, y: FW_Y - 32, w: orphW, h: (SUB_Y + 60) - (FW_Y - 32), label: "미분류 (연결·Zone 미확인 — 재수집 시 편입)", orphan: true });
+    boxes.push({ members: orphanDists.map(function (d) { return d.id; }), orphanNodes: orphanDists,
+                 maxSub: 4, label: "미분류 (연결·Zone 미확인 — 재수집 시 편입)", orphan: true });
   }
+
+  // ── 저장된 드래그 위치 적용(Contrail식 persist) ──
+  Object.keys(_topoLayout).forEach(function (id) { if (pos[id]) pos[id] = { x: _topoLayout[id].x, y: _topoLayout[id].y }; });
+  _topoRenderedPos = pos;
+
+  // 존 박스 경계를 실제(드래그 반영) 노드 위치로 재계산 → 박스가 노드를 감쌈
+  boxes.forEach(function (b) {
+    var xs = [], ys = [];
+    b.members.forEach(function (id) { if (pos[id]) { xs.push(pos[id].x); ys.push(pos[id].y); } });
+    if (!xs.length) { b.skip = true; return; }
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+    // 대역 박스(각 L3 아래)까지 포함해 하단 확장
+    var subBottom = maxY;
+    (b.dists || []).forEach(function (d) {
+      var p = pos[d.node.id]; if (p) subBottom = Math.max(subBottom, p.y + SUB_DY + Math.max(1, d.subs.length) * 15 + 8);
+    });
+    (b.orphanNodes || []).forEach(function (d) {
+      var p = pos[d.id]; if (p) subBottom = Math.max(subBottom, p.y + SUB_DY + 4 * 15 + 8);
+    });
+    var padX = DW / 2 + 8;
+    b.x = minX - padX; b.w = (maxX - minX) + padX * 2;
+    b.y = minY - 34; b.h = (subBottom + 12) - b.y;
+  });
+
+  // 전체 크기(드래그로 벗어난 노드까지 포함)
+  var allX = [], allY = [];
+  Object.keys(pos).forEach(function (id) { allX.push(pos[id].x); allY.push(pos[id].y); });
   var maxSub = zones.reduce(function (m, z) { return Math.max(m, z._maxSub); }, 0);
-  var totalH = Math.max(680, SUB_Y + maxSub * 15 + 50);
+  var totalW2 = Math.max(totalW, (allX.length ? Math.max.apply(null, allX) : 0) + 220);
+  totalW = totalW2;
+  var totalH = Math.max(680, (allY.length ? Math.max.apply(null, allY) : 0) + maxSub * 15 + 90);
 
   var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
     " preserveAspectRatio='xMidYMid meet' viewBox='0 0 " + totalW + " " + totalH + "' style='cursor:grab;display:block'>"];
   // 존 박스
   boxes.forEach(function (b) {
+    if (b.skip) return;
     var c = b.orphan ? "#64748b" : "#8b5cf6";
     svg.push("<rect x='" + b.x + "' y='" + b.y + "' width='" + b.w + "' height='" + b.h +
       "' rx='12' fill='" + c + "' fill-opacity='0.05' stroke='" + c + "' stroke-opacity='0.4' stroke-width='1.4' stroke-dasharray='3 4'/>");
@@ -2985,11 +3032,11 @@ function _renderZoneMap(host) {
   });
   orphanDists.forEach(function (d) { drawNode(d); });
   // L3/L4 밑 대역 텍스트(L2는 아이콘 없이 여기 표기)
-  function subText(centerX, subs, title, width) {
+  function subText(centerX, topY, subs, title, width) {
     var w = width || (DW - 20), bx = centerX - w / 2, h = subs.length * 15 + (title ? 16 : 4) + 6;
-    svg.push("<rect x='" + bx + "' y='" + SUB_Y + "' width='" + w + "' height='" + h +
+    svg.push("<rect x='" + bx + "' y='" + topY + "' width='" + w + "' height='" + h +
       "' rx='7' fill='#0e2a2a' stroke='#14b8a6' stroke-width='1.1'/>");
-    var ty = SUB_Y + 13;
+    var ty = topY + 13;
     if (title) { svg.push("<text x='" + (bx + 7) + "' y='" + ty + "' fill='#5eead4' font-size='8.5' font-weight='700'>" + escHtml(title) + "</text>"); ty += 15; }
     subs.forEach(function (c) { svg.push("<text x='" + (bx + 7) + "' y='" + ty + "' fill='#a7f3d0' font-size='9.5'>🌐 " + escHtml(c) + "</text>"); ty += 15; });
     if (!subs.length) svg.push("<text x='" + (bx + 7) + "' y='" + ty + "' fill='#64748b' font-size='9' font-style='italic'>대역 정보 없음</text>");
@@ -2997,23 +3044,25 @@ function _renderZoneMap(host) {
   zones.forEach(function (z) {
     // 정확히 2대인 이중화 쌍만 대역 박스 1개로 병합(동일 SVI 공유), 그 외는 장비별 박스
     (z.distGroups || []).forEach(function (g) {
+      var ps = g.items.map(function (d) { return pos[d.node.id]; }).filter(Boolean);
+      if (!ps.length) return;
+      var topY = Math.min.apply(null, ps.map(function (p) { return p.y; })) + SUB_DY;
       if (g.items.length === 2) {
-        var xs = g.items.map(function (d) { return (pos[d.node.id] || {}).x; }).filter(function (x) { return x != null; });
-        if (!xs.length) return;
-        var cxg = (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2;
-        subText(cxg, g.subs, null, g.items.length * DW - 20);
+        var cxg = (Math.min.apply(null, ps.map(function (p) { return p.x; })) +
+          Math.max.apply(null, ps.map(function (p) { return p.x; }))) / 2;
+        subText(cxg, topY, g.subs, null, g.items.length * DW - 20);
       } else {
-        g.items.forEach(function (d) { var p = pos[d.node.id]; if (p) subText(p.x, d.subs, null); });
+        g.items.forEach(function (d) { var p = pos[d.node.id]; if (p) subText(p.x, p.y + SUB_DY, d.subs, null); });
       }
     });
-    if (z.zSubs.length && z._extraX != null) subText(z._extraX, z.zSubs, "기타(직결 L2)", DW - 20);
-    else if (z.zSubs.length && !z.dists.length) subText(z._cx, z.zSubs, "기타(직결 L2)", DW - 20);
+    if (z.zSubs.length && z._extraX != null) subText(z._extraX, L3_Y + SUB_DY, z.zSubs, "기타(직결 L2)", DW - 20);
+    else if (z.zSubs.length && !z.dists.length) subText(z._cx, L3_Y + SUB_DY, z.zSubs, "기타(직결 L2)", DW - 20);
   });
   orphanDists.forEach(function (d) {
     var p = pos[d.id]; if (!p) return;
     var subs = Object.keys(cfgSubs(d)).sort();
     if (!subs.length) { var c = _ipBand(d.ip); if (c) subs = [c]; }   // config 없으면 관리 IP /24
-    subText(p.x, subs, null);
+    subText(p.x, p.y + SUB_DY, subs, null);
   });
   svg.push("</svg>");
 
@@ -3029,6 +3078,7 @@ function _renderZoneMap(host) {
   _topoBindTips(host);
   _topoBindNodeEvents(host);
   _topoBindZoomPan(host, totalW, totalH);
+  _topoBindDrag(host);
 }
 function _zoneLegend() {
   return "<div style='display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:8px 14px;color:#94a3b8;font-size:11px;border-bottom:1px solid #1e293b'>" +
@@ -3205,6 +3255,7 @@ function _topoBindNodeEvents(host) {
   });
   host.querySelectorAll(".topo-node").forEach(function (g) {
     g.addEventListener("click", function () {
+      if (g._justDragged) { g._justDragged = false; return; }   // 드래그 직후 상세 억제
       var id = g.getAttribute("data-swid");
       if (g.getAttribute("data-ghost") === "1") { _topoMode = "core"; renderTopology(); return; }
       if (g.getAttribute("data-kind") === "fw") { showFirewallDetail(parseInt(id.slice(1), 10)); return; }
@@ -3252,6 +3303,8 @@ function _topoBindZoomPan(host, width, height) {
   if (!svgEl) return;
   var vb = { x: 0, y: 0, w: width, h: height };
   function applyVB() { svgEl.setAttribute("viewBox", vb.x + " " + vb.y + " " + vb.w + " " + vb.h); }
+  svgEl._vb = vb; svgEl._applyVB = applyVB;   // 드래그/맞춤에서 재사용
+  svgEl._fit = function () { vb.x = 0; vb.y = 0; vb.w = width; vb.h = height; applyVB(); };
   svgEl.addEventListener("wheel", function (e) {
     e.preventDefault();
     var scale = e.deltaY > 0 ? 1.15 : 1 / 1.15;
@@ -3265,7 +3318,10 @@ function _topoBindZoomPan(host, width, height) {
     vb.w = nw; vb.h = nh; applyVB();
   }, { passive: false });
   var drag = null;
-  svgEl.addEventListener("mousedown", function (e) { drag = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y }; svgEl.style.cursor = "grabbing"; });
+  svgEl.addEventListener("mousedown", function (e) {
+    if (e.target.closest && e.target.closest(".topo-node")) return;   // 노드=드래그가 처리
+    drag = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y }; svgEl.style.cursor = "grabbing";
+  });
   // window 리스너는 추적 등록 — 재렌더 시 _topoWinClear로 정리(누수 방지)
   _topoWinOn("mousemove", function (e) {
     if (!drag) return;
@@ -3274,6 +3330,42 @@ function _topoBindZoomPan(host, width, height) {
     vb.y = drag.vy - (e.clientY - drag.sy) / rect.height * vb.h; applyVB();
   });
   _topoWinOn("mouseup", function () { drag = null; if (svgEl) svgEl.style.cursor = "grab"; });
+}
+
+// Contrail식 노드 드래그 — 드래그로 재배치 후 위치 저장(세션 간 유지)
+function _topoBindDrag(host) {
+  var svgEl = host.querySelector("#topo-svg");
+  if (!svgEl) return;
+  host.querySelectorAll(".topo-node").forEach(function (g) {
+    g.addEventListener("mousedown", function (e) {
+      e.stopPropagation();               // 팬 방지
+      var id = g.getAttribute("data-swid");
+      var base = _topoRenderedPos[id];
+      if (!base) return;
+      var vb = svgEl._vb || { w: svgEl.clientWidth, h: svgEl.clientHeight };
+      var rect = svgEl.getBoundingClientRect();
+      var sx = vb.w / (rect.width || 1), sy = vb.h / (rect.height || 1);
+      var startX = e.clientX, startY = e.clientY, moved = false;
+      function mm(ev) {
+        var dx = (ev.clientX - startX) * sx, dy = (ev.clientY - startY) * sy;
+        if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 3) moved = true;
+        g.setAttribute("transform", "translate(" + dx + "," + dy + ")");
+        g._dxy = { dx: dx, dy: dy };
+      }
+      function mu() {
+        window.removeEventListener("mousemove", mm);
+        window.removeEventListener("mouseup", mu);
+        if (moved && g._dxy) {
+          _topoLayout[id] = { x: base.x + g._dxy.dx, y: base.y + g._dxy.dy };
+          _saveTopoLayout();
+          g._justDragged = true;         // 클릭(상세) 억제
+          renderTopology();              // 링크·박스 재연결
+        }
+      }
+      window.addEventListener("mousemove", mm);
+      window.addEventListener("mouseup", mu);
+    });
+  });
 }
 
 // 토폴로지 뷰가 window에 붙인 리스너 추적/정리(재렌더마다 누적 방지)
@@ -3311,6 +3403,16 @@ function _bindTopoModeButtons() {
 (function () {
   var b = document.getElementById("btn-topo-refresh");
   if (b) b.addEventListener("click", loadTopology);
+  var fit = document.getElementById("btn-topo-fit");
+  if (fit) fit.addEventListener("click", function () {
+    var svgEl = document.querySelector("#topo-svg");
+    if (svgEl && svgEl._fit) svgEl._fit();
+  });
+  var rst = document.getElementById("btn-topo-reset-layout");
+  if (rst) rst.addEventListener("click", function () {
+    if (Object.keys(_topoLayout).length && !confirm("드래그로 옮긴 위치를 모두 초기화할까요?")) return;
+    _resetTopoLayout();
+  });
 })();
 
 // ─── 설정(config) 백업/diff 탭 ───────────────────────────────────
