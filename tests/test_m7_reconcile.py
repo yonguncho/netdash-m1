@@ -188,10 +188,11 @@ def test_excel_loader_parses_ledger_columns(tmp_path):
     result = excel_loader.load_workbook(str(path))
     assert len(result["hosts"]) == 1
     h = result["hosts"][0]
-    # _norm으로 소문자화/공백제거됨
+    # 매칭용(ledger_switch/ledger_port)은 _norm으로 소문자화/공백제거
     assert h["ledger_switch"] == "acc-sw01"
     assert h["ledger_port"] == "gi1/0/5"
-    assert h["hostname"] == "web-01"
+    # M10: 표시용 hostname은 원문 보존(대소문자 유지)
+    assert h["hostname"] == "WEB-01"
 
 
 # 15. [Opus R2 W1 회귀] 재적재 시 빈값이 기존 장부값을 지우지 않음

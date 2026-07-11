@@ -213,7 +213,11 @@ def _prompt_looks_alteon(text):
         return False
     if t.startswith(">>"):
         return True
-    if re.search(r"-\s*Main#?\s*$", t):          # '... - Main#' 꼬리(Alteon 고유)
+    # BUGFIX: '-Main#'만 보면 호스트명이 '...-Main'인 일반 장비(예: SW-Main#)를
+    # Alteon으로 오분류 → 검증 전 DB가 alteon으로 갱신돼 수집 불능. Alteon 실제
+    # 프롬프트는 'Standard ADC - Main#'처럼 하이픈 앞에 공백이 있으므로 공백을
+    # 요구(일반 호스트명 'SW-Main#'는 하이픈 앞이 문자라 제외).
+    if re.search(r"\s-\s*Main#?\s*$", t):
         return True
     return bool(re.search(r"standard adc|application switch", t, re.IGNORECASE))
 
@@ -226,7 +230,8 @@ def _looks_like_alteon(outputs):
     출력 어디든 Alteon 흔적이 보이면 alteon으로 교정해 전용 수집으로 재수집.
     """
     joined = "\n".join(str(v) for v in (outputs or {}).values())[:20000]
-    return bool(re.search(r">>\s?[\w\s.-]*Main#|-\s*Main#|Alteon|Radware|Standard ADC",
+    # '-Main#' 단독은 일반 호스트명 오탐 → 하이픈 앞 공백 요구(위 _prompt_looks_alteon과 동일)
+    return bool(re.search(r">>\s?[\w\s.-]*Main#|\s-\s*Main#|Alteon|Radware|Standard ADC",
                           joined, re.IGNORECASE))
 
 

@@ -102,8 +102,9 @@ def test_exos_port_errors_parse():
     """EXOS rx/txerrors → crc/in/out 카운터."""
     errs = extreme_exos._parse_port_errors(EXOS_RXERR, EXOS_TXERR)
     assert errs["1:1"]["crc"] == 5
-    assert errs["1:1"]["in_errors"] == 8   # 5+0+0+1+0+0+2
-    assert errs["1:1"]["out_errors"] == 4
+    # M11: Rx Lost(마지막, 버퍼 드롭)는 in_errors에서 제외 → 5+0+0+1+0+0=6
+    assert errs["1:1"]["in_errors"] == 6
+    assert errs["1:1"]["out_errors"] == 4  # Tx Errors=4 (Coll/Deferred 정상 제외)
     assert errs["1:2"]["crc"] == 0
 
 
@@ -114,7 +115,7 @@ def test_exos_errors_merged_into_ports():
                             "errors": EXOS_RXERR, "txerrors": EXOS_TXERR}, 1)
     p11 = next(p for p in r["ports"] if p["name"] == "1:1")
     assert p11["crc_errors"] == 5
-    assert p11["in_errors"] == 8
+    assert p11["in_errors"] == 6   # M11: Rx Lost 제외
     assert p11["out_errors"] == 4
 
 

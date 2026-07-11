@@ -135,9 +135,10 @@ class TestBlockProcessing:
         block_type, records = _block_to_records(block)
         assert block_type == "switch"
         assert len(records) == 2
-        assert records[0]["name"] == "switch-a"
+        # M10: 표시용 컬럼(name/vendor)은 원문 보존(소문자/공백제거 금지)
+        assert records[0]["name"] == "Switch-A"
         assert records[0]["ip"] == "10.0.1.1"
-        assert records[0]["vendor"] == "cisco"
+        assert records[0]["vendor"] == "Cisco"
 
     def test_block_to_records_host(self):
         """호스트 블록 (ip+mac, 스위치 식별 컬럼 없음)"""
@@ -267,7 +268,7 @@ class TestLoadWorkbook:
         # 스위치
         switches = result["switches"]
         assert len(switches) == 2
-        assert any(s["name"] == "switch-a" for s in switches)
+        assert any(s["name"] == "Switch-A" for s in switches)  # M10: 원문 보존
         assert any(s["ip"] == "10.0.1.1" for s in switches)
 
         # 호스트

@@ -114,9 +114,12 @@ def _sweep(db_path):
 
 def _loop(db_path):
     while not _stop:
+        # BUGFIX: interval을 try 밖에서 먼저 바인딩. 이전엔 try 안에서 초기화해
+        # 첫 get_setting 예외(기동 직후 DB lock 등) 시 interval 미정의 → 아래
+        # range(interval)에서 NameError로 감시 스레드가 침묵 사망했다.
+        interval = 60
         try:
             enabled = db.get_setting(db_path, "reach_check_enabled", "1") != "0"
-            interval = 60
             try:
                 interval = max(30, int(db.get_setting(db_path, "reach_check_interval", "60") or 60))
             except (TypeError, ValueError):

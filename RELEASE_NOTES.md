@@ -1,5 +1,29 @@
 # NetDash 릴리스 노트
 
+## v3.73.0 (2026-07-11) — 감사 medium 버그 9건 수정 (감시 안정성·알람·삭제 정리·오탐)
+
+v3.72.0 감사 보고서의 medium 건들을 이어서 수정.
+
+### 감시·알람 안정성
+- **도달성 감시 스레드 사망 방지**: 첫 루프에서 DB 예외 시 `interval` 미바인딩 NameError로 감시가 침묵 사망하던 문제 — 초기화를 try 밖으로.
+- **이메일 알람 무한 지연 수정**: 알람이 60초 미만 간격으로 계속 오면(대역 스캔·flap 폭주) '60초 무이벤트 대기'(debounce)라 발송이 무기한 미뤄지던 문제 → 마지막 발송 후 60초 경과 시 강제 flush.
+
+### 데이터 정합성·보안
+- **스위치 삭제 파생 데이터 정리**: config_backups(비밀 포함 running-config)·neighbors·vlan_names·switch_logs·port_channels·device_events·facility_hosts·enable_secret 설정이 잔존해 삭제된 스위치 config가 계속 다운로드 가능하던 문제.
+- **엑셀 표기 훼손 수정**: `/api/upload` 경로가 name/hostname/location에 소문자화+공백제거를 적용해 'Seoul DC A03'→'seouldca03'처럼 훼손하던 문제 — 표시용 컬럼은 원문 보존(매칭용 ip/subnet만 정규화).
+
+### 수집 정확성
+- **`-Main` 호스트네임 Alteon 오분류 수정**: `SW-Main#` 같은 일반 프롬프트를 Alteon으로 오인해 검증 전 DB를 갱신, 수집 불능이 되던 문제 — 하이픈 앞 공백 요구로 실제 Alteon만 매칭.
+- **EXOS 에러 카운터 오탐 제거**: Tx Coll(collision)·Tx Deferred(정상 카운터)와 Rx Lost(버퍼 드롭)를 오류로 합산해 half-duplex 포트에서 부풀던 문제 — 실오류만 합산.
+
+### 동시성·UI
+- **방화벽 동시 수집 가드**: 같은 방화벽 중복 수집 시 상태·인터페이스/ARP가 섞이던 문제 — in-progress 409.
+- **서버실 카드 클릭 무반응 수정**: `swcard-<id>`가 현황판/서버실 두 그리드에 중복돼 서버실 카드 리스너가 엉뚱한 카드에 붙던 문제 — 그리드 스코프 조회.
+- **터미널 백드롭 닫기 SSH 세션 정리**: 백드롭 클릭으로 터미널 모달을 닫으면 SSH WebSocket 세션이 방치되던 문제.
+- **위치 필터 선택 해제**: 위치 필터 변경 시 숨겨진 장비가 수집/삭제 대상에 잔류하던 문제.
+
+테스트 565개 통과(신규 12). 상세: docs/design/netdash-audit-2026-07-11.md.
+
 ## v3.72.0 (2026-07-11) — 전체 감사 버그 수정 11건 (파서 정확성·보안·UI·데이터 보존)
 
 4개 영역 병렬 정밀 리뷰에서 재현 확정된 버그를 일괄 수정. IPAM 비교·SWOT는 docs/design/netdash-ipam-swot.md.

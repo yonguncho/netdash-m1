@@ -42,6 +42,10 @@ document.addEventListener("input", function (e) {
   if (!inp.classList) return;
   // 위치 필터(현황판/스위치 현황) → 카드/표 재렌더
   if (inp.classList.contains("loc-filter")) {
+    // 필터로 숨겨진 장비가 수집/삭제 대상에 잔류하지 않도록 선택 해제
+    // (상태 필터와 동일 정책 — '다른 리스트 오수집/오삭제 방지').
+    _bulkSel = {};
+    _tblSel = {};
     if (inp.id === "loc-filter-room") { renderRoom(_switches); return; }
     renderSwitchGrid(_switches);
     renderSwitchTable(_switches);
@@ -213,7 +217,12 @@ document.querySelectorAll("[data-close]").forEach(btn => {
 });
 document.querySelectorAll(".modal__backdrop").forEach(bd => {
   bd.addEventListener("click", () => {
-    document.querySelectorAll(".modal:not(.hidden)").forEach(m => closeModal(m.id));
+    document.querySelectorAll(".modal:not(.hidden)").forEach(m => {
+      // 터미널 모달은 closeTerminal로 닫아 SSH WebSocket 세션·resize 리스너를
+      // 정리한다(백드롭 클릭 시 closeModal만 하면 _termWs 세션이 방치됐다).
+      if (m.id === "modal-terminal") closeTerminal();
+      else closeModal(m.id);
+    });
   });
 });
 
@@ -657,7 +666,10 @@ function renderRoomGrid(switches, firewalls) {
   grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, false); }).join("") +
                    firewalls.map(_fwCardHTML).join("");
   switches.forEach(function (sw) {
-    var card = document.getElementById("swcard-" + sw.id);
+    // 그리드 스코프 조회: swcard-<id>가 현황판/서버실 두 그리드에 중복 생성되어
+    // document.getElementById는 항상 앞선 현황판 카드를 반환했다(서버실 카드 클릭
+    // 무반응) → 각 grid 컨테이너 내부에서만 찾는다.
+    var card = grid.querySelector('[id="swcard-' + sw.id + '"]');
     if (!card) return;
     card.addEventListener("click", function (e) {
       if (e.target.closest("[data-action]")) return;
@@ -778,7 +790,10 @@ function renderSwitchGrid(switches) {
   grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, true); }).join("") +
                    fws.map(_fwCardHTML).join("");
   switches.forEach(function(sw) {
-    var card = document.getElementById("swcard-" + sw.id);
+    // 그리드 스코프 조회: swcard-<id>가 현황판/서버실 두 그리드에 중복 생성되어
+    // document.getElementById는 항상 앞선 현황판 카드를 반환했다(서버실 카드 클릭
+    // 무반응) → 각 grid 컨테이너 내부에서만 찾는다.
+    var card = grid.querySelector('[id="swcard-' + sw.id + '"]');
     if (!card) return;
     card.addEventListener("click", function(e) {
       // 카드 안의 버튼(상세보기 등) + 수집 선택 체크박스는 개별 수집 모달을 띄우지 않음

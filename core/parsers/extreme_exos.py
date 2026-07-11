@@ -47,7 +47,11 @@ def _parse_port_errors(rx_output, tx_output):
 
     rxerrors 컬럼: Port  Link  Rx Crc  Rx Over  Rx Under  Rx Frag  Rx Jabber  Rx Align  Rx Lost
     txerrors 컬럼: Port  Link  Tx Coll  Tx Late coll  Tx Deferred  Tx Errors  Tx Lost  Tx Parity
-    첫 숫자 컬럼(Rx Crc)=crc, rx 합계=in_errors, tx 합계=out_errors.
+    첫 숫자 컬럼(Rx Crc)=crc.
+
+    BUGFIX: 이전엔 tx 전체를 out_errors로 합산했으나 Tx Coll(collision)·Tx Deferred는
+    half-duplex/혼잡의 정상 동작 카운터라 오류가 아니다 → half-duplex 포트에서 out_errors가
+    크게 부풀어 오탐. 실오류만 합산: Tx=Late coll·Errors·Lost·Parity, Rx=Lost(버퍼 드롭) 제외.
     """
     errs = {}
     if len(rx_output) > 1_000_000 or len(tx_output) > 1_000_000:
@@ -74,9 +78,12 @@ def _parse_port_errors(rx_output, tx_output):
             e = errs.setdefault(port, {"crc": 0, "in_errors": 0, "out_errors": 0})
             if kind == "rx":
                 e["crc"] = nums[0]
-                e["in_errors"] = sum(nums)
+                # Rx Lost(마지막 컬럼, 버퍼 드롭)는 실오류 아님 → 제외
+                e["in_errors"] = sum(nums[:-1]) if len(nums) >= 2 else sum(nums)
             else:
-                e["out_errors"] = sum(nums)
+                # Tx Coll[0]·Tx Deferred[2]는 정상 카운터 → 제외.
+                # 실오류: Late coll[1]·Errors[3]·Lost[4]·Parity[5]
+                e["out_errors"] = sum(nums[i] for i in (1, 3, 4, 5) if i < len(nums))
 
     _scan(rx_output, "rx")
     _scan(tx_output, "tx")

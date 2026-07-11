@@ -102,6 +102,12 @@ _rate_limit_lock = __import__("threading").Lock()
 
 _SERVER_ETH_IP = None   # 서버 이더넷 IP 캐시(루프백 접속 시 대체 표기용)
 
+# 방화벽 동시 수집 가드(스위치의 collector._collecting_switches에 대응).
+# 방화벽 collect는 요청 스레드에서 동기 실행이라 같은 fid 동시 POST 시 상태·
+# 인터페이스/ARP가 서로 다른 수집본으로 섞일 수 있어 in-progress를 막는다.
+_collecting_firewalls = set()
+_collecting_fw_lock = threading.Lock()
+
 
 def _server_eth_ip():
     global _SERVER_ETH_IP
@@ -1742,16 +1748,23 @@ def create_app(demo_mode=None):
         fw = db.get_firewall(db_path, fid)
         if not fw:
             return jsonify({"error": "not found"}), 404
+        # 동시 수집 가드: 같은 방화벽에 대한 중복 요청은 409(스위치 collect와 동일 정책)
+        with _collecting_fw_lock:
+            if fid in _collecting_firewalls:
+                return jsonify({"error": "이미 수집 중입니다"}), 409
+            _collecting_firewalls.add(fid)
         # SSRF(CWE-918): collect 시점에도 저장된 host/port를 재검증한다(스위치 collect와
         # 동일 정책). legacy/seed 데이터나 우회 저장이 요청 대상이 되는 것을 차단.
         try:
             validate_ipv4(fw.get("host"), config.collector.get("allowed_ip_ranges"))
         except ValueError as e:
+            _collecting_firewalls.discard(fid)
             db.set_firewall_status(db_path, fid, "failed")
             log_event("warning", "firewall_collect_blocked_invalid_ip", firewall_id=fid, reason=str(e))
             return jsonify({"error": f"firewall host rejected: {e}"}), 400
         fw_port = fw.get("port")
         if fw_port is not None and not (isinstance(fw_port, int) and 1 <= fw_port <= 65535):
+            _collecting_firewalls.discard(fid)
             db.set_firewall_status(db_path, fid, "failed")
             return jsonify({"error": "stored firewall port is invalid"}), 400
         data = request.get_json() or {}
@@ -1813,6 +1826,7 @@ def create_app(demo_mode=None):
             return jsonify({"error": "수집 실패", "detail": sanitized}), 502
         finally:
             token = username = password = None
+            _collecting_firewalls.discard(fid)
 
     @app.route("/api/switches/<int:switch_id>/events", methods=["GET"])
     def get_switch_events(switch_id):

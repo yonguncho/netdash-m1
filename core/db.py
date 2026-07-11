@@ -1880,6 +1880,37 @@ def update_firewall(db_path, firewall_id, name=None, vendor=None, host=None, por
             return True
 
 
+# 스위치 삭제 시 정리할 파생 테이블(switch_id 참조). 존재하는 것만 안전 시도.
+# BUGFIX: 이전엔 ports/mac/arp/snapshots/port_events만 지워 config_backups(비밀
+# 포함 running-config)·neighbors·vlan_names·switch_logs·port_channels·device_events·
+# facility_hosts가 잔존 → 삭제된 스위치 config가 /api/configs/<id>로 계속 다운로드
+# 가능했다. app_settings의 enable_secret_<id>·nbrsrc_<id> 설정도 함께 제거.
+_SWITCH_CHILD_TABLES = [
+    "ports", "mac_entries", "arp_entries", "snapshots", "port_events",
+    "config_backups", "neighbors", "vlan_names", "switch_logs",
+    "port_channels", "device_events", "facility_hosts",
+]
+
+
+def _purge_switch_children(cur, switch_id):
+    for tbl in _SWITCH_CHILD_TABLES:
+        try:
+            cur.execute("DELETE FROM %s WHERE switch_id=?" % tbl, (switch_id,))
+        except Exception:
+            pass
+    # hosts는 인벤토리이므로 보존하되 위치(측정) 무효화
+    try:
+        cur.execute("UPDATE hosts SET switch_id=NULL, located=0 WHERE switch_id=?", (switch_id,))
+    except Exception:
+        pass
+    # 스위치별 설정(enable secret·이웃 소스) 제거
+    for key in ("enable_secret_%d" % switch_id, "nbrsrc_%d" % switch_id):
+        try:
+            cur.execute("DELETE FROM app_settings WHERE key=?", (key,))
+        except Exception:
+            pass
+
+
 def delete_switch(db_path, switch_id):
     """스위치 1대 삭제 + 관련 수집 데이터 정리. 반환: 삭제 여부(bool)."""
     with _db_lock:
@@ -1888,21 +1919,11 @@ def delete_switch(db_path, switch_id):
             cur.execute("SELECT id FROM switches WHERE id=?", (switch_id,))
             if not cur.fetchone():
                 return False
-            # 수집 데이터 정리 (존재하는 테이블만 안전 시도)
-            for sql, params in [
-                ("DELETE FROM ports WHERE switch_id=?", (switch_id,)),
-                ("DELETE FROM mac_entries WHERE switch_id=?", (switch_id,)),
-                ("DELETE FROM arp_entries WHERE switch_id=?", (switch_id,)),
-                ("DELETE FROM snapshots WHERE switch_id=?", (switch_id,)),
-                ("DELETE FROM port_events WHERE switch_id=?", (switch_id,)),
-                # hosts는 인벤토리이므로 보존하되 위치(측정) 무효화
-                ("UPDATE hosts SET switch_id=NULL, located=0 WHERE switch_id=?", (switch_id,)),
-                ("DELETE FROM switches WHERE id=?", (switch_id,)),
-            ]:
-                try:
-                    cur.execute(sql, params)
-                except Exception:
-                    pass
+            _purge_switch_children(cur, switch_id)
+            try:
+                cur.execute("DELETE FROM switches WHERE id=?", (switch_id,))
+            except Exception:
+                pass
             return True
 
 
@@ -1924,19 +1945,11 @@ def delete_switches_bulk(db_path, switch_ids):
                 cur.execute("SELECT id FROM switches WHERE id=?", (sid,))
                 if not cur.fetchone():
                     continue
-                for sql, params in [
-                    ("DELETE FROM ports WHERE switch_id=?", (sid,)),
-                    ("DELETE FROM mac_entries WHERE switch_id=?", (sid,)),
-                    ("DELETE FROM arp_entries WHERE switch_id=?", (sid,)),
-                    ("DELETE FROM snapshots WHERE switch_id=?", (sid,)),
-                    ("DELETE FROM port_events WHERE switch_id=?", (sid,)),
-                    ("UPDATE hosts SET switch_id=NULL, located=0 WHERE switch_id=?", (sid,)),
-                    ("DELETE FROM switches WHERE id=?", (sid,)),
-                ]:
-                    try:
-                        cur.execute(sql, params)
-                    except Exception:
-                        pass
+                _purge_switch_children(cur, sid)
+                try:
+                    cur.execute("DELETE FROM switches WHERE id=?", (sid,))
+                except Exception:
+                    pass
                 deleted += 1
     return deleted
 

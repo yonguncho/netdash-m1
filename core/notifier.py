@@ -117,36 +117,37 @@ def _format_digest(events):
 
 
 def _loop(db_path):
+    import time as _time
     pending = []
+    last_flush = _time.monotonic()
     while not _stop:
-        # 60초 동안 이벤트 모으기
+        # BUGFIX: 이전 구현은 '60초 무이벤트 시 발송'(debounce)이라 이벤트가
+        # 60초 미만 간격으로 계속 오면(설비 대역 스캔·flap 폭주) 이메일이 무기한
+        # 지연됐다. 이제 마지막 발송 후 60초 경과 시 강제 flush(짧게 폴링).
         try:
-            ev = _queue.get(timeout=60)
-            pending.append(ev)
-            # 큐에 더 쌓인 것 즉시 흡수
+            pending.append(_queue.get(timeout=5))
             while True:
                 try:
                     pending.append(_queue.get_nowait())
                 except queue.Empty:
                     break
-            continue  # 다음 60초 창에서 더 모아질 수 있음 → 아래 타임아웃 발송 경로로
         except queue.Empty:
             pass
-        if not pending:
-            continue
-        try:
-            cfg = _settings(db_path)
-            if cfg["enabled"]:
-                send_list = [e for e in pending if _severity_ok(e, cfg["min_sev"])]
-                if send_list:
-                    crit = sum(1 for e in send_list if e.get("severity") == "critical")
-                    subject = "[NetDash] 알람 %d건%s" % (
-                        len(send_list), (" (긴급 %d)" % crit) if crit else "")
-                    if send_email(db_path, subject, _format_digest(send_list)):
-                        utils.log_event("info", "email_alert_sent", count=len(send_list))
-        except Exception as e:
-            utils.log_event("warning", "notifier_loop_error", error=str(e)[:200])
-        pending = []
+        if pending and (_time.monotonic() - last_flush) >= 60:
+            try:
+                cfg = _settings(db_path)
+                if cfg["enabled"]:
+                    send_list = [e for e in pending if _severity_ok(e, cfg["min_sev"])]
+                    if send_list:
+                        crit = sum(1 for e in send_list if e.get("severity") == "critical")
+                        subject = "[NetDash] 알람 %d건%s" % (
+                            len(send_list), (" (긴급 %d)" % crit) if crit else "")
+                        if send_email(db_path, subject, _format_digest(send_list)):
+                            utils.log_event("info", "email_alert_sent", count=len(send_list))
+            except Exception as e:
+                utils.log_event("warning", "notifier_loop_error", error=str(e)[:200])
+            pending = []
+            last_flush = _time.monotonic()
 
 
 def start_notifier(db_path):

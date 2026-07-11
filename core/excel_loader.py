@@ -47,10 +47,14 @@ IP_REGEX = re.compile(
 
 
 def _norm(s: Optional[Any]) -> str:
-    """정규화: 앞뒤 공백 제거 + 내부 공백 모두 제거 + 소문자"""
+    """정규화: 앞뒤 공백 제거 + 내부 공백 모두 제거 + 소문자 (매칭·키용)"""
     if not isinstance(s, str):
         return ""
     return s.strip().lower().replace(" ", "")
+
+
+# 표시용 컬럼 — _norm(소문자/공백제거) 대신 원문 strip만 적용해 표기 보존
+_DISPLAY_COLS = {"name", "hostname", "location", "vendor", "note", "model", "description"}
 
 
 def _is_valid_ip(ip_str: Optional[Any]) -> bool:
@@ -220,7 +224,14 @@ def _block_to_records(block: List[List[Any]]) -> Tuple[Optional[str], List[Dict[
         record = {}
         for canonical, idx in header_map.items():
             value = row[idx] if idx < len(row) else None
-            record[canonical] = _norm(value) if isinstance(value, str) else value
+            if isinstance(value, str):
+                # BUGFIX: _norm(소문자+공백제거)은 매칭용 컬럼(ip/subnet)에만.
+                # 표시용(name/hostname/location 등)에 적용하면 'Seoul DC A03'→
+                # 'seouldca03'처럼 표기가 훼손된다 → 표시용은 strip만.
+                record[canonical] = (value.strip() if canonical in _DISPLAY_COLS
+                                     else _norm(value))
+            else:
+                record[canonical] = value
 
         # IP 검증: 유효한 IP만 포함
         if 'ip' in record and _is_valid_ip(record['ip']):
