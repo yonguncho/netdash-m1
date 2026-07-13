@@ -611,20 +611,33 @@ def test_detect_subnets_exos(temp_db, monkeypatch):
             pass
         def send_command(self, cmd, read_timeout=10):
             sent.append(cmd)
+            # show vlan: CIDR('/24') 표기, show ipconfig: 점표기 마스크(EXOS 실제 형태)
             if cmd == "show vlan":
                 return ("Name            VID  IP Address        Flags\n"
-                        "mgmt            4095 10.92.152.11 /24  ----\n"
-                        "v540            540  172.27.54.1  /24   ----\n")
+                        "mgmt            4095 10.92.152.11 /24  ----\n")
             if cmd == "show ipconfig":
-                return "Router Interface on VLAN v540 is 172.27.54.1 /24\n"
+                return ("VLAN Interface with name v540 created\n"
+                        "        IP Address:  172.27.54.1     Netmask:   255.255.255.0\n")
             return ""
 
     monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
     subnets = facility.detect_subnets(temp_db, sid, "u", "p")
     # IOS 명령은 안 보내고 EXOS 전용 명령을 써야 함
     assert "show vlan" in sent and not any("show ip route" in c for c in sent)
-    assert "172.27.54.0/24" in subnets
-    assert "10.92.152.0/24" in subnets
+    assert "172.27.54.0/24" in subnets   # 점표기 마스크에서 도출
+    assert "10.92.152.0/24" in subnets   # CIDR 표기에서 도출
+
+
+def test_extract_exos_subnets_dotted_and_cidr():
+    """EXOS 대역 추출: CIDR·점표기 마스크 모두 파싱(순수 함수)."""
+    from core import facility
+    # 점표기(show ipconfig)
+    got = facility._extract_exos_subnets(
+        "IP Address:  10.1.2.9    Netmask:   255.255.255.0")
+    assert "10.1.2.0/24" in got
+    # CIDR(show vlan / show iproute)
+    got2 = facility._extract_exos_subnets("#d  172.27.54.0/24  172.27.54.1  1  U---")
+    assert "172.27.54.0/24" in got2
 
 
 def test_facility_delete_subnet(client):

@@ -162,33 +162,53 @@ def _finalize_subnets(found):
     return out
 
 
-def _detect_subnets_exos(conn):
-    """EXOS: show vlan / show ipconfig에서 라우터 인터페이스(SVI) 대역 도출.
+def _extract_exos_subnets(text):
+    """EXOS 출력 한 덩어리에서 대역 후보 추출(버전별 표기 편차 흡수).
 
-    EXOS는 IOS의 'show ip route connected'/'show ip interface'/'show running-config'를
-    지원하지 않아 대역 자동찾기가 0개가 됐다. EXOS는 로컬 인터페이스만 나오는
-    'show vlan'·'show ipconfig'에서 'a.b.c.d /nn' 형태 IP/마스크를 뽑는다.
+    EXOS는 마스크를 버전/명령에 따라 CIDR('/24')로도, 점표기('Netmask: 255.255.255.0')로도
+    출력한다. 두 형태 모두 잡는다.
     """
-    vlan_out, ip_out = "", ""
-    try:
-        vlan_out = conn.send_command("show vlan", read_timeout=30)
-    except Exception:
-        pass
-    try:
-        ip_out = conn.send_command("show ipconfig", read_timeout=30)
-    except Exception:
-        pass
+    out = []
+    t = text or ""
+    # ① CIDR: 'a.b.c.d/nn' 또는 'a.b.c.d /nn' (show vlan, show iproute)
+    for m in re.finditer(r"(\d{1,3}(?:\.\d{1,3}){3})\s*/\s*(\d{1,2})", t):
+        try:
+            out.append(str(ipaddress.IPv4Network(
+                "%s/%s" % (m.group(1), m.group(2)), strict=False)))
+        except (ipaddress.AddressValueError, ValueError):
+            continue
+    # ② 점표기 마스크: 'IP Address: a.b.c.d ... Netmask: 255.x.x.x' (show ipconfig)
+    #    IP와 255.으로 시작하는 마스크가 같은 줄/근처에 오는 EXOS ipconfig 형태.
+    for m in re.finditer(
+            r"(\d{1,3}(?:\.\d{1,3}){3})\D{0,40}?(255\.\d{1,3}\.\d{1,3}\.\d{1,3})", t):
+        try:
+            out.append(str(ipaddress.IPv4Network(
+                "%s/%s" % (m.group(1), m.group(2)), strict=False)))
+        except (ipaddress.AddressValueError, ValueError):
+            continue
+    return out
+
+
+def _detect_subnets_exos(conn):
+    """EXOS: 라우터 인터페이스(SVI) 대역 자동 도출.
+
+    IOS의 'show ip route connected'/'show ip interface'/'show running-config'는 미지원.
+    로컬 인터페이스가 나오는 여러 EXOS 명령을 함께 시도해 버전별 출력 편차를 흡수한다.
+    반환: (대역리스트, 진단용 원문 샘플)
+    """
+    cmds = ["show vlan", "show ipconfig", "show iproute"]
+    outs = {}
+    for c in cmds:
+        try:
+            outs[c] = conn.send_command(c, read_timeout=45)
+        except Exception:
+            outs[c] = ""
     found = []
-    # 'a.b.c.d /nn' 또는 'a.b.c.d/nn' (EXOS는 IP와 마스크 사이 공백이 흔함)
-    for text in (vlan_out, ip_out):
-        for m in re.finditer(r"(\d{1,3}(?:\.\d{1,3}){3})\s*/\s*(\d{1,2})", text or ""):
-            try:
-                net = ipaddress.IPv4Network("%s/%s" % (m.group(1), m.group(2)),
-                                            strict=False)
-                found.append(str(net))
-            except (ipaddress.AddressValueError, ValueError):
-                continue
-    return _finalize_subnets(found), vlan_out, ip_out
+    for text in outs.values():
+        found.extend(_extract_exos_subnets(text))
+    sample = " | ".join(
+        "%s=%r" % (c, (outs[c] or "").strip()[:150]) for c in cmds)
+    return _finalize_subnets(found), sample
 
 
 def detect_subnets(db_path, switch_id, username, password, source_ip=None):
@@ -221,11 +241,11 @@ def detect_subnets(db_path, switch_id, username, password, source_ip=None):
             pass
         # EXOS는 IOS 명령을 지원하지 않으므로 전용 경로로 분기
         if vendor == "extreme_exos":
-            subnets, vlan_out, ip_out = _detect_subnets_exos(conn)
+            subnets, sample = _detect_subnets_exos(conn)
             if not subnets:
-                utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
-                                route_sample=(vlan_out or "")[:200],
-                                iface_sample=(ip_out or "")[:200], cfg_sample="")
+                # 원문 샘플(3개 명령)을 로그로 — 형식 편차를 정확히 추적
+                utils.log_event("warning", "detect_subnets_empty_exos",
+                                switch_id=switch_id, sample=sample)
             return subnets
         try:
             route_out = conn.send_command("show ip route connected", read_timeout=30)
