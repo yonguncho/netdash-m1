@@ -587,6 +587,44 @@ def test_collect_band_vrf_fallback_when_detection_misses(temp_db, monkeypatch):
     assert "172.27.54.4" in hosts   # 폴백 스윕이 VRF PROD ARP에서 건져냄
 
 
+def test_collect_band_exos_uses_iparp(temp_db, monkeypatch):
+    """EXOS 대역 수집은 'show iparp'(EXOS)를 써야 한다. 이전엔 CMDS 오타로
+    'show ip arp'(IOS)가 나가 EXOS에서 0대였다."""
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "EXOS_SW", "10.92.152.12", "extreme")
+    monkeypatch.setattr(facility, "_SWEEP_PING_GAP", 0)
+    state = {"pings": [], "arp_cmds": []}
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            if cmd.startswith("ping"):
+                state["pings"].append(cmd)
+                return "Ping finished"
+            if "iparp" in cmd or "ip arp" in cmd:
+                state["arp_cmds"].append(cmd)
+                # EXOS 'show iparp' 형식
+                return ("VR      Destination     Mac               Age Static VLAN VID Port\n"
+                        "VR-Default 10.92.152.50 00:04:96:aa:bb:cc 0   NO     v_data 540 1:15\n")
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    monkeypatch.setattr(facility, "_set", lambda **kw: None)
+
+    facility.collect_band(temp_db, sid, "10.92.152.48/29", "u", "p")
+    assert state["arp_cmds"] and all(c == "show iparp" for c in state["arp_cmds"])  # EXOS 명령
+    assert state["pings"] and all(p.startswith("ping count 1 ") for p in state["pings"])
+    hosts = {h["ip"] for h in db.get_facility_hosts(temp_db)}
+    assert "10.92.152.50" in hosts   # EXOS 파서로 파싱돼 저장됨
+
+
 def test_detect_subnets_exos(temp_db, monkeypatch):
     """EXOS 스위치 대역 자동찾기 — show vlan/show ipconfig의 IP/마스크에서 대역 도출.
 

@@ -365,7 +365,9 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     except ValueError:
         vendor = "cisco_ios"
         parser = parsers.get_parser("cisco_ios")   # 미지원 벤더는 IOS로 시도(fallback)
-    arp_base_cmd = getattr(parser, "CMDS", {}).get("arp", "show ip arp")
+    # 파서의 명령 딕셔너리는 COMMANDS(전 벤더 공통). 이전엔 CMDS로 잘못 참조해
+    # 항상 'show ip arp'(IOS)로 폴백 → EXOS('show iparp')·Alteon에서 0대였다.
+    arp_base_cmd = getattr(parser, "COMMANDS", {}).get("arp", "show ip arp")
     vrf_capable = vendor in ("cisco_ios", "cisco_nxos", "arista_eos")
     net = ipaddress.IPv4Network(subnet, strict=False)
     ips = [str(h) for h in net.hosts()]
