@@ -276,12 +276,82 @@ def detect_subnets(db_path, switch_id, username, password, source_ip=None):
                 utils.log_event("info", "detect_subnets_exos_fallback",
                                 switch_id=switch_id, count=len(exos_subnets))
                 return exos_subnets
-            # 진단용: IOS·EXOS 양쪽 원문 샘플을 남겨 형식 차이를 추적 가능하게
-            utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
-                            route_sample=(route_out or "")[:200],
-                            iface_sample=(iface_out or "")[:200],
-                            cfg_sample=(cfg_out or "")[:200],
-                            exos_sample=exos_sample)
+    # 저장된 벤더 드라이버로 전부 빈손 — 대표 사례: EXOS를 cisco 드라이버로 접속하면
+    # 프롬프트 불일치로 모든 명령이 실패(빈 응답)한다. 실제 OS를 프로브해 올바른
+    # 드라이버로 재접속 후 재시도한다(성공 시 벤더도 교정).
+    if not subnets:
+        subnets = _detect_subnets_probe_retry(
+            db_path, switch_id, sw, vendor, username, password, source_ip)
+    return subnets
+
+
+def _detect_subnets_probe_retry(db_path, switch_id, sw, cur_vendor,
+                                username, password, source_ip):
+    """저장 벤더 드라이버로 빈손일 때: 드라이버 무관 프로브로 실제 OS를 알아내
+    올바른 드라이버로 재접속해 대역 도출. 성공하면 벤더도 교정(다음 수집부터 정상)."""
+    from netmiko import ConnectHandler
+    from . import netbind
+    try:
+        probed, _ver = _collector._probe_os(sw, username, password, source_ip=source_ip)
+    except Exception:
+        probed = None
+    if not probed or probed == cur_vendor:
+        utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
+                        note="probe_failed_or_same", probed=probed or "")
+        return []
+    device = {
+        "device_type": probed, "ip": sw["ip"], "username": username,
+        "password": password, "secret": password, "conn_timeout": 30, "fast_cli": False,
+    }
+    if source_ip:
+        device["sock"] = netbind.bind_socket(sw["ip"], 22, source_ip, 30)
+    subnets = []
+    try:
+        with ConnectHandler(**device) as conn:
+            try:
+                if hasattr(conn, "check_enable_mode") and not conn.check_enable_mode():
+                    conn.enable()
+            except Exception:
+                pass
+            paging = _collector._PAGING_CMD.get(probed, "terminal length 0")
+            try:
+                conn.send_command(paging, read_timeout=10)
+            except Exception:
+                pass
+            if probed == "extreme_exos":
+                subnets, _s = _detect_subnets_exos(conn)
+            else:
+                r = i = c = ""
+                try:
+                    r = conn.send_command("show ip route connected", read_timeout=30)
+                except Exception:
+                    pass
+                try:
+                    i = conn.send_command("show ip interface", read_timeout=30)
+                except Exception:
+                    pass
+                try:
+                    c = conn.send_command(
+                        "show running-config | include ip address", read_timeout=30)
+                except Exception:
+                    pass
+                subnets = _parse_connected_subnets(r, i, c)
+    except Exception as e:
+        utils.log_event("warning", "detect_subnets_probe_reconnect_failed",
+                        switch_id=switch_id, probed=probed,
+                        error=_collector._sanitize_error_msg(str(e)))
+        return []
+    if subnets:
+        utils.log_event("info", "detect_subnets_probe_success",
+                        switch_id=switch_id, probed=probed, count=len(subnets))
+        # 벤더 교정 — 다음 수집·대역수집(ARP)도 올바른 드라이버/명령을 쓰게 된다
+        try:
+            db.update_switch(db_path, switch_id, vendor=probed)
+        except Exception:
+            pass
+    else:
+        utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
+                        note="probe_reconnect_empty", probed=probed)
     return subnets
 
 

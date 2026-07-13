@@ -726,6 +726,43 @@ def test_detect_subnets_exos_fallback_when_vendor_mislabeled(temp_db, monkeypatc
     assert "10.92.152.0/23" in subnets   # EXOS 폴백이 건져냄
 
 
+def test_detect_subnets_probe_retry_exos_mislabeled(temp_db, monkeypatch):
+    """EXOS가 cisco로 잘못 등록 → cisco 드라이버는 전 명령 빈손 → 프로브가 EXOS 감지 →
+    extreme 드라이버로 재접속해 대역 도출 + 벤더 교정."""
+    import netmiko as _nm
+    from core import facility, collector
+
+    sid = db.save_switch(temp_db, "SW135", "10.92.152.12", "cisco")  # 실제 EXOS인데 cisco
+
+    class FakeConn:
+        def __init__(self, **kw):
+            self.dt = kw.get("device_type")
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            # cisco 드라이버로 EXOS 접속 = 프롬프트 불일치 → 전부 빈손
+            if self.dt != "extreme_exos":
+                return ""
+            # 올바른 extreme 드라이버 재접속 시에만 실제 응답
+            if cmd == "show ipconfig":
+                return "interface ip address flags nSIA\nData 10.92.152.12 /23 EUf--R--g--- 0\n"
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    # 드라이버 무관 프로브가 실제 OS(EXOS)를 반환하도록
+    monkeypatch.setattr(collector, "_probe_os", lambda *a, **k: ("extreme_exos", "ExtremeXOS version 31.7"))
+
+    subnets = facility.detect_subnets(temp_db, sid, "u", "p")
+    assert "10.92.152.0/23" in subnets            # 재접속으로 도출 성공
+    assert db.get_switch(temp_db, sid)["vendor"] == "extreme_exos"   # 벤더 교정됨
+
+
 def test_facility_delete_subnet(client):
     """특정 대역만 삭제 — 다른 대역은 유지."""
     from config import get_config
