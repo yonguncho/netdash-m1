@@ -50,7 +50,7 @@ def test_firewall_guard_after_input_parse():
     src = (Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
     # collect_firewall_endpoint에서 get_json이 add(fid)보다 먼저 나와야 누수 없음
     fn = src.split("def collect_firewall_endpoint", 1)[1].split("def get_switch_events", 1)[0]
-    get_json_pos = fn.find("request.get_json()")
+    get_json_pos = fn.find("request.get_json")
     add_pos = fn.find("_collecting_firewalls.add")
     assert 0 < get_json_pos < add_pos, "get_json이 가드 add 뒤에 있어 malformed JSON 시 잠금 누수"
 

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 _db_lock = threading.Lock()
 _UNSET = object()  # Sentinel value to distinguish default None from explicit None
+_SNAPSHOT_KEEP = 50  # 스위치당 보존할 스냅샷 세대 수(초과분은 save_snapshot이 정리)
 
 
 CREATE_SWITCHES_TABLE = """
@@ -410,6 +411,10 @@ def init_schema(db_path):
                 ("last_error", "TEXT"),
                 ("device_type", "TEXT"),
                 ("serial", "TEXT"),
+                # BUGFIX: cred_blob이 신규 스키마엔 있으나 마이그레이션 목록에 빠져
+                # 레거시 DB에서 get_switch_credential/update_cred_blob이
+                # 'no such column: cred_blob' → diagnose 500 + persist 저장 실패.
+                ("cred_blob", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE switches ADD COLUMN {col} {definition}")
@@ -1588,6 +1593,24 @@ def save_snapshot(db_path, switch_id, parsed_or_duration=_UNSET, duration_second
                 (switch_id, duration)
             )
             snapshot_id = cursor.lastrowid
+            # 세대 정리: 스위치당 최근 _SNAPSHOT_KEEP개만 유지(무한 누적 방지).
+            # 초과 스냅샷과 그 파생 데이터(ports/mac/arp/port_channels)를 함께 삭제.
+            # 포트 이력(get_port_history)이 시계열을 쓰므로 넉넉히 보존.
+            try:
+                old = cursor.execute(
+                    "SELECT id FROM snapshots WHERE switch_id=? ORDER BY id DESC "
+                    "LIMIT -1 OFFSET ?", (switch_id, _SNAPSHOT_KEEP)).fetchall()
+                if old:
+                    ids = [r[0] for r in old]
+                    ph = ",".join("?" * len(ids))
+                    for tbl in ("ports", "mac_entries", "arp_entries", "port_channels"):
+                        try:
+                            cursor.execute("DELETE FROM %s WHERE snapshot_id IN (%s)" % (tbl, ph), ids)
+                        except Exception:
+                            pass
+                    cursor.execute("DELETE FROM snapshots WHERE id IN (%s)" % ph, ids)
+            except Exception:
+                pass
 
             # If parsed data provided, save all related entries
             if parsed:

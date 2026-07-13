@@ -12,11 +12,15 @@ MAC_PATTERN = re.compile(r"([0-9a-fA-F]{2}[:-]){5}([0-9a-fA-F]{2})")
 IP_PATTERN = re.compile(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b")
 
 
+_HEX12 = re.compile(r"^[0-9a-f]{12}$")
+
+
 def normalize_mac(mac_str):
     if not mac_str:
         return None
     mac = re.sub(r"[:\\.-]", "", mac_str.lower())
-    if len(mac) != 12:
+    # 길이 12 + 16진수 검증(이전엔 길이만 봐서 'ZZZZ.ZZZZ.ZZZZ' 같은 비16진수도 통과)
+    if not _HEX12.match(mac):
         return None
     return ":".join(mac[i:i+2] for i in range(0, 12, 2))
 

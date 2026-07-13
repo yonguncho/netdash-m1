@@ -439,7 +439,7 @@ def create_app(demo_mode=None):
     def add_switch_manual():
         """수동으로 스위치 1대 등록 (SSRF 검증 포함)."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             name = data.get("name", "").strip()
             ip = data.get("ip", "").strip()
             hostname = data.get("hostname", "").strip()
@@ -989,7 +989,7 @@ def create_app(demo_mode=None):
     def set_email_settings():
         """알람 이메일 설정 저장. SMTP 인증정보는 DPAPI 암호화 저장(입력 시에만 갱신)."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             db.set_setting(db_path, "email_enabled", "1" if data.get("enabled") else "0")
             db.set_setting(db_path, "smtp_host", (data.get("smtp_host") or "").strip()[:200])
             port_raw = str(data.get("smtp_port") or "25").strip()
@@ -1195,7 +1195,7 @@ def create_app(demo_mode=None):
             sw = db.get_switch(db_path, switch_id)
             if not sw:
                 return jsonify({"error": "not found"}), 404
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             username = data.get("username", "")
             password = data.get("password", "")
             if not (username and password):
@@ -1247,7 +1247,7 @@ def create_app(demo_mode=None):
     def facility_delete_subnet():
         """설비 현황에서 특정 대역의 수집 결과 전체 삭제."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             subnet = (data.get("subnet") or "").strip()
             if not subnet:
                 return jsonify({"error": "subnet required"}), 400
@@ -1263,7 +1263,7 @@ def create_app(demo_mode=None):
     def facility_detect_subnets():
         """11번 스위치의 directly-connected 대역 자동 도출."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             switch_id = data.get("switch_id")
             if not switch_id:
                 return jsonify({"error": "switch_id required"}), 400
@@ -1289,7 +1289,7 @@ def create_app(demo_mode=None):
     def facility_collect():
         """대역 ping sweep + ARP + MAC 대조 (11번 스위치가 직접 ping). 백그라운드."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             switch_id = data.get("switch_id")
             subnet = (data.get("subnet") or "").strip()
             username = data.get("username", "")
@@ -1385,7 +1385,7 @@ def create_app(demo_mode=None):
     def test_switch_connection():
         """M11: 스위치 연결 테스트 (IP+계정 입력값 기반, 저장 전 선검증)."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             ip = (data.get("ip") or "").strip()
             if not ip:
                 return jsonify({"error": "ip required"}), 400
@@ -1410,7 +1410,7 @@ def create_app(demo_mode=None):
     def test_firewall_connection():
         """M11: 방화벽 연결 테스트 (입력값 기반, 저장 전 선검증)."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             host = (data.get("host") or "").strip()
             vendor = (data.get("vendor") or "").lower()
             if not host:
@@ -1442,7 +1442,7 @@ def create_app(demo_mode=None):
     def update_switch_endpoint(switch_id):
         """스위치 등록 정보 수정."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             ip = (data.get("ip") or "").strip()
             if ip:  # IP 변경 시 SSRF 검증
                 try:
@@ -1499,7 +1499,7 @@ def create_app(demo_mode=None):
     def bulk_set_device_type():
         """선택된 스위치들의 구분(장비 유형)을 일괄 변경. body {ids:[...], device_type}"""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             ids = data.get("ids", [])
             dtype = (data.get("device_type") or "").strip()
             if not isinstance(ids, list) or not ids:
@@ -1524,7 +1524,7 @@ def create_app(demo_mode=None):
     def bulk_delete_switches_endpoint():
         """스위치 여러 대 일괄/선택 삭제. body: {ids:[...]}"""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             ids = data.get("ids", [])
             if not isinstance(ids, list) or not ids:
                 return jsonify({"error": "ids required"}), 400
@@ -1542,7 +1542,7 @@ def create_app(demo_mode=None):
     def update_firewall_endpoint(fid):
         """방화벽 등록 정보 수정."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             host = (data.get("host") or "").strip()
             if host:
                 try:
@@ -1624,7 +1624,7 @@ def create_app(demo_mode=None):
     def set_auto_collect():
         """자동화 설정 저장(자동 수집·설비 자동 스캔·알람 보존·도달성 감시)."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             enabled = "1" if data.get("enabled") else "0"
             raw = (data.get("times") or "").strip()
             # HH:MM 형식만 허용(쉼표 구분, 최대 6개)
@@ -1671,7 +1671,7 @@ def create_app(demo_mode=None):
     def set_source_ip():
         """M12: 장비 접근에 사용할 출발지 IP 설정(빈값=자동/OS 기본). PC 이더넷 IP만 허용."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             ip = (data.get("ip") or "").strip()
             if ip and ip not in netinfo.get_local_ipv4_addresses():
                 return jsonify({"error": "선택한 IP가 이 PC의 이더넷 IP 목록에 없습니다"}), 400
@@ -1714,7 +1714,7 @@ def create_app(demo_mode=None):
     def add_firewall_endpoint():
         """방화벽 장비 등록 (벤더: fortigate | paloalto)."""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             vendor = (data.get("vendor") or "").lower()
             host = (data.get("host") or "").strip()
             name = (data.get("name") or host).strip()
@@ -1794,7 +1794,7 @@ def create_app(demo_mode=None):
         if fw_port is not None and not (isinstance(fw_port, int) and 1 <= fw_port <= 65535):
             db.set_firewall_status(db_path, fid, "failed")
             return jsonify({"error": "stored firewall port is invalid"}), 400
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         token = data.get("token", "")
         username = data.get("username", "")
         password = data.get("password", "")
@@ -1880,7 +1880,7 @@ def create_app(demo_mode=None):
         각 스위치를 워커 큐에 넣어 동시 수집한다. 계정은 세션 저장소 경유(평문 큐 비노출).
         """
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
             ids = data.get("ids", [])
             if not isinstance(ids, list) or not ids:
                 return jsonify({"error": "ids required"}), 400
@@ -1949,7 +1949,7 @@ def create_app(demo_mode=None):
         log_event("info", "collect_requested", switch_id=switch_id)
 
         try:
-            data = request.get_json() or {}
+            data = request.get_json(silent=True) or {}
 
             # HIGH FIX (CWE-20): Validate credential string length, type, character set
             try:
@@ -1969,14 +1969,16 @@ def create_app(demo_mode=None):
             # HARDENING (CWE-918 SSRF): Validate DB switch IP before collection.
             # Prevents legacy/seed data with public IPs from bypassing input validation.
             switch_row = db.get_switch(db_path, switch_id)
-            if switch_row:
-                switch_ip = switch_row.get("ip") if isinstance(switch_row, dict) else getattr(switch_row, "ip", None)
-                if switch_ip:
-                    try:
-                        validate_ipv4(switch_ip, config.collector.get("allowed_ip_ranges"))
-                    except ValueError as e:
-                        log_event("warning", "collect_blocked_invalid_ip", switch_id=switch_id, ip=switch_ip, reason=str(e))
-                        return jsonify({"error": f"Switch IP rejected: {e}"}), 400
+            if not switch_row:
+                # 존재하지 않는 스위치는 즉시 404(이전엔 워커에 큐잉돼 202 반환 후 실패)
+                return jsonify({"error": "not found"}), 404
+            switch_ip = switch_row.get("ip") if isinstance(switch_row, dict) else getattr(switch_row, "ip", None)
+            if switch_ip:
+                try:
+                    validate_ipv4(switch_ip, config.collector.get("allowed_ip_ranges"))
+                except ValueError as e:
+                    log_event("warning", "collect_blocked_invalid_ip", switch_id=switch_id, ip=switch_ip, reason=str(e))
+                    return jsonify({"error": f"Switch IP rejected: {e}"}), 400
 
             persist = data.get("persist", False)
 

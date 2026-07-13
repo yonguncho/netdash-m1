@@ -109,9 +109,10 @@ def parse_lldp_detail(output):
         name = re.search(r'System Name\s*[:=]?\s*"?([^"\n]+?)"?\s*$', blk, re.MULTILINE | re.IGNORECASE) or \
             re.search(r'SysName\s*[:=]\s*(\S+)', blk, re.IGNORECASE)
         # 줄 시작 앵커: NX-OS 'Local Port id:'(local)의 'Port id'를 remote로
-        # 오인하지 않도록 — remote는 들여쓰기 후 'Port ID'로 시작하는 줄만.
-        rport = re.search(r'^\s*Port ID\s*[:=]?\s*(?:.*?)"?([\w/.:-]+)"?\s*$', blk, re.MULTILINE | re.IGNORECASE) or \
-            re.search(r'^\s*Port ID\s*[:=]\s*(\S+)', blk, re.MULTILINE | re.IGNORECASE)
+        # 오인하지 않도록 — remote는 (선택적 '- ' 불릿 후) 'Port ID'로 시작하는 줄만.
+        # Arista EOS는 '  - Port ID     : "Ethernet1"'처럼 불릿(-)을 붙인다.
+        rport = re.search(r'^\s*-?\s*Port ID\s*[:=]?\s*(?:.*?)"?([\w/.:-]+)"?\s*$', blk, re.MULTILINE | re.IGNORECASE) or \
+            re.search(r'^\s*-?\s*Port ID\s*[:=]\s*(\S+)', blk, re.MULTILINE | re.IGNORECASE)
         ip = re.search(r"Management Address(?:es)?\s*[:=]?\s*([\d.]+)", blk)
         plat = re.search(r"System Description\s*[:=]?\s*([^\n]+)", blk)
         if not name:

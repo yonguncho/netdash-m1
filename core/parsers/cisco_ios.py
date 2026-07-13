@@ -41,6 +41,8 @@ _STATUS_MAP = {
     "down": "down",
 }
 _STATUS_SET = frozenset(_STATUS_MAP.keys())
+# show interfaces status의 Status 뒤 Vlan 컬럼 값(숫자 VLAN, trunk, routed, unassigned '--')
+_VLAN_LIKE = re.compile(r"^(\d+|trunk|routed|monitoring|unassigned|--)$", re.IGNORECASE)
 
 
 _ABBR = [
@@ -171,12 +173,23 @@ def _parse_ports(status_output, descriptions, switch_id, errors=None):
         port = utils.normalize_port(toks[0])
         if not port:
             continue
-        # FIX: 상태는 '정확 일치 토큰'으로만 판별(Name에 들어간 up/down 오인식 방지).
+        # FIX: 상태는 '정확 일치 토큰'으로 판별하되, Name 컬럼에 'down'/'up'이
+        # 독립 토큰으로 들어간 경우(예: "link down bkp")의 오인식을 막기 위해
+        # 'status 바로 뒤 토큰이 Vlan류(숫자/trunk/routed)'라는 제약을 우선 적용한다.
+        # (show interfaces status 컬럼: Port Name Status Vlan Duplex Speed Type)
         status_idx = None
         for idx in range(1, len(toks)):
             if toks[idx].lower() in _STATUS_SET:
-                status_idx = idx
-                break
+                nxt = toks[idx + 1] if idx + 1 < len(toks) else ""
+                if _VLAN_LIKE.match(nxt):
+                    status_idx = idx
+                    break
+        if status_idx is None:
+            # 폴백(비표준 출력): Vlan 제약 없이 첫 status 토큰
+            for idx in range(1, len(toks)):
+                if toks[idx].lower() in _STATUS_SET:
+                    status_idx = idx
+                    break
         if status_idx is None:
             continue
         status = _STATUS_MAP.get(toks[status_idx].lower(), "down")
