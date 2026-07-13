@@ -170,22 +170,28 @@ def _extract_exos_subnets(text):
     """
     out = []
     t = text or ""
+
+    def _add(ip, mask):
+        try:
+            out.append(str(ipaddress.IPv4Network("%s/%s" % (ip, mask), strict=False)))
+        except (ipaddress.AddressValueError, ValueError):
+            pass
+
     # ① CIDR: 'a.b.c.d/nn' 또는 'a.b.c.d /nn' (show vlan, show iproute)
     for m in re.finditer(r"(\d{1,3}(?:\.\d{1,3}){3})\s*/\s*(\d{1,2})", t):
-        try:
-            out.append(str(ipaddress.IPv4Network(
-                "%s/%s" % (m.group(1), m.group(2)), strict=False)))
-        except (ipaddress.AddressValueError, ValueError):
-            continue
-    # ② 점표기 마스크: 'IP Address: a.b.c.d ... Netmask: 255.x.x.x' (show ipconfig)
-    #    IP와 255.으로 시작하는 마스크가 같은 줄/근처에 오는 EXOS ipconfig 형태.
+        _add(m.group(1), m.group(2))
+    # ② 점표기 마스크: 'IP Address: a.b.c.d ... Netmask: 255.x.x.x'
     for m in re.finditer(
             r"(\d{1,3}(?:\.\d{1,3}){3})\D{0,40}?(255\.\d{1,3}\.\d{1,3}\.\d{1,3})", t):
-        try:
-            out.append(str(ipaddress.IPv4Network(
-                "%s/%s" % (m.group(1), m.group(2)), strict=False)))
-        except (ipaddress.AddressValueError, ValueError):
-            continue
+        _add(m.group(1), m.group(2))
+    # ③ EXOS 'show ipconfig' 줄바꿈 형태(31.x): IP와 프리픽스가 다른 줄에 있음
+    #      ip address: 10.92.152.11
+    #      flags: /23 EUf--R--g---
+    #    'ip address:' 뒤 IP → 다음 숫자가 나오기 전 첫 '/nn'(flags 줄의 프리픽스)와 페어링.
+    for m in re.finditer(
+            r"ip\s*address:\s*(\d{1,3}(?:\.\d{1,3}){3})[^\d/]{0,60}?/\s*(\d{1,2})",
+            t, re.IGNORECASE):
+        _add(m.group(1), m.group(2))
     return out
 
 
@@ -261,13 +267,21 @@ def detect_subnets(db_path, switch_id, username, password, source_ip=None):
                 "show running-config | include ip address", read_timeout=30)
         except Exception:
             pass
-    subnets = _parse_connected_subnets(route_out, iface_out, cfg_out)
-    if not subnets:
-        # 진단용: 어떤 출력이 왔는지 로그로 남겨 형식 차이를 추적 가능하게
-        utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
-                        route_sample=(route_out or "")[:200],
-                        iface_sample=(iface_out or "")[:200],
-                        cfg_sample=(cfg_out or "")[:200])
+        subnets = _parse_connected_subnets(route_out, iface_out, cfg_out)
+        if not subnets:
+            # 안전망: 벤더가 EXOS인데 cisco 등으로 잘못 등록됐으면 IOS 명령이 전부
+            # 빈손이 된다. 연결이 살아있는 동안 EXOS 명령으로 한 번 더 시도.
+            exos_subnets, exos_sample = _detect_subnets_exos(conn)
+            if exos_subnets:
+                utils.log_event("info", "detect_subnets_exos_fallback",
+                                switch_id=switch_id, count=len(exos_subnets))
+                return exos_subnets
+            # 진단용: IOS·EXOS 양쪽 원문 샘플을 남겨 형식 차이를 추적 가능하게
+            utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
+                            route_sample=(route_out or "")[:200],
+                            iface_sample=(iface_out or "")[:200],
+                            cfg_sample=(cfg_out or "")[:200],
+                            exos_sample=exos_sample)
     return subnets
 
 

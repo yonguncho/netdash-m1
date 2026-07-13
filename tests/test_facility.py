@@ -640,6 +640,54 @@ def test_extract_exos_subnets_dotted_and_cidr():
     assert "172.27.54.0/24" in got2
 
 
+def test_extract_exos_subnets_ipconfig_31x_real():
+    """EXOS 31.7.2 실제 show ipconfig — 한 줄 표형: 'interface ip /prefix flags nSIA'."""
+    from core import facility
+    real = (
+        "use redirects: disabled\n"
+        "irdp:\n"
+        "advertisement address: 255.255.255.255 maximum interval: 600\n"
+        "interface ip address flags nSIA\n"
+        "Data 10.92.152.11 /23 EUf--R--g--- 0\n"
+    )
+    got = facility._extract_exos_subnets(real)
+    assert "10.92.152.0/23" in got          # 'IP /prefix' 한 줄에서 도출
+    assert "255.255.255.255/32" not in got  # irdp 브로드캐스트 오탐 없음
+
+
+def test_detect_subnets_exos_fallback_when_vendor_mislabeled(temp_db, monkeypatch):
+    """벤더가 cisco로 잘못 등록된 EXOS 스위치 — IOS 명령 빈손 → EXOS 폴백으로 도출."""
+    import netmiko as _nm
+    from core import facility
+
+    # 실제론 EXOS인데 DB엔 cisco로 저장된 상황
+    sid = db.save_switch(temp_db, "MISLABEL_SW", "10.92.152.11", "cisco")
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            # IOS 명령은 EXOS가 이해 못 해 빈 응답
+            if cmd.startswith("show ip route") or cmd.startswith("show ip interface") \
+               or "running-config" in cmd:
+                return ""
+            if cmd == "show ipconfig":
+                return "interface ip address flags nSIA\nData 10.92.152.11 /23 EUf--R--g--- 0\n"
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    subnets = facility.detect_subnets(temp_db, sid, "u", "p")
+    assert "10.92.152.0/23" in subnets   # EXOS 폴백이 건져냄
+
+
 def test_facility_delete_subnet(client):
     """특정 대역만 삭제 — 다른 대역은 유지."""
     from config import get_config
