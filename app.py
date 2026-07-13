@@ -30,6 +30,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_file_log_attached = False
+
+
+def _attach_file_logger(path):
+    """루트 로거에 회전 파일 핸들러 부착(중복 방지).
+
+    윈도우 exe는 stdout이 유실돼 '서버 오류'의 실제 내용을 아무도 못 봤다.
+    DB 옆 netdash.log에 남겨 재발 오류를 진단 가능하게 한다. 2MB×3 회전(최대 6MB).
+    """
+    global _file_log_attached
+    if _file_log_attached:
+        return
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path as _Path
+    p = _Path(path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    fh = RotatingFileHandler(str(p), maxBytes=2_000_000, backupCount=3,
+                             encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter(
+        '{"time":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":"%(message)s"}'))
+    logging.getLogger().addHandler(fh)
+    _file_log_attached = True
+
 
 def validate_credential(value, max_length=256):
     """CRITICAL FIX (CWE-20): Validate credential string length and printable ASCII only.
@@ -205,6 +232,12 @@ def create_app(demo_mode=None):
     config = get_config(demo_mode=demo_mode)
 
     db_path = config.get_db_path()
+    # 런타임 로그를 파일로도 보존(서버 오류 진단용) — DB 옆 netdash.log
+    try:
+        from pathlib import Path as _Path
+        _attach_file_logger(_Path(str(db_path)).parent / "netdash.log")
+    except Exception as e:
+        log_event("warning", "file_logger_failed", error=str(e))
     db.init_schema(db_path)
     db.validate_schema(db_path)
     # 이전 실행 중단으로 박제된 '수집중' 상태 복구(재시작 후 실제 수집은 없음)

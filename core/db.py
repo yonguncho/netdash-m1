@@ -297,6 +297,25 @@ CREATE TABLE IF NOT EXISTS facility_hosts (
 """
 
 
+# 성능 인덱스: hot 쿼리의 풀 테이블 스캔 제거(스냅샷이 쌓일수록 느려지던 원인).
+# UNIQUE 제약이 만드는 암시적 인덱스로 이미 커버되는 컬럼(예: mac_entries.snapshot_id는
+# UNIQUE(snapshot_id,...)의 최좌측)은 제외하고, 커버 안 되는 것만 추가한다. idempotent.
+_PERF_INDEXES = [
+    # 거의 모든 hot 경로가 쓰는 'SELECT MAX(id) FROM snapshots GROUP BY switch_id'
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_switch_id ON snapshots(switch_id, id)",
+    # MAC 검색/상관(비-최좌측이라 UNIQUE 인덱스로 커버 안 됨)
+    "CREATE INDEX IF NOT EXISTS idx_mac_mac ON mac_entries(mac)",
+    "CREATE INDEX IF NOT EXISTS idx_mac_switch_port ON mac_entries(switch_id, port)",
+    "CREATE INDEX IF NOT EXISTS idx_arp_switch ON arp_entries(switch_id)",
+    "CREATE INDEX IF NOT EXISTS idx_arp_mac ON arp_entries(mac)",
+    "CREATE INDEX IF NOT EXISTS idx_portchan_snapshot ON port_channels(snapshot_id)",
+    "CREATE INDEX IF NOT EXISTS idx_neighbors_switch ON neighbors(switch_id)",
+    "CREATE INDEX IF NOT EXISTS idx_config_backups_switch ON config_backups(switch_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_port_events_switch ON port_events(switch_id, port_name, event_type)",
+    "CREATE INDEX IF NOT EXISTS idx_vlan_names_switch ON vlan_names(switch_id)",
+]
+
+
 # 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
 _acl_applied = set()
 
@@ -399,6 +418,12 @@ def init_schema(db_path):
                 CREATE_AUDIT_LOG_TABLE,
             ]:
                 cursor.execute(table_sql)
+            # 성능 인덱스 생성(idempotent) — 기존 DB에도 다음 기동 때 자동 적용
+            for idx_sql in _PERF_INDEXES:
+                try:
+                    cursor.execute(idx_sql)
+                except Exception:
+                    pass
             # 기존 DB 마이그레이션: hostname, location, alert 컬럼 추가
             for col, definition in [
                 ("hostname", "TEXT"),
