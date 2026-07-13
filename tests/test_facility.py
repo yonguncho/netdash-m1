@@ -587,6 +587,46 @@ def test_collect_band_vrf_fallback_when_detection_misses(temp_db, monkeypatch):
     assert "172.27.54.4" in hosts   # 폴백 스윕이 VRF PROD ARP에서 건져냄
 
 
+def test_detect_subnets_exos(temp_db, monkeypatch):
+    """EXOS 스위치 대역 자동찾기 — show vlan/show ipconfig의 IP/마스크에서 대역 도출.
+
+    실증상: EXOS(10.92.152.11)에서 자동찾기 0개 — IOS 명령만 써서 EXOS가 미지원.
+    """
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "SKBA_OA_SW1", "10.92.152.11", "extreme")
+    sent = []
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            sent.append(cmd)
+            if cmd == "show vlan":
+                return ("Name            VID  IP Address        Flags\n"
+                        "mgmt            4095 10.92.152.11 /24  ----\n"
+                        "v540            540  172.27.54.1  /24   ----\n")
+            if cmd == "show ipconfig":
+                return "Router Interface on VLAN v540 is 172.27.54.1 /24\n"
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    subnets = facility.detect_subnets(temp_db, sid, "u", "p")
+    # IOS 명령은 안 보내고 EXOS 전용 명령을 써야 함
+    assert "show vlan" in sent and not any("show ip route" in c for c in sent)
+    assert "172.27.54.0/24" in subnets
+    assert "10.92.152.0/24" in subnets
+
+
 def test_facility_delete_subnet(client):
     """특정 대역만 삭제 — 다른 대역은 유지."""
     from config import get_config

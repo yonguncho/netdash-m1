@@ -140,7 +140,12 @@ def _parse_connected_subnets(route_out, iface_out, cfg_out=""):
                 found.append(str(net))
             except (ipaddress.AddressValueError, ValueError):
                 pass
-    # 정규화 + 중복 제거 + 크기 제한(/22 이하 = num_addresses<=1024)
+    return _finalize_subnets(found)
+
+
+def _finalize_subnets(found):
+    """대역 후보 리스트 → 정규화 + 중복 제거 + 크기 제한(/22 이하 = num_addresses<=1024).
+    루프백/링크로컬 제외. 벤더 무관(IOS·EXOS 공용)."""
     out, seen = [], set()
     for s in found:
         try:
@@ -157,31 +162,71 @@ def _parse_connected_subnets(route_out, iface_out, cfg_out=""):
     return out
 
 
+def _detect_subnets_exos(conn):
+    """EXOS: show vlan / show ipconfig에서 라우터 인터페이스(SVI) 대역 도출.
+
+    EXOS는 IOS의 'show ip route connected'/'show ip interface'/'show running-config'를
+    지원하지 않아 대역 자동찾기가 0개가 됐다. EXOS는 로컬 인터페이스만 나오는
+    'show vlan'·'show ipconfig'에서 'a.b.c.d /nn' 형태 IP/마스크를 뽑는다.
+    """
+    vlan_out, ip_out = "", ""
+    try:
+        vlan_out = conn.send_command("show vlan", read_timeout=30)
+    except Exception:
+        pass
+    try:
+        ip_out = conn.send_command("show ipconfig", read_timeout=30)
+    except Exception:
+        pass
+    found = []
+    # 'a.b.c.d /nn' 또는 'a.b.c.d/nn' (EXOS는 IP와 마스크 사이 공백이 흔함)
+    for text in (vlan_out, ip_out):
+        for m in re.finditer(r"(\d{1,3}(?:\.\d{1,3}){3})\s*/\s*(\d{1,2})", text or ""):
+            try:
+                net = ipaddress.IPv4Network("%s/%s" % (m.group(1), m.group(2)),
+                                            strict=False)
+                found.append(str(net))
+            except (ipaddress.AddressValueError, ValueError):
+                continue
+    return _finalize_subnets(found), vlan_out, ip_out
+
+
 def detect_subnets(db_path, switch_id, username, password, source_ip=None):
-    """11번 스위치에 접속해 directly-connected 대역을 자동 도출."""
+    """스위치에 접속해 directly-connected 대역을 자동 도출(벤더별 명령)."""
     from netmiko import ConnectHandler
     from . import netbind
     sw = db.get_switch(db_path, switch_id)
     if not sw:
         raise ValueError("switch not found")
+    vendor = _collector._norm_vendor(sw.get("vendor"))
     device = {
-        "device_type": _collector._norm_vendor(sw.get("vendor")),
+        "device_type": vendor,
         "ip": sw["ip"], "username": username, "password": password,
         "secret": password, "conn_timeout": 30, "fast_cli": False,
     }
     if source_ip:
         device["sock"] = netbind.bind_socket(sw["ip"], 22, source_ip, 30)
-    route_out, iface_out = "", ""
+    route_out, iface_out, cfg_out = "", "", ""
     with ConnectHandler(**device) as conn:
         try:
             if hasattr(conn, "check_enable_mode") and not conn.check_enable_mode():
                 conn.enable()
         except Exception:
             pass
+        # 페이징 비활성(EXOS는 'disable clipaging', IOS류는 'terminal length 0')
+        paging = _collector._PAGING_CMD.get(vendor, "terminal length 0")
         try:
-            conn.send_command("terminal length 0", read_timeout=10)
+            conn.send_command(paging, read_timeout=10)
         except Exception:
             pass
+        # EXOS는 IOS 명령을 지원하지 않으므로 전용 경로로 분기
+        if vendor == "extreme_exos":
+            subnets, vlan_out, ip_out = _detect_subnets_exos(conn)
+            if not subnets:
+                utils.log_event("warning", "detect_subnets_empty", switch_id=switch_id,
+                                route_sample=(vlan_out or "")[:200],
+                                iface_sample=(ip_out or "")[:200], cfg_sample="")
+            return subnets
         try:
             route_out = conn.send_command("show ip route connected", read_timeout=30)
         except Exception:
@@ -191,7 +236,6 @@ def detect_subnets(db_path, switch_id, username, password, source_ip=None):
         except Exception:
             pass
         # ③ running-config의 ip address 줄 — L2 SVI/VRF 환경에서도 확실한 소스
-        cfg_out = ""
         try:
             cfg_out = conn.send_command(
                 "show running-config | include ip address", read_timeout=30)
@@ -235,6 +279,8 @@ def _ping_tpl(vendor, vrf):
     if vendor == "cisco_nxos":
         return ("ping %s vrf " + vrf + " count 1 timeout 1") if vrf \
                else "ping %s count 1 timeout 1"
+    if vendor == "extreme_exos":
+        return "ping count 1 %s"        # EXOS 어순: ping [count N] <host> (VRF 개념 다름)
     return ("ping vrf " + vrf + " %s repeat 1 timeout 1") if vrf \
            else "ping %s repeat 1 timeout 1"
 
