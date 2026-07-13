@@ -504,6 +504,89 @@ def test_collect_band_global_when_no_vrf(temp_db, monkeypatch):
     assert all(c == "show ip arp" for c in state["arp_cmds"])
 
 
+def test_collect_band_nxos_vendor_ping_order(temp_db, monkeypatch):
+    """NX-OS 스위치는 nxos 파서 + 'ping <ip> vrf X' 어순을 써야 한다.
+
+    이전엔 collect_band가 cisco_ios 파서/문법을 하드코딩 → 비-IOS 장비 '완료인데 0대'.
+    """
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "NXSW", "10.92.128.164", "nexus")
+    monkeypatch.setattr(facility, "_SWEEP_PING_GAP", 0)
+    state = {"pings": [], "arp_cmds": []}
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            if cmd == "show vrf":
+                return ("Name             State\n"
+                        "PROD             Up\n")
+            if cmd.startswith("show ip route vrf") and "PROD" in cmd:
+                return "172.27.54.0/24, ubest/mbest, attached\n * directly connected\n"
+            if cmd.startswith("ping"):
+                state["pings"].append(cmd)
+                return "5 packets transmitted, 5 packets received"
+            if cmd.startswith("show ip arp"):
+                state["arp_cmds"].append(cmd)
+                return "172.27.54.4  00:01:23  aabb.cc00.0054  Vlan540\n"
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    monkeypatch.setattr(facility, "_set", lambda **kw: None)
+
+    facility.collect_band(temp_db, sid, "172.27.54.0/29", "u", "p")
+    # NX-OS 어순: 'ping <ip> vrf PROD ...' (IOS의 'ping vrf X <ip>'가 아님)
+    assert state["pings"] and all(" vrf PROD " in p and not p.startswith("ping vrf")
+                                  for p in state["pings"])
+    hosts = {h["ip"] for h in db.get_facility_hosts(temp_db)}
+    assert "172.27.54.4" in hosts   # nxos 파서로 파싱돼 저장됨
+
+
+def test_collect_band_vrf_fallback_when_detection_misses(temp_db, monkeypatch):
+    """VRF 자동탐지가 라우트 포맷차로 빗나가도, 0대면 전 VRF ARP 스윕으로 건진다."""
+    import netmiko as _nm
+    from core import facility
+
+    sid = db.save_switch(temp_db, "SW164", "10.92.128.164", "cisco")
+    monkeypatch.setattr(facility, "_SWEEP_PING_GAP", 0)
+
+    class FakeConn:
+        def __init__(self, **kw):
+            pass
+        def check_enable_mode(self):
+            return True
+        def disconnect(self):
+            pass
+        def send_command(self, cmd, read_timeout=10):
+            if cmd == "show vrf":
+                return ("  Name      Default RD  Protocols  Interfaces\n"
+                        "  PROD      <not set>   ipv4       Vlan540\n")
+            # 라우트 탐지는 일부러 매칭 실패(대역 CIDR 미출현) → vrf=None → 폴백 유도
+            if cmd.startswith("show ip route vrf"):
+                return "(no matching connected route line)\n"
+            if cmd.startswith("ping"):
+                return "!!!!!"
+            # 글로벌 ARP엔 대역 항목 없음, VRF PROD ARP엔 있음
+            if cmd == "show ip arp vrf PROD":
+                return "Internet  172.27.54.4  0  aabb.cc00.0054  ARPA  Vlan540\n"
+            if cmd.startswith("show ip arp"):
+                return "Internet  10.0.0.1  0  aabb.cc00.9999  ARPA  Vlan1\n"
+            return ""
+
+    monkeypatch.setattr(_nm, "ConnectHandler", FakeConn)
+    monkeypatch.setattr(facility, "_set", lambda **kw: None)
+
+    facility.collect_band(temp_db, sid, "172.27.54.0/29", "u", "p")
+    hosts = {h["ip"] for h in db.get_facility_hosts(temp_db)}
+    assert "172.27.54.4" in hosts   # 폴백 스윕이 VRF PROD ARP에서 건져냄
+
+
 def test_facility_delete_subnet(client):
     """특정 대역만 삭제 — 다른 대역은 유지."""
     from config import get_config

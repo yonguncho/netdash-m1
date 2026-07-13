@@ -207,16 +207,12 @@ def detect_subnets(db_path, switch_id, username, password, source_ip=None):
     return subnets
 
 
-def _find_vrf_for_subnet(conn, net):
-    """대상 대역이 어느 VRF에 속하는지 탐지(IOS/IOS-XE). 글로벌이면 None.
-
-    관리 IP와 다른 대역(예: 172.27.x)이 VRF에 있으면 일반 ping은 글로벌로 나가
-    실패하고 show ip arp에도 안 보여 '완료인데 0대'가 된다 → vrf 키워드 필요.
-    """
+def _list_vrfs(conn):
+    """장비의 VRF 이름 목록(IOS/IOS-XE/NX-OS). 실패·미지원이면 빈 리스트."""
     try:
         vrf_out = conn.send_command("show vrf", read_timeout=15)
     except Exception:
-        return None
+        return []
     names = []
     for line in (vrf_out or "").splitlines():
         m = re.match(r"^\s{0,2}(\S+)\s+", line)
@@ -226,16 +222,41 @@ def _find_vrf_for_subnet(conn, net):
         if name.lower() in ("name", "vrf", "%", "---", "") or name.startswith("-"):
             continue
         if "invalid" in line.lower():
-            return None
+            return []
         names.append(name)
+    return names
+
+
+def _ping_tpl(vendor, vrf):
+    """벤더별 단발 ping 템플릿(%s=IP). ping은 ARP 채우기용 — 실패해도 치명적 아님.
+
+    NX-OS는 'ping <ip> vrf X' 어순, IOS/Arista는 'ping vrf X <ip>' 어순으로 다르다.
+    """
+    if vendor == "cisco_nxos":
+        return ("ping %s vrf " + vrf + " count 1 timeout 1") if vrf \
+               else "ping %s count 1 timeout 1"
+    return ("ping vrf " + vrf + " %s repeat 1 timeout 1") if vrf \
+           else "ping %s repeat 1 timeout 1"
+
+
+def _find_vrf_for_subnet(conn, net):
+    """대상 대역이 어느 VRF에 속하는지 탐지(IOS/IOS-XE/NX-OS). 글로벌이면 None.
+
+    관리 IP와 다른 대역(예: 172.27.x)이 VRF에 있으면 일반 ping은 글로벌로 나가
+    실패하고 show ip arp에도 안 보여 '완료인데 0대'가 된다 → vrf 키워드 필요.
+    """
+    names = _list_vrfs(conn)
     for name in names[:10]:
         try:
             out = conn.send_command("show ip route vrf %s connected" % name,
                                     read_timeout=20)
         except Exception:
             continue
-        # connected 대역들과 비교 — 수집 대역이 그 안(하위 대역 포함)이면 해당 VRF
-        for m in re.finditer(r"([\d.]+/\d{1,2})\s+is\s+directly\s+connected", out or ""):
+        # connected 대역들과 비교 — 수집 대역이 그 안(하위 대역 포함)이면 해당 VRF.
+        # 'show ip route vrf X connected'는 연결 라우트만 나열하므로 출력의 모든 CIDR가
+        # 곧 connected 대역이다. IOS는 'X/Y is directly connected', NX-OS는 'X/Y, attached',
+        # Arista도 표기가 달라 문구 대신 CIDR를 직접 대조한다(벤더 무관).
+        for m in re.finditer(r"(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})", out or ""):
             try:
                 route_net = ipaddress.IPv4Network(m.group(1), strict=False)
                 if net.subnet_of(route_net):
@@ -251,11 +272,21 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     """동기 수집(백그라운드 스레드에서 호출). 진행 상태는 _status로 갱신."""
     from netmiko import ConnectHandler
     from . import netbind
-    from .parsers import cisco_ios
+    from . import parsers
 
     sw = db.get_switch(db_path, switch_id)
     if not sw:
         raise ValueError("switch not found")
+    # 벤더별 파서·ARP 명령 선택. 이전엔 cisco_ios 하드코딩 → 비-IOS 장비에서
+    # ARP 파싱이 0건이 되어 '완료인데 0대'가 나던 원인. VRF는 IOS/NX-OS/Arista만 지원.
+    vendor = _collector._norm_vendor(sw.get("vendor"))
+    try:
+        parser = parsers.get_parser(vendor)
+    except ValueError:
+        vendor = "cisco_ios"
+        parser = parsers.get_parser("cisco_ios")   # 미지원 벤더는 IOS로 시도(fallback)
+    arp_base_cmd = getattr(parser, "CMDS", {}).get("arp", "show ip arp")
+    vrf_capable = vendor in ("cisco_ios", "cisco_nxos", "arista_eos")
     net = ipaddress.IPv4Network(subnet, strict=False)
     ips = [str(h) for h in net.hosts()]
     _set(running=True, subnet=subnet, done=0, total=len(ips), message="연결 중")
@@ -303,7 +334,7 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     partial_error = None
 
     vrf = None            # 대역이 VRF 소속이면 ping/ARP에 vrf 키워드 적용
-    arp_cmd = "show ip arp"
+    arp_cmd = arp_base_cmd
     last_arp_sample = ""  # 0대 완료 시 진단용 원문 샘플
 
     def _read_arp():
@@ -324,7 +355,7 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
             out = conn.send_command(arp_cmd, read_timeout=60)
         arp_reads += 1
         last_arp_sample = (out or "")[:300]
-        for a in cisco_ios._parse_arps(out, switch_id):
+        for a in parser._parse_arps(out, switch_id):
             try:
                 if ipaddress.IPv4Address(a["ip"]) in net:   # 대역 밖 ARP는 제외
                     arp_union[a["ip"]] = a
@@ -334,12 +365,12 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     conn = _connect()
     try:
         # 대역이 VRF에 속하면 ping/ARP에 vrf 적용(관리대역≠수집대역 환경 대응)
-        _set(message="VRF 확인 중")
-        vrf = _find_vrf_for_subnet(conn, net)
+        if vrf_capable:
+            _set(message="VRF 확인 중")
+            vrf = _find_vrf_for_subnet(conn, net)
         if vrf:
-            arp_cmd = "show ip arp vrf %s" % vrf
-        ping_tpl = ("ping vrf %s %%s repeat 1 timeout 1" % vrf) if vrf \
-                   else "ping %s repeat 1 timeout 1"
+            arp_cmd = "%s vrf %s" % (arp_base_cmd, vrf)
+        ping_tpl = _ping_tpl(vendor, vrf)
         _set(message="대역 ping 중" + ((" (VRF %s)" % vrf) if vrf else ""))
         i = 0
         try:
@@ -381,6 +412,38 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     finally:
         try:
             conn.disconnect()
+        except Exception:
+            pass
+
+    # 0대 폴백: VRF 자동탐지가 실장비 출력 포맷과 어긋나 못 잡았을 수 있다.
+    # 재접속해 모든 VRF의 ARP를 훑어 대역에 드는 항목을 건진다(정탐 보정).
+    if not arp_union and vrf_capable:
+        try:
+            conn = _connect()
+            try:
+                for vname in _list_vrfs(conn)[:10]:
+                    try:
+                        out = conn.send_command("%s vrf %s" % (arp_base_cmd, vname),
+                                                read_timeout=60)
+                    except Exception:
+                        continue
+                    for a in parser._parse_arps(out or "", switch_id):
+                        try:
+                            if ipaddress.IPv4Address(a["ip"]) in net:
+                                arp_union[a["ip"]] = a
+                        except (ipaddress.AddressValueError, ValueError):
+                            continue
+                    if arp_union:
+                        vrf = vname
+                        utils.log_event("info", "facility_vrf_fallback_hit",
+                                        subnet=subnet, vrf=vname,
+                                        collected=len(arp_union))
+                        break
+            finally:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
         except Exception:
             pass
 
