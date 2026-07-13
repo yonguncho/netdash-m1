@@ -1897,6 +1897,56 @@ document.addEventListener("change", function (e) {
     }).catch(function (e) { console.error(e); alert("삭제 오류"); });
   });
 
+  // "전체 진단" → 등록된 전 스위치 일괄 진단(벤더 미지정/오지정 자동 교정)
+  var diagAllBtn = document.getElementById("btn-diagnose-all");
+  var _diagAllPoll = null;
+  function _pollDiagnoseAll() {
+    fetch("/api/switches/diagnose-all/status")
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (diagAllBtn) diagAllBtn.textContent = "진단 중 " + s.done + "/" + s.total;
+        if (s.running) return;                    // 계속 폴링
+        clearInterval(_diagAllPoll); _diagAllPoll = null;
+        if (diagAllBtn) { diagAllBtn.disabled = false; diagAllBtn.textContent = "전체 진단"; }
+        var errs = (s.results || []).filter(function (x) { return x.error; });
+        var msg = "일괄 진단 완료: " + s.total + "대 중 벤더 교정 " + s.corrected + "대.";
+        if (errs.length) {
+          msg += "\n진단 실패 " + errs.length + "대:";
+          errs.slice(0, 10).forEach(function (x) {
+            msg += "\n  - " + (x.name || x.id) + ": " + x.error;
+          });
+          if (errs.length > 10) msg += "\n  ... 외 " + (errs.length - 10) + "대";
+        }
+        alert(msg);
+        pollState();                              // 교정된 벤더 반영
+      })
+      .catch(function () {
+        clearInterval(_diagAllPoll); _diagAllPoll = null;
+        if (diagAllBtn) { diagAllBtn.disabled = false; diagAllBtn.textContent = "전체 진단"; }
+      });
+  }
+  if (diagAllBtn) diagAllBtn.addEventListener("click", function () {
+    if (!confirm("등록된 전 스위치를 일괄 진단합니다.\n각 스위치에 저장된 계정을 사용하며, 벤더가 잘못/미지정된 장비를 자동 교정합니다.\n계속할까요?")) return;
+    diagAllBtn.disabled = true; diagAllBtn.textContent = "진단 시작…";
+    fetch("/api/switches/diagnose-all", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
+    }).then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          diagAllBtn.disabled = false; diagAllBtn.textContent = "전체 진단";
+          alert((res.b && res.b.error) || "일괄 진단 시작 실패");
+          return;
+        }
+        if (_diagAllPoll) clearInterval(_diagAllPoll);
+        _diagAllPoll = setInterval(_pollDiagnoseAll, 2000);
+        _pollDiagnoseAll();
+      })
+      .catch(function () {
+        diagAllBtn.disabled = false; diagAllBtn.textContent = "전체 진단";
+        alert("일괄 진단 시작 오류");
+      });
+  });
+
   // 일괄 수집 실행(공통) — 성공 시 선택 해제 + 안내
   function _runBulkCollect(ids, username, password, persist, enableSecret) {
     var body = {ids: ids, username: username, password: password, persist: !!persist};

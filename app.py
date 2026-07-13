@@ -58,6 +58,83 @@ def _attach_file_logger(path):
     _file_log_attached = True
 
 
+# ─── 일괄 진단(등록 스위치 전체) — 백그라운드 스레드 + 상태 폴링 ───────────────
+_diag_all_lock = threading.Lock()
+_diag_all = {"running": False, "total": 0, "done": 0, "corrected": 0,
+             "results": [], "error": None}
+
+
+def _run_diagnose_all(db_path, source_ip):
+    """등록된 전 스위치를 동시(스레드풀) 진단 → 벤더 미지정/오지정 자동 교정.
+
+    각 스위치의 저장된 자격증명을 사용(없으면 skip). 결과는 _diag_all에 누적.
+    """
+    import concurrent.futures as _cf
+    try:
+        switches = db.get_switches(db_path)
+    except Exception as e:
+        with _diag_all_lock:
+            _diag_all.update(running=False, error=collector._sanitize_error_msg(str(e)))
+        return
+
+    def _one(sw):
+        sid = sw.get("id")
+        name = sw.get("name")
+        blob = db.get_switch_credential(db_path, sid)
+        username = password = ""
+        if blob:
+            dec = credentials.decrypt_credential(blob)
+            if dec and "|" in dec:
+                username, password = dec.split("|", 1)
+        if not (username and password):
+            return {"id": sid, "name": name, "error": "저장된 계정 없음", "guess": None}
+        try:
+            res = collector.diagnose_switch(sw, username, password, source_ip=source_ip)
+        except Exception as e:
+            return {"id": sid, "name": name,
+                    "error": collector._sanitize_error_msg(str(e)), "guess": None}
+        guess = res.get("guess")
+        corrected = None
+        if guess and guess != (sw.get("vendor") or "").lower():
+            try:
+                db.update_switch(db_path, sid, vendor=guess)
+                corrected = guess
+            except Exception:
+                pass
+        if guess:
+            try:
+                diag_text = (res.get("version_head") or "") + "\n" + \
+                            (res.get("banner_head") or "")
+                osv = collector._parse_os_version(guess, diag_text)
+                model = collector._parse_model(guess, diag_text)
+                serial = collector._parse_serial(guess, diag_text)
+                if osv or model or serial:
+                    db.update_switch(db_path, sid, os_version=osv, model=model, serial=serial)
+            except Exception:
+                pass
+        return {"id": sid, "name": name, "guess": guess or "unknown",
+                "corrected": corrected, "error": res.get("error") or ""}
+
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=8) as ex:
+            futs = [ex.submit(_one, sw) for sw in switches]
+            for f in _cf.as_completed(futs):
+                r = f.result()
+                with _diag_all_lock:
+                    _diag_all["done"] += 1
+                    if r.get("corrected"):
+                        _diag_all["corrected"] += 1
+                    _diag_all["results"].append(r)
+    except Exception as e:
+        with _diag_all_lock:
+            _diag_all["error"] = collector._sanitize_error_msg(str(e))
+    finally:
+        with _diag_all_lock:
+            _diag_all["running"] = False
+    log_event("info", "diagnose_all_done", total=_diag_all["total"],
+              corrected=_diag_all["corrected"])
+
+
 def validate_credential(value, max_length=256):
     """CRITICAL FIX (CWE-20): Validate credential string length and printable ASCII only.
 
@@ -325,6 +402,8 @@ def create_app(demo_mode=None):
         if m == "POST":
             if p == "/api/switches/bulk-collect":
                 return "일괄 수집 실행"
+            if p == "/api/switches/diagnose-all":
+                return "전체 진단 실행"
             if p.startswith("/api/switches/") and p.endswith("/collect"):
                 return "스위치 수집 실행"
             if p.startswith("/api/firewalls/") and p.endswith("/collect"):
@@ -1274,6 +1353,36 @@ def create_app(demo_mode=None):
         except Exception as e:
             log_event("error", "diagnose_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/diagnose-all", methods=["POST"])
+    @rate_limit("diagnose_all", max_requests=5, window_seconds=60)
+    def diagnose_all_endpoint():
+        """등록된 전 스위치를 백그라운드로 일괄 진단(벤더 미지정/오지정 자동 교정)."""
+        try:
+            with _diag_all_lock:
+                if _diag_all["running"]:
+                    return jsonify({"error": "이미 일괄 진단이 진행 중입니다",
+                                    "running": True}), 409
+                switches = db.get_switches(db_path)
+                _diag_all.update(running=True, total=len(switches), done=0,
+                                 corrected=0, results=[], error=None)
+            src = db.get_setting(db_path, "source_ip") or None
+            threading.Thread(target=_run_diagnose_all, args=(db_path, src),
+                             daemon=True).start()
+            log_event("info", "diagnose_all_started", total=_diag_all["total"])
+            return jsonify({"ok": True, "total": _diag_all["total"]}), 202
+        except Exception as e:
+            with _diag_all_lock:
+                _diag_all["running"] = False
+            log_event("error", "diagnose_all_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/diagnose-all/status", methods=["GET"])
+    def diagnose_all_status_endpoint():
+        """일괄 진단 진행 상태 폴링용."""
+        with _diag_all_lock:
+            return jsonify(dict(_diag_all))
 
     @app.route("/api/facility/delete-subnet", methods=["POST"])
     @rate_limit("facility_delete_subnet", max_requests=30, window_seconds=60)
