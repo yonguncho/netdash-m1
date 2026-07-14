@@ -1159,8 +1159,13 @@ def diagnose_switch(switch, username, password, source_ip=None):
                     shell.send((password or "") + "\n")
                     _t.sleep(0.8)
                     _alteon_read(shell, timeout=5)
-            # 페이징 해제(--More-- 로 인한 출력 잘림/오인식 방지)
+            # 페이징 해제(출력 잘림 방지). 벤더 미확정이므로 IOS(terminal length 0)와
+            # EXOS(disable clipaging)를 모두 보낸다 — 무관 장비는 그 명령을 무시.
+            # (EXOS는 clipaging이 켜져 있으면 show version 뒤쪽의 'Switch : ... Rev'
+            #  시리얼 라인이 페이징 프롬프트에서 잘려 시리얼을 못 읽던 문제.)
             shell.send("terminal length 0\n")
+            _alteon_read(shell, timeout=3)
+            shell.send("disable clipaging\n")
             _alteon_read(shell, timeout=3)
             probe_cmd = "show version"
             shell.send(probe_cmd + "\n")
