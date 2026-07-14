@@ -103,11 +103,11 @@ def _run_diagnose_all(db_path, source_ip):
                 pass
         if guess:
             try:
-                diag_text = (res.get("version_head") or "") + "\n" + \
-                            (res.get("banner_head") or "")
-                osv = collector._parse_os_version(guess, diag_text)
-                model = collector._parse_model(guess, diag_text)
-                serial = collector._parse_serial(guess, diag_text)
+                diag_text = "\n".join(res.get(k) or "" for k in (
+                    "version_head", "banner_head", "sysinfo_head", "inventory_head"))
+                osv = res.get("os_version") or collector._parse_os_version(guess, diag_text)
+                model = res.get("model") or collector._parse_model(guess, diag_text)
+                serial = res.get("serial") or collector._parse_serial(guess, diag_text)
                 if osv or model or serial:
                     db.update_switch(db_path, sid, os_version=osv, model=model, serial=serial)
             except Exception:
@@ -1331,15 +1331,15 @@ def create_app(demo_mode=None):
                               switch_id=switch_id, vendor=guess)
                 except Exception:
                     pass
-            # 진단 응답 원문에서 모델/버전까지 파싱해 저장 — 진단만 눌러도
-            # 표에 모델·버전이 채워지도록(수집 전 임시 공백 해소)
+            # 진단이 파싱한 OS/모델/시리얼을 저장(없으면 원문에서 파싱 폴백) — 진단만
+            # 눌러도 표의 벤더·모델·버전·시리얼이 채워지도록(누락만 채움; None은 건너뜀).
             if guess:
                 try:
-                    diag_text = (res.get("version_head") or "") + "\n" + \
-                                (res.get("banner_head") or "")
-                    osv = collector._parse_os_version(guess, diag_text)
-                    model = collector._parse_model(guess, diag_text)
-                    serial = collector._parse_serial(guess, diag_text)
+                    diag_text = "\n".join(res.get(k) or "" for k in (
+                        "version_head", "banner_head", "sysinfo_head", "inventory_head"))
+                    osv = res.get("os_version") or collector._parse_os_version(guess, diag_text)
+                    model = res.get("model") or collector._parse_model(guess, diag_text)
+                    serial = res.get("serial") or collector._parse_serial(guess, diag_text)
                     if osv or model or serial:
                         db.update_switch(db_path, switch_id,
                                          os_version=osv, model=model, serial=serial)

@@ -1180,6 +1180,32 @@ def diagnose_switch(switch, username, password, source_ip=None):
                                          or re.search(r">>|Alteon|Radware",
                                                       (banner or "") + (out or ""),
                                                       re.IGNORECASE)) else None))
+        # 벤더가 확정되면 그 벤더 파서로 OS/버전/모델/시리얼까지 채운다(사전정보 보강).
+        # EXOS는 모델(System Type)·시리얼이 show version이 아니라 show switch에 있어 추가 수집.
+        g = res.get("guess")
+        if g:
+            sysinfo = ""
+            if g == "extreme_exos":
+                try:
+                    shell.send("show switch\n")
+                    sysinfo = _alteon_read(shell, timeout=8) or ""
+                    res["sysinfo_head"] = sysinfo[:800]
+                except Exception:
+                    pass
+            blob = "\n".join(x for x in (out, res.get("inventory_head"),
+                                         sysinfo, banner) if x)
+            try:
+                res["os_version"] = _parse_os_version(g, out) or _parse_os_version(g, blob)
+            except Exception:
+                pass
+            try:
+                res["model"] = _parse_model(g, blob)
+            except Exception:
+                pass
+            try:
+                res["serial"] = res.get("serial") or _parse_serial(g, blob)
+            except Exception:
+                pass
     except Exception as e:
         res["error"] = _sanitize_error_msg(str(e))
     finally:

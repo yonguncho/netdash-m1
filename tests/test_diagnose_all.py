@@ -11,9 +11,11 @@ def test_diagnose_all_worker_corrects_vendor(temp_db, monkeypatch):
     # 자격증명 저장 경로를 결정적으로(모의)
     monkeypatch.setattr(db, "get_switch_credential", lambda p, s: "blob")
     monkeypatch.setattr(credentials, "decrypt_credential", lambda b: "u|p")
+    # 진단이 벤더 + OS/모델/시리얼까지 반환(사전정보 보강 경로)
     monkeypatch.setattr(collector, "diagnose_switch",
-                        lambda sw, u, pw, source_ip=None: {"guess": "extreme_exos",
-                                                           "version_head": "", "banner_head": ""})
+                        lambda sw, u, pw, source_ip=None: {
+                            "guess": "extreme_exos", "os_version": "EXOS 31.7.2.28",
+                            "model": "X440G2-24t-10G4", "serial": "1234N-56789"})
     # 상태 초기화(엔드포인트가 하는 일)
     _app._diag_all.update(running=True, total=1, done=0, corrected=0, results=[], error=None)
     _app._run_diagnose_all(temp_db, None)
@@ -21,7 +23,11 @@ def test_diagnose_all_worker_corrects_vendor(temp_db, monkeypatch):
     assert _app._diag_all["running"] is False
     assert _app._diag_all["done"] == 1
     assert _app._diag_all["corrected"] == 1
-    assert db.get_switch(temp_db, sid)["vendor"] == "extreme_exos"   # 교정됨
+    row = db.get_switch(temp_db, sid)
+    assert row["vendor"] == "extreme_exos"          # 교정됨
+    assert row["model"] == "X440G2-24t-10G4"        # 모델 채움
+    assert row["serial"] == "1234N-56789"           # 시리얼 채움
+    assert row["os_version"] == "EXOS 31.7.2.28"    # 버전 채움
 
 
 def test_diagnose_all_endpoint_starts_and_status(client):
