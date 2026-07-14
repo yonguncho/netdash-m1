@@ -113,6 +113,32 @@ def infer_role(name, hostname=""):
     return ""
 
 
+import re as _re_zone
+# 존(구성도 그룹) 추론 규칙 — hostname/이름 토큰 기반. 명시적 zone이 없을 때 기본값으로
+# 사용해 토폴로지가 '미지정'으로 뭉치지 않게 한다(사용자가 존 지정 시 그 값이 우선).
+_ZONE_RULES = [
+    (_re_zone.compile(r"DMZ", _re_zone.I), "DMZ"),
+    (_re_zone.compile(r"SERVER[\s_-]?FARM|SVR|SERVER", _re_zone.I), "SERVERFARM"),
+    (_re_zone.compile(r"ECO[\s_-]?LAB", _re_zone.I), "ECO-LAB"),
+    (_re_zone.compile(r"ECO[\s_-]?HUB", _re_zone.I), "ECO-HUB"),
+]
+_ZONE_FLOOR_RE = _re_zone.compile(r"(?<![A-Za-z0-9])(B?\d{1,2}F)(?![A-Za-z0-9])",
+                                  _re_zone.I)
+
+
+def infer_zone(name, hostname=""):
+    """hostname/이름 토큰으로 존 추정. 우선순위: 의미토큰(DMZ/SERVERFARM/ECO-*) → 층(4F/B1F).
+    아무것도 못 찾으면 "" 반환(→ 프론트에서 '미지정')."""
+    t = "%s %s" % (name or "", hostname or "")
+    for rx, z in _ZONE_RULES:
+        if rx.search(t):
+            return z
+    m = _ZONE_FLOOR_RE.search(name or hostname or "")
+    if m:
+        return m.group(1).upper()   # 예: 4F, 7F, B1F
+    return ""
+
+
 def _connected_subnets_by_switch(db_path, switch_ids):
     """{switch_id: [대역, ...]} — 각 스위치 최신 config 백업의 'ip address' 줄에서 도출.
 
@@ -247,12 +273,17 @@ def build_topology(db_path):
 
     nodes = []
     for s in switches:
+        # 존 우선순위: 사용자 지정(zone) > TPS hostname 위치 > 토큰 추론 > location
+        zone_explicit = (s.get("zone") or "").strip()
         try:
             from . import tps_location
             info = tps_location.parse(s.get("hostname"))
-            group = ("%d공장 %s %d층" % (info["phase"], info["building_name"], info["floor"])) if info else ""
+            tps_group = ("%d공장 %s %d층" % (info["phase"], info["building_name"], info["floor"])) if info else ""
         except Exception:
-            group = ""
+            tps_group = ""
+        group = (zone_explicit or tps_group
+                 or infer_zone(s.get("name"), s.get("hostname"))
+                 or (s.get("location") or ""))
         # 구분(device_type) 미지정이면 hostname/이름 패턴으로 계층 자동 추론
         dtype = s.get("device_type") or infer_role(s.get("name"), s.get("hostname"))
         nodes.append({
@@ -262,7 +293,8 @@ def build_topology(db_path):
             "device_type": dtype,
             "inferred": not s.get("device_type") and bool(dtype),
             "subnets": subnet_map.get(s["id"], []),
-            "group": group or (s.get("location") or ""),
+            "group": group,
+            "zone_explicit": bool(zone_explicit),
             "depth": depth.get(s["id"], None),
         })
 
@@ -297,7 +329,9 @@ def build_topology(db_path):
             "status": fw.get("status"), "alert": "none",
             "device_type": "Firewall", "interfaces": fw_ifaces[:12],
             "ha": ha,
-            "group": fw.get("location") or "", "depth": None,
+            "group": ((fw.get("zone") or "").strip() or infer_zone(fw.get("name"))
+                      or (fw.get("location") or "")),
+            "depth": None,
         })
         linked_switches = set()
         mac = ip_macs.get(fw.get("host"))

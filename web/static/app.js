@@ -942,6 +942,30 @@ document.addEventListener("change", function (e) {
   });
 })();
 
+// 존(토폴로지 구성도 그룹) 일괄 지정(체크된 항목에 적용). 빈 값=존 해제(자동추정으로 복귀)
+(function () {
+  var input = document.getElementById("sw-bulk-zone");
+  var btn = document.getElementById("btn-sw-apply-zone");
+  if (!input || !btn) return;
+  btn.disabled = false;
+  btn.addEventListener("click", function () {
+    var ids = Array.prototype.map.call(
+      document.querySelectorAll("#switch-table-body .sw-check:checked"),
+      function (c) { return parseInt(c.value, 10); });
+    if (!ids.length) { alert("먼저 존을 지정할 스위치를 체크하세요."); return; }
+    var zone = input.value.trim();
+    fetch("/api/switches/bulk-zone", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ids: ids, zone: zone}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) {
+        alert(res.updated + "대에 존 '" + (zone || "(해제)") + "'을 지정했습니다. 토폴로지 존 뷰에 반영됩니다.");
+        pollState();
+      } else alert(res.error || "존 지정 실패");
+    }).catch(function (e) { console.error(e); alert("존 지정 오류"); });
+  });
+})();
+
 // ─── 스위치 테이블 (스위치 현황 탭) ─────────────────────────────
 // 스위치 현황 통합 검색(우측 상단 검색창 하나로 전 컬럼 검색)
 function _applySwSearch(list) {
@@ -961,7 +985,7 @@ function renderSwitchTable(switches) {
   var tbody = document.getElementById("switch-table-body");
   if (!tbody) return;  // 요소 부재 시 조기 반환(가드 역전 → tbody.innerHTML 크래시 방지)
   if (!switches.length) {
-    tbody.innerHTML = "<tr><td colspan='13' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='14' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
     var allChk0 = document.getElementById("sw-check-all");
     if (allChk0) allChk0.checked = false;
     _updateBulkDeleteBtn();
@@ -992,7 +1016,10 @@ function renderSwitchTable(switches) {
         : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.serial ? "<code style='font-size:11px'>" + escHtml(sw.serial) + "</code>"
         : "<span style='color:#94a3b8' title='재수집하면 show version/inventory에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
-      locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
+      locCell + "</td><td>" +
+      (sw.zone ? "<span style='font-size:11px'>" + escHtml(sw.zone) + "</span>"
+        : "<span style='color:#94a3b8' title='비우면 토폴로지가 hostname으로 존을 자동 추정. 툴바 \"존 지정\"으로 지정 가능'>-</span>") +
+      "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span>" +
       (sw.status === "failed" && sw.last_error
         ? "<div style='font-size:11px;color:#991b1b;max-width:260px'>" + escHtml(sw.last_error) + "</div>"

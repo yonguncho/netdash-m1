@@ -436,6 +436,8 @@ def init_schema(db_path):
                 ("last_error", "TEXT"),
                 ("device_type", "TEXT"),
                 ("serial", "TEXT"),
+                ("zone", "TEXT"),   # 토폴로지 존(구성도) 그룹 — 사용자 지정
+
                 # BUGFIX: cred_blob이 신규 스키마엔 있으나 마이그레이션 목록에 빠져
                 # 레거시 DB에서 get_switch_credential/update_cred_blob이
                 # 'no such column: cred_blob' → diagnose 500 + persist 저장 실패.
@@ -1368,7 +1370,7 @@ def get_switch(db_path, switch_id):
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, name, ip, hostname, vendor, model, os_version, serial, device_type, location, status, alert, note, last_error, last_collected FROM switches WHERE id = ?",
+            "SELECT id, name, ip, hostname, vendor, model, os_version, serial, device_type, location, zone, status, alert, note, last_error, last_collected FROM switches WHERE id = ?",
             (switch_id,)
         )
         row = cursor.fetchone()
@@ -1882,14 +1884,15 @@ def get_switch_credential(db_path, switch_id):
 
 def update_switch(db_path, switch_id, name=None, ip=None, hostname=None, vendor=None,
                   location=None, note=None, os_version=None, model=None, device_type=None,
-                  serial=None):
+                  serial=None, zone=None):
     """스위치 등록 정보 수정(제공된 필드만, 존재 컬럼만). 반환: 성공 여부.
 
-    note/device_type는 빈 문자열("")도 유효(비우기). None이면 변경하지 않음.
+    note/device_type/zone은 빈 문자열("")도 유효(비우기). None이면 변경하지 않음.
     """
     fields = {"name": name, "ip": ip, "hostname": hostname, "vendor": vendor,
               "location": location, "note": note, "os_version": os_version,
-              "model": model, "device_type": device_type, "serial": serial}
+              "model": model, "device_type": device_type, "serial": serial,
+              "zone": zone}
     fields = {k: v for k, v in fields.items() if v is not None}
     with _db_lock:
         with get_db(db_path) as conn:

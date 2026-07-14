@@ -404,6 +404,8 @@ def create_app(demo_mode=None):
                 return "일괄 수집 실행"
             if p == "/api/switches/diagnose-all":
                 return "전체 진단 실행"
+            if p == "/api/switches/bulk-zone":
+                return "존 일괄 지정"
             if p.startswith("/api/switches/") and p.endswith("/collect"):
                 return "스위치 수집 실행"
             if p.startswith("/api/firewalls/") and p.endswith("/collect"):
@@ -1659,6 +1661,32 @@ def create_app(demo_mode=None):
             return jsonify({"ok": True, "updated": n})
         except Exception as e:
             log_event("error", "bulk_set_type_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/switches/bulk-zone", methods=["POST"])
+    @rate_limit("bulk_zone", max_requests=60, window_seconds=60)
+    def bulk_set_zone():
+        """선택된 스위치들의 토폴로지 존(구성도 그룹)을 일괄 지정. body {ids:[...], zone}
+
+        zone은 자유 텍스트(예: 'SERVERFARM', 'DMZ', 'ECO-HUB N전산실'). 빈 값이면 지정 해제.
+        """
+        try:
+            data = request.get_json(silent=True) or {}
+            ids = data.get("ids", [])
+            zone = (data.get("zone") or "").strip()[:60]
+            if not isinstance(ids, list) or not ids:
+                return jsonify({"error": "ids required"}), 400
+            n = 0
+            for raw in ids[:1000]:
+                try:
+                    if db.update_switch(db_path, int(raw), zone=zone):
+                        n += 1
+                except (TypeError, ValueError):
+                    continue
+            log_event("info", "bulk_set_zone", count=n, zone=zone or "(해제)")
+            return jsonify({"ok": True, "updated": n})
+        except Exception as e:
+            log_event("error", "bulk_set_zone_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/bulk-delete", methods=["POST"])
