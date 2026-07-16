@@ -1,14 +1,15 @@
 """단일 서버 인스턴스 락 테스트 (다중 PC 동시 실행 → db_error 차단).
 
-검증 목표:
-- 빈 디렉터리에서 락 획득 성공 + 락 파일 생성.
-- 다른 호스트의 신선한 락이 있으면 차단(안내 정보 반환).
-- 오래된(stale) 락은 인수(takeover).
-- 같은 호스트의 죽은 PID 락은 즉시 인수.
-- release가 내 락을 삭제.
+메커니즘: OS 파일 잠금(byte-range lock). 프로세스 사망 시 OS가 자동 해제하므로
+크래시 후 재시작 대기가 없다. 검증 목표:
+- 빈 디렉터리에서 락 획득 성공 + info 파일 생성.
+- 잠금 보유 중 두 번째 획득 시도(별도 파일 핸들) → 차단 + 상대 정보 반환.
+- release 후 재획득 성공(크래시 시 OS 자동 해제와 동일 의미).
+- 별도 프로세스가 잠금 보유 → 차단 (실제 크로스 프로세스 검증).
 """
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,73 +23,68 @@ from core import instance_lock
 
 @pytest.fixture(autouse=True)
 def _clean_lock_state():
-    """전역 상태 격리: 각 테스트 후 heartbeat 정지 + 락 해제."""
+    """전역 상태 격리: 각 테스트 후 잠금 해제."""
     yield
     instance_lock.release()
-
-
-def _write_fake_lock(d, hostname, pid, mtime_ago=0):
-    lock = Path(d) / instance_lock.LOCK_FILENAME
-    lock.write_text(json.dumps({
-        "hostname": hostname, "pid": pid,
-        "url": "http://127.0.0.1:8082", "heartbeat": time.time() - mtime_ago,
-    }), encoding="utf-8")
-    if mtime_ago:
-        past = time.time() - mtime_ago
-        os.utime(lock, (past, past))
-    return lock
 
 
 def test_acquire_on_empty_dir(tmp_path):
     ok, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
     assert ok is True and other is None
-    lock = tmp_path / instance_lock.LOCK_FILENAME
-    assert lock.exists()
-    info = json.loads(lock.read_text(encoding="utf-8"))
+    assert (tmp_path / instance_lock.LOCK_FILENAME).exists()
+    info = json.loads((tmp_path / instance_lock.INFO_FILENAME)
+                      .read_text(encoding="utf-8"))
     assert info["pid"] == os.getpid()
+    assert info["url"] == "http://127.0.0.1:8082"
 
 
-def test_blocked_by_fresh_lock_from_other_host(tmp_path):
-    """다른 PC의 신선한 락 → 차단 + 상대 정보 반환 (핵심 시나리오)."""
-    _write_fake_lock(tmp_path, "OTHER-PC", 12345)
-    ok, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
-    assert ok is False
-    assert other["hostname"] == "OTHER-PC"
-    assert other["url"] == "http://127.0.0.1:8082"
-
-
-def test_takeover_stale_lock(tmp_path):
-    """STALE_AFTER 초과로 갱신 안 된 락 = 죽은 서버 → 인수."""
-    _write_fake_lock(tmp_path, "OTHER-PC", 12345,
-                     mtime_ago=instance_lock.STALE_AFTER + 5)
-    ok, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
-    assert ok is True and other is None
-
-
-def test_takeover_same_host_dead_pid(tmp_path, monkeypatch):
-    """같은 호스트 + 죽은 PID → stale 대기 없이 즉시 인수 (크래시 후 재시작)."""
+def test_second_acquire_blocked_with_info(tmp_path):
+    """잠금 보유 중 재획득(새 파일 핸들) → 차단 + 기존 서버 정보 반환."""
+    ok1, _ = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
+    assert ok1 is True
     import socket
-    _write_fake_lock(tmp_path, socket.gethostname(), 99999)
-    monkeypatch.setattr(instance_lock, "_pid_alive_local", lambda pid: False)
-    ok, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
-    assert ok is True and other is None
+    ok2, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:9999")
+    assert ok2 is False
+    assert other["hostname"] == socket.gethostname()
+    assert other["url"] == "http://127.0.0.1:8082"  # 기존 서버의 URL
 
 
-def test_blocked_same_host_alive_pid(tmp_path, monkeypatch):
-    """같은 호스트라도 PID가 살아있으면 차단 (같은 PC 중복 실행)."""
-    import socket
-    _write_fake_lock(tmp_path, socket.gethostname(), 12345)
-    monkeypatch.setattr(instance_lock, "_pid_alive_local", lambda pid: True)
-    ok, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
-    assert ok is False
-
-
-def test_release_removes_own_lock(tmp_path):
+def test_release_then_reacquire(tmp_path):
+    """해제 후 재획득 성공 — 크래시 시 OS 자동 해제와 동일 의미(대기 없음)."""
     instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
-    lock = tmp_path / instance_lock.LOCK_FILENAME
-    assert lock.exists()
     instance_lock.release()
-    assert not lock.exists()
+    ok, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
+    assert ok is True and other is None
+
+
+def test_blocked_by_other_process(tmp_path):
+    """실제 별도 프로세스가 잠금 보유 → 차단. 프로세스 kill 후 → 즉시 재획득."""
+    holder = (
+        "import sys; sys.path.insert(0, r'%s')\n"
+        "from core import instance_lock\n"
+        "ok, _ = instance_lock.acquire(r'%s', 'http://other:8082')\n"
+        "print('LOCKED' if ok else 'FAIL', flush=True)\n"
+        "import time; time.sleep(60)\n"
+    ) % (str(Path(__file__).parent.parent), str(tmp_path))
+    p = subprocess.Popen([sys.executable, "-c", holder],
+                         stdout=subprocess.PIPE, text=True)
+    try:
+        assert p.stdout.readline().strip() == "LOCKED"  # 자식이 잠금 확보 대기
+        ok, other = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
+        assert ok is False
+        assert other.get("url") == "http://other:8082"
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+    # 프로세스 사망 → OS가 잠금 자동 해제 → 즉시(수 초 내) 재획득 가능
+    deadline = time.time() + 10
+    ok = False
+    while time.time() < deadline:
+        ok, _ = instance_lock.acquire(tmp_path, "http://127.0.0.1:8082")
+        if ok:
+            break
+        time.sleep(0.5)
+    assert ok is True
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +102,10 @@ def test_is_network_path_unc_and_local():
 
 def test_restrict_db_permissions_skips_network_path(monkeypatch):
     """UNC 경로 DB에는 icacls(owner-only)를 실행하지 않아야 한다."""
-    import subprocess
+    import subprocess as sp
     from core import db as db_mod
     calls = []
-    monkeypatch.setattr(subprocess, "run",
-                        lambda *a, **k: calls.append(a) or None)
+    monkeypatch.setattr(sp, "run", lambda *a, **k: calls.append(a) or None)
     unc = r"\\fileserver\share\netdash_test_acl.db"
     db_mod._acl_applied.discard(unc)
     db_mod._restrict_db_permissions(unc)
