@@ -117,6 +117,27 @@ def test_queue_full_clears_credential(temp_db):
         collector._collecting_switches = saved_set
 
 
+# 4b. '전체 수집' 규모(bulk-collect 상한 500대)를 큐가 수용 — queue full 회귀 방지
+def test_queue_capacity_covers_bulk_collect_cap(monkeypatch, temp_db, tmp_path):
+    """v3.89 수정: 큐 maxsize 100 → 1000.
+
+    100대 초과 전체 수집 시 101번째부터 queue.Full('Queue is full')로
+    스킵되던 문제. 큐 용량이 bulk-collect ids 상한(500, app.py)을 덮어야 한다.
+    """
+    cfg = _make_cfg(temp_db, tmp_path / "raw", demo_mode=True)
+    monkeypatch.setattr(collector, "get_config", lambda: cfg)
+    collector.init_collector()
+    real_maxsize = collector._worker_queue.maxsize
+    assert real_maxsize >= 500  # app.py bulk-collect ids 상한과 정합
+
+    # 워커 없는 격리 큐(동일 maxsize)에 500대 일괄 큐잉 → 전량 queued
+    collector.shutdown_workers()
+    collector._worker_queue = _queue.Queue(maxsize=real_maxsize)
+    collector._collecting_switches = set()
+    results = [collector.collect_switch(temp_db, sid) for sid in range(1, 501)]
+    assert all(r["status"] == "queued" for r in results)
+
+
 # 5. 동일 스위치 중복 수집 요청 거부
 def test_already_in_progress_returns_error(isolated_collector, temp_db):
     r1 = collector.collect_switch(temp_db, 3, "u", "p")

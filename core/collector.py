@@ -402,7 +402,12 @@ def init_collector():
     max_workers = config.get_max_concurrent()
 
     # Replace queue and start fresh workers (old workers are daemon threads, auto-cleanup)
-    _worker_queue = queue.Queue(maxsize=100)
+    # maxsize=1000: '전체 수집'(bulk-collect, 최대 500대)이 한 번에 큐잉해도 수용.
+    # (기존 100 — 워커 3개가 SSH 수집으로 천천히 빼는 동안 101번째부터 queue.Full
+    #  → "Queue is full" 에러로 대부분 스킵되던 문제)
+    # 실제 큐 길이는 _collecting_switches 중복 방지로 등록 스위치 수를 넘지 못하며,
+    # 항목은 (db_path, switch_id) 튜플이라 메모리 부담 없음. 상한은 방어적 안전장치.
+    _worker_queue = queue.Queue(maxsize=1000)
     _worker_threads = []
 
     for i in range(max_workers):
