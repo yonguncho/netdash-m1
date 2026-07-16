@@ -8,6 +8,43 @@ let _firewalls = [];
 let _currentSwitchId = null;
 let _pollTimer = null;
 
+// ─── 읽기 전용 모드 (다른 PC의 주 서버가 DB 사용 중) ──────────────
+// 서버가 쓰기 요청에 423을 반환하면 어느 화면에서든 안내를 띄운다.
+// (개별 fetch 핸들러를 전부 고치지 않도록 전역 래퍼로 처리)
+(function () {
+  var origFetch = window.fetch;
+  var lastAlert = 0;
+  window.fetch = function () {
+    return origFetch.apply(this, arguments).then(function (r) {
+      if (r.status === 423) {
+        var now = Date.now();
+        if (now - lastAlert > 3000) {  // 연타 시 알림 폭주 방지
+          lastAlert = now;
+          r.clone().json().then(function (d) {
+            alert(d.error || "다른 사용자가 DB를 사용 중입니다. 조회만 가능합니다.");
+          }).catch(function () {
+            alert("다른 사용자가 DB를 사용 중입니다. 조회만 가능합니다.");
+          });
+        }
+      }
+      return r;
+    });
+  };
+})();
+
+function showReadonlyBanner(primaryHost) {
+  var el = document.getElementById("readonly-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "readonly-banner";
+    el.style.cssText = "position:sticky;top:0;z-index:9999;background:#b45309;" +
+      "color:#fff;text-align:center;padding:6px 12px;font-size:13px;font-weight:600";
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  el.textContent = "읽기 전용 모드 — 주 서버(" + (primaryHost || "다른 PC") +
+    ")가 DB를 사용 중입니다. 조회는 가능하며, 수집·수정은 주 서버에서 하세요.";
+}
+
 // ─── 이벤트 위임 (CSP 'self' 호환: inline onclick 금지) ──────────────
 // 동적 생성 버튼은 data-action/data-payload/data-id로 위임 처리한다.
 document.addEventListener("click", function (e) {
@@ -3744,6 +3781,7 @@ function pollState() {
   fetch("/api/state")
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      if (data.readonly) showReadonlyBanner(data.primary_host);
       _switches = data.switches || [];
       renderSwitchGrid(_switches);
       renderSwitchTable(_switches);

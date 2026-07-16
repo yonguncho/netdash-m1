@@ -117,6 +117,54 @@ def test_restrict_db_permissions_skips_network_path(monkeypatch):
     assert len(calls) == 1
 
 
+# ---------------------------------------------------------------------------
+# 네트워크 경로 저널 모드 — WAL은 SMB 너머에서 동작 불가(-shm 공유메모리 매핑).
+# 공유폴더 호스트 PC가 WAL로 만든 DB를 다른 PC가 못 열던 db_error의 근본 원인.
+# ---------------------------------------------------------------------------
+
+def _journal_mode(db_file):
+    import sqlite3
+    conn = sqlite3.connect(str(db_file))
+    try:
+        return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        conn.close()
+
+
+def test_local_db_uses_wal(tmp_path):
+    from core import db as db_mod
+    dbf = tmp_path / "local.db"
+    with db_mod.get_db(dbf) as conn:
+        conn.execute("CREATE TABLE t(x)")
+    assert _journal_mode(dbf) == "wal"
+
+
+def test_network_db_uses_delete_journal(tmp_path, monkeypatch):
+    """네트워크 경로 판정 시 WAL 대신 DELETE(롤백 저널) — 다른 PC에서도 열림."""
+    from core import db as db_mod
+    monkeypatch.setattr(db_mod.utils, "is_network_path", lambda p: True)
+    dbf = tmp_path / "share.db"
+    with db_mod.get_db(dbf) as conn:
+        conn.execute("CREATE TABLE t(x)")
+    assert _journal_mode(dbf) == "delete"
+    assert not (tmp_path / "share.db-shm").exists()  # 공유메모리 파일 없음
+
+
+def test_existing_wal_db_converted_on_network(tmp_path, monkeypatch):
+    """기존 WAL DB(공유폴더 호스트 PC가 생성)도 네트워크 판정 시 DELETE로 전환."""
+    from core import db as db_mod
+    dbf = tmp_path / "was_wal.db"
+    with db_mod.get_db(dbf) as conn:      # 로컬 → WAL로 생성
+        conn.execute("CREATE TABLE t(x)")
+        conn.execute("INSERT INTO t VALUES (1)")
+    assert _journal_mode(dbf) == "wal"
+    monkeypatch.setattr(db_mod.utils, "is_network_path", lambda p: True)
+    with db_mod.get_db(dbf) as conn:      # 원격 접근 모사 → DELETE 전환
+        rows = conn.execute("SELECT count(*) FROM t").fetchone()[0]
+    assert rows == 1                      # 데이터 보존
+    assert _journal_mode(dbf) == "delete"
+
+
 def test_frozen_prefers_exe_dir_config(tmp_path, monkeypatch):
     """frozen exe: exe 옆 config.yaml이 번들 기본값보다 우선 (host 오버라이드 경로)."""
     from core import config_loader

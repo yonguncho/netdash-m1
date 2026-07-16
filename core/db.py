@@ -316,6 +316,11 @@ _PERF_INDEXES = [
 ]
 
 
+# 읽기 전용 인스턴스 모드 — 다른 PC의 주 서버가 DB를 소유 중일 때 True.
+# 이 프로세스의 모든 연결이 query_only로 열려 실수로도 쓰기가 불가능하다.
+# 저널 모드 변경(쓰기 동작)도 시도하지 않는다.
+READONLY = False
+
 # 동일 DB 경로에 ACL을 반복 적용하지 않도록 1회만 시도 (성능 + 콘솔 호출 최소화)
 _acl_applied = set()
 
@@ -378,10 +383,26 @@ def get_db(db_path):
         conn.row_factory = sqlite3.Row
         # Enable FOREIGN KEY constraints: SQLite defaults to OFF, explicit ON required (data integrity fix)
         conn.execute("PRAGMA foreign_keys = ON")
-        # WAL 모드: 읽기와 쓰기가 서로 차단하지 않아 락 경합 자체가 대폭 감소.
-        # (한 번 설정되면 DB 파일에 영구 저장 — 매 연결 실행은 no-op 수준)
+        # 저널 모드 선택:
+        # - 로컬: WAL — 읽기/쓰기가 서로 차단하지 않아 락 경합 대폭 감소.
+        # - 네트워크 경로(UNC/원격 드라이브): DELETE(롤백 저널) — WAL은 -shm
+        #   공유메모리 매핑이 필요해 SMB 너머에서 동작하지 않는다(SQLite 공식 제약).
+        #   WAL 모드는 DB 파일에 영구 저장되므로, 공유폴더 호스트 PC(로컬 접근)가
+        #   WAL로 만든 DB를 다른 PC(원격 접근)가 열지 못해 db_error가 나던 원인.
+        #   DELETE 전환은 파일에 영구 반영돼 이후 모든 PC에서 열린다.
+        #   (단일 서버는 instance_lock이 보장 — WAL의 동시성 이점이 필수는 아님)
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
+            if READONLY:
+                # 읽기 전용 인스턴스: 저널 모드를 건드리지 않고(주 서버 소유)
+                # 연결 자체를 쓰기 불가로 잠근다(안전벨트 — 엔드포인트 차단과 이중).
+                conn.execute("PRAGMA query_only=ON")
+            elif utils.is_network_path(db_path):
+                mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+                if str(mode).lower() != "delete":
+                    utils.log_event("warning", "db_journal_mode_unexpected",
+                                    path=str(db_path), mode=str(mode))
+            else:
+                conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA synchronous=NORMAL")
         except Exception:
