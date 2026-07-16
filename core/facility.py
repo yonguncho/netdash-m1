@@ -804,9 +804,10 @@ def run_auto_scan(db_path):
     스케줄러 스레드에서 동기 호출된다. 반환: {"scanned": n, "skipped": n}
     """
     from . import credentials
+    from . import pcprofile
     band_map = get_band_map(db_path)
     scanned = skipped = 0
-    src = db.get_setting(db_path, "source_ip") or None
+    src = pcprofile.get_source_ip(db_path)
     for subnet, switch_id in band_map.items():
         if _status.get("running"):
             # 수동 수집과 겹치면 대기(최대 30분) 후 재확인

@@ -582,8 +582,10 @@ def _worker_loop():
                             enable_secret = credentials.decrypt_text(_es_blob)
                     except Exception:
                         enable_secret = None
-                # M12: 설정된 출발지 IP로 바인딩(장비 ACL 통과). 미설정이면 OS 기본 라우팅.
-                source_ip = db.get_setting(db_path, "source_ip") or None
+                # M12: 출발지 IP 바인딩(장비 ACL 통과) — 이 PC 프로필 우선,
+                # 없으면 전역 설정, 그것도 없으면 OS 기본 라우팅.
+                from . import pcprofile
+                source_ip = pcprofile.get_source_ip(db_path)
                 # 응답 없는 장비는 즉시 실패(재시도 낭비 없이 다음 장비로)
                 if not _tcp_precheck(switch["ip"], source_ip=source_ip):
                     raise ConnectionError(
@@ -1359,24 +1361,31 @@ def collect_all_registered(db_path):
     _allowed_ranges = get_config().collector.get("allowed_ip_ranges")
 
     # 스위치: 저장된 계정 복호화 → 큐잉(기존 워커가 수집)
+    # 스위치별 blob이 없거나 이 PC에서 복호화 불가(다른 PC가 저장한 DPAPI)면
+    # 이 PC 프로필(pc_profiles — MAC 키) 계정으로 폴백.
+    from . import pcprofile
+    _profile_cred = pcprofile.get_credential(db_path)
     try:
         for sw in db.get_switches(db_path):
             if not _ip_allowed(sw.get("ip"), _allowed_ranges):
                 utils.log_event("warning", "auto_collect_skip_invalid_ip",
                                 switch_id=sw.get("id"))
                 continue
+            username = password = None
             blob = db.get_switch_credential(db_path, sw["id"])
-            if not blob:
+            if blob:
+                # 스위치 자격증명은 "username|password" 형식(credentials.encrypt_credential)
+                dec = credentials.decrypt_credential(blob)
+                if dec and "|" in dec:
+                    username, password = dec.split("|", 1)
+            if not (username and password) and _profile_cred:
+                username, password = _profile_cred
+                utils.log_event("info", "auto_collect_profile_cred",
+                                switch_id=sw.get("id"))
+            if not (username and password):
                 utils.log_event("info", "auto_collect_skip_no_cred",
                                 switch_id=sw.get("id"), name=sw.get("name"))
                 continue
-            # 스위치 자격증명은 "username|password" 형식(credentials.encrypt_credential)
-            dec = credentials.decrypt_credential(blob)
-            if not dec or "|" not in dec:
-                utils.log_event("warning", "auto_collect_skip_bad_cred",
-                                switch_id=sw.get("id"))
-                continue
-            username, password = dec.split("|", 1)
             collect_switch(db_path, sw["id"], username, password)
             result["switches"] += 1
     except Exception as e:
@@ -1385,7 +1394,7 @@ def collect_all_registered(db_path):
     # 방화벽: 저장된 토큰/계정으로 즉시 수집
     try:
         from . import firewall as firewall_mod
-        src = db.get_setting(db_path, "source_ip") or None
+        src = pcprofile.get_source_ip(db_path)
         for fw in db.list_firewalls(db_path):
             if not _ip_allowed(fw.get("host"), _allowed_ranges):
                 utils.log_event("warning", "auto_collect_skip_invalid_fw_ip",

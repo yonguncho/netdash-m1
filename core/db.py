@@ -296,6 +296,19 @@ CREATE TABLE IF NOT EXISTS facility_hosts (
 )
 """
 
+# PC 프로필: 수집 PC(MAC) 단위 출발지 IP·계정 — 다중 PC 운영 시 각 PC가
+# 자기 IP/계정으로 수집하도록 함(core/pcprofile.py 참조)
+CREATE_PC_PROFILES_TABLE = """
+CREATE TABLE IF NOT EXISTS pc_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mac TEXT NOT NULL UNIQUE,
+    hostname TEXT,
+    source_ip TEXT,
+    cred_blob TEXT,
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+)
+"""
+
 
 # 성능 인덱스: hot 쿼리의 풀 테이블 스캔 제거(스냅샷이 쌓일수록 느려지던 원인).
 # UNIQUE 제약이 만드는 암시적 인덱스로 이미 커버되는 컬럼(예: mac_entries.snapshot_id는
@@ -440,6 +453,7 @@ def init_schema(db_path):
                 CREATE_VLAN_NAMES_TABLE,
                 CREATE_SWITCH_LOGS_TABLE,
                 CREATE_FACILITY_HOSTS_TABLE,
+                CREATE_PC_PROFILES_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
                 CREATE_NEIGHBORS_TABLE,
                 CREATE_DEVICE_EVENTS_TABLE,
@@ -2237,6 +2251,48 @@ def get_setting(db_path, key, default=None):
         if row is None:
             return default
         return row["value"]
+
+
+# ── PC 프로필 (수집 PC별 출발지 IP·계정 — core/pcprofile.py) ────────
+def upsert_pc_profile(db_path, mac, hostname, source_ip, cred_blob=None):
+    """PC 프로필 등록/갱신. cred_blob=None이면 기존 계정 blob 유지."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id, cred_blob FROM pc_profiles WHERE mac=?", (mac,))
+            row = cur.fetchone()
+            if row:
+                keep_blob = cred_blob if cred_blob is not None else row["cred_blob"]
+                cur.execute(
+                    "UPDATE pc_profiles SET hostname=?, source_ip=?, cred_blob=?, "
+                    "updated_at=datetime('now', 'localtime') WHERE mac=?",
+                    (hostname, source_ip or "", keep_blob, mac))
+            else:
+                cur.execute(
+                    "INSERT INTO pc_profiles (mac, hostname, source_ip, cred_blob) "
+                    "VALUES (?, ?, ?, ?)",
+                    (mac, hostname, source_ip or "", cred_blob))
+
+
+def get_pc_profile(db_path, mac):
+    """MAC으로 PC 프로필 조회. 없으면 None."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT mac, hostname, source_ip, cred_blob, updated_at "
+                    "FROM pc_profiles WHERE mac=?", (mac,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def list_pc_profiles(db_path):
+    """등록된 PC 프로필 목록(계정 blob 제외 — 표시용)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT mac, hostname, source_ip, updated_at, "
+                    "CASE WHEN cred_blob IS NOT NULL AND cred_blob != '' "
+                    "THEN 1 ELSE 0 END AS has_cred "
+                    "FROM pc_profiles ORDER BY updated_at DESC")
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_ports(db_path, snapshot_id):

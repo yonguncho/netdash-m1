@@ -16,6 +16,7 @@ from pathlib import Path
 
 from config import get_config, reset_config
 from core import db, collector, correlator, credentials, report_builder, netinfo, connectivity
+from core import pcprofile
 from core import facility as facility_mod
 from core import firewall as firewall_mod
 from core.demo import run_demo
@@ -78,6 +79,9 @@ def _run_diagnose_all(db_path, source_ip):
             _diag_all.update(running=False, error=collector._sanitize_error_msg(str(e)))
         return
 
+    # 이 PC 프로필 계정(MAC 키) — 스위치 blob이 다른 PC 것일 때 폴백
+    _profile_cred = pcprofile.get_credential(db_path)
+
     def _one(sw):
         sid = sw.get("id")
         name = sw.get("name")
@@ -87,6 +91,8 @@ def _run_diagnose_all(db_path, source_ip):
             dec = credentials.decrypt_credential(blob)
             if dec and "|" in dec:
                 username, password = dec.split("|", 1)
+        if not (username and password) and _profile_cred:
+            username, password = _profile_cred
         if not (username and password):
             return {"id": sid, "name": name, "error": "저장된 계정 없음", "guess": None}
         try:
@@ -670,7 +676,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
             # 도달성 게이트: ping 또는 관리 포트(TCP) 응답 시 등록. force=true/데모모드면 생략.
             if not data.get("force") and not config.app.get("demo_mode"):
-                src = db.get_setting(db_path, "source_ip") or None
+                src = pcprofile.get_source_ip(db_path)
                 if not collector.is_reachable(validated_ip, source_ip=src):
                     log_event("warning", "add_switch_unreachable", ip=validated_ip)
                     return jsonify({"error": "%s 도달 불가 — ping/TCP(22·443·23·80) 응답이 없습니다. "
@@ -1417,7 +1423,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         username, password = dec.split("|", 1)
             if not (username and password):
                 return jsonify({"error": "계정이 필요합니다(입력 또는 저장)"}), 400
-            src = db.get_setting(db_path, "source_ip") or None
+            src = pcprofile.get_source_ip(db_path)
             res = collector.diagnose_switch(sw, username, password, source_ip=src)
             # 진단이 벤더를 알아냈고 현재 미지정/오지정이면 자동 교정
             # → 다음 수집부터 올바른 경로(예: Alteon 전용 수집)로 동작
@@ -1465,7 +1471,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 switches = db.get_switches(db_path)
                 _diag_all.update(running=True, total=len(switches), done=0,
                                  corrected=0, results=[], error=None)
-            src = db.get_setting(db_path, "source_ip") or None
+            src = pcprofile.get_source_ip(db_path)
             threading.Thread(target=_run_diagnose_all, args=(db_path, src),
                              daemon=True).start()
             log_event("info", "diagnose_all_started", total=_diag_all["total"])
@@ -1518,7 +1524,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         username, password = dec.split("|", 1)
             if not (username and password):
                 return jsonify({"error": "스위치 계정이 필요합니다(입력 또는 저장)"}), 400
-            src = db.get_setting(db_path, "source_ip") or None
+            src = pcprofile.get_source_ip(db_path)
             subnets = facility_mod.detect_subnets(db_path, switch_id, username, password, src)
             return jsonify({"ok": True, "subnets": subnets})
         except Exception as e:
@@ -1570,7 +1576,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         username, password = dec.split("|", 1)
             if not (username and password):
                 return jsonify({"error": "스위치 계정이 필요합니다(입력 또는 저장)"}), 400
-            src = db.get_setting(db_path, "source_ip") or None
+            src = pcprofile.get_source_ip(db_path)
             started = facility_mod.start_collect_band(db_path, switch_id, subnet, username, password, src)
             if not started:
                 return jsonify({"error": "이미 수집 중입니다"}), 409
@@ -1634,7 +1640,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
             except ValueError as e:
                 return jsonify({"ok": False, "stage": "reachable", "detail": f"IP rejected: {e}"}), 400
-            src = db.get_setting(db_path, "source_ip") or None
+            src = pcprofile.get_source_ip(db_path)
             result = connectivity.test_switch(
                 ip, data.get("vendor", ""), data.get("username", ""),
                 data.get("password", ""), int(data.get("port", 22)),
@@ -1665,7 +1671,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             port = data.get("port")
             if port not in (None, "") and not (str(port).isdigit() and 1 <= int(port) <= 65535):
                 return jsonify({"error": "port must be 1-65535"}), 400
-            src = db.get_setting(db_path, "source_ip") or None
+            src = pcprofile.get_source_ip(db_path)
             result = connectivity.test_firewall(
                 vendor, host, int(port) if port else None,
                 token=data.get("token", ""), username=data.get("username", ""),
@@ -1863,6 +1869,16 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         try:
             info = netinfo.get_network_info()
             info["source_ip"] = db.get_setting(db_path, "source_ip", "") or ""
+            # 이 PC 프로필의 실제 적용값(MAC 키 — 다중 PC 운영 시 PC마다 다름)
+            try:
+                _prof = pcprofile.get_profile(db_path)
+                info["source_ip_effective"] = pcprofile.get_source_ip(db_path) or ""
+                info["pc_profile"] = ({"mac": _prof["mac"], "hostname": _prof["hostname"],
+                                       "has_cred": bool(_prof.get("cred_blob"))}
+                                      if _prof else None)
+            except Exception:
+                info["source_ip_effective"] = info["source_ip"]
+                info["pc_profile"] = None
             return jsonify(info)
         except Exception as e:
             log_event("error", "netinfo_error", error=collector._sanitize_error_msg(str(e)))
@@ -1943,6 +1959,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             if ip and ip not in netinfo.get_local_ipv4_addresses():
                 return jsonify({"error": "선택한 IP가 이 PC의 이더넷 IP 목록에 없습니다"}), 400
             db.set_setting(db_path, "source_ip", ip)
+            # 이 PC의 프로필(MAC 키)에도 등록 — 다중 PC 운영 시 각 PC가
+            # 자기 출발지 IP로 수집하도록(다른 PC 설정에 영향 없음)
+            try:
+                pcprofile.save_profile(db_path, source_ip=ip or None)
+            except Exception as e:
+                log_event("warning", "pc_profile_save_failed",
+                          error=collector._sanitize_error_msg(str(e)))
             log_event("info", "source_ip_set", source_ip=ip or "(auto)")
             return jsonify({"ok": True, "source_ip": ip})
         except Exception as e:
@@ -2091,7 +2114,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 fw["vendor"], fw["host"], fw.get("port"),
                 token=token, username=username, password=password,
                 verify_ssl=bool(data.get("verify_ssl", False)),
-                source_ip=db.get_setting(db_path, "source_ip") or None,
+                source_ip=pcprofile.get_source_ip(db_path),
             )
             db.save_firewall_interfaces(db_path, fid, result["interfaces"])
             db.save_firewall_arp(db_path, fid, result["arp"])
@@ -2164,6 +2187,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": "username and password required"}), 400
 
             persist = data.get("persist", False)
+            if persist:
+                # 일괄 수집 계정도 이 PC 프로필에 등록(1회)
+                try:
+                    pcprofile.save_profile(db_path, username, password,
+                                           source_ip=pcprofile.get_source_ip(db_path))
+                except Exception as e:
+                    log_event("warning", "pc_profile_save_failed",
+                              error=collector._sanitize_error_msg(str(e)))
             queued, skipped = [], []
             allowed = config.collector.get("allowed_ip_ranges")
             for raw in ids:
@@ -2272,6 +2303,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         except Exception as e:
                             sanitized = _sanitize_error_msg(str(e))
                             log_event("warning", "credential_persist_failed", switch_id=switch_id, error=sanitized)
+                    # 이 PC 프로필(MAC·IP·계정)에도 등록 — 이 PC가 수집할 때
+                    # 자기 계정/IP로 시도(스위치별 blob이 다른 PC 것이어도 폴백 가능)
+                    try:
+                        pcprofile.save_profile(db_path, username, password,
+                                               source_ip=pcprofile.get_source_ip(db_path))
+                    except Exception as e:
+                        log_event("warning", "pc_profile_save_failed",
+                                  error=_sanitize_error_msg(str(e)))
                     # enable secret도 함께 영속화(별도 blob — 자격증명 형식과 분리).
                     # 저장돼 있으면 다음 수집(자동수집 포함)부터 자동 사용.
                     if enable_secret:
@@ -2382,7 +2421,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # (URL 쿼리는 access log/프록시 로그에 남을 수 있어 자격증명 노출 위험).
             username = ""
             password = ""
-            src = db.get_setting(db_path, "source_ip") or None
+            src = pcprofile.get_source_ip(db_path)
             ranges = config.collector.get("allowed_ip_ranges")
 
             def _vip(ip):

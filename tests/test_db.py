@@ -34,6 +34,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "switch_logs",
         # 설비 현황
         "facility_hosts",
+        # PC 프로필(수집 PC별 출발지 IP·계정 — 다중 PC 운영)
+        "pc_profiles",
         # NX-OS 포트채널 멤버
         "port_channels",
         # CDP/LLDP 이웃(물리 연결)
