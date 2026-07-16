@@ -2295,6 +2295,65 @@ def list_pc_profiles(db_path):
         return [dict(r) for r in cur.fetchall()]
 
 
+def delete_pc_profile(db_path, mac):
+    """PC 프로필 삭제(계정·출발지 IP 포함). 반환: 삭제 행 수."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM pc_profiles WHERE mac=?", (mac,))
+            return cur.rowcount
+
+
+# ── 저장 계정 관리(관리자 화면 — 목록/삭제) ─────────────────────────
+def list_switch_credentials(db_path):
+    """저장 계정이 있는 스위치 목록(blob 제외 — 표시용)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, ip FROM switches "
+                    "WHERE cred_blob IS NOT NULL AND cred_blob != '' ORDER BY name")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def list_firewall_credentials(db_path):
+    """저장 계정이 있는 방화벽 목록(blob 제외 — 표시용)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, host FROM firewalls "
+                    "WHERE cred_blob IS NOT NULL AND cred_blob != '' ORDER BY name")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def clear_firewall_credential(db_path, firewall_id):
+    """방화벽 저장 계정 삭제."""
+    utils.log_event("info", "clear_firewall_credential", firewall_id=firewall_id)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("UPDATE firewalls SET cred_blob=NULL WHERE id=?",
+                         (firewall_id,))
+
+
+def clear_all_credentials(db_path):
+    """저장된 계정 전부 삭제 — 스위치·방화벽 blob, PC 프로필 계정,
+    enable secret. PC 프로필의 출발지 IP는 유지(계정만 삭제).
+    반환: {"switches": n, "firewalls": n, "profiles": n}
+    """
+    utils.log_event("warning", "clear_all_credentials")
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("UPDATE switches SET cred_blob=NULL "
+                        "WHERE cred_blob IS NOT NULL AND cred_blob != ''")
+            n_sw = cur.rowcount
+            cur.execute("UPDATE firewalls SET cred_blob=NULL "
+                        "WHERE cred_blob IS NOT NULL AND cred_blob != ''")
+            n_fw = cur.rowcount
+            cur.execute("UPDATE pc_profiles SET cred_blob=NULL "
+                        "WHERE cred_blob IS NOT NULL AND cred_blob != ''")
+            n_prof = cur.rowcount
+            cur.execute("DELETE FROM app_settings WHERE key LIKE 'enable_secret_%'")
+    return {"switches": n_sw, "firewalls": n_fw, "profiles": n_prof}
+
+
 def get_ports(db_path, snapshot_id):
     # get_ports retrieves ports for a specific snapshot
     with get_db(db_path) as conn:

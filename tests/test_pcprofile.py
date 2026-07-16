@@ -82,6 +82,77 @@ def test_list_pc_profiles_hides_blob(temp_db):
     assert "cred_blob" not in rows[0]  # 표시용 목록에 blob 미포함
 
 
+# ---------------------------------------------------------------------------
+# 저장 계정 관리(관리자 화면) — 목록/삭제
+# ---------------------------------------------------------------------------
+
+def test_credential_management_list_and_delete(temp_db):
+    from core import credentials
+    sid = db.import_switches_bulk(
+        temp_db, [{"name": "SW1", "ip": "10.0.0.10", "vendor": "cisco_ios"}])[0]
+    blob = credentials.encrypt_credential("u", "p12345678")
+    db.update_cred_blob(temp_db, sid, blob)
+    pcprofile.save_profile(temp_db, "admin", "secret123", source_ip="10.1.1.1")
+
+    assert [s["id"] for s in db.list_switch_credentials(temp_db)] == [sid]
+    profs = db.list_pc_profiles(temp_db)
+    assert len(profs) == 1 and profs[0]["has_cred"] == 1
+
+    # 스위치 계정 삭제
+    db.update_cred_blob(temp_db, sid, None)
+    assert db.list_switch_credentials(temp_db) == []
+    # 프로필 삭제
+    assert db.delete_pc_profile(temp_db, profs[0]["mac"]) == 1
+    assert db.list_pc_profiles(temp_db) == []
+
+
+def test_clear_all_credentials_keeps_profile_ip(temp_db):
+    """전체 삭제: 계정 blob만 지우고 프로필의 출발지 IP는 유지."""
+    from core import credentials
+    sid = db.import_switches_bulk(
+        temp_db, [{"name": "SW1", "ip": "10.0.0.10", "vendor": "cisco_ios"}])[0]
+    db.update_cred_blob(temp_db, sid, credentials.encrypt_credential("u", "p12345678"))
+    db.set_setting(temp_db, "enable_secret_%d" % sid, "es-blob")
+    pcprofile.save_profile(temp_db, "admin", "secret123", source_ip="10.1.1.1")
+
+    res = db.clear_all_credentials(temp_db)
+    assert res["switches"] == 1 and res["profiles"] == 1
+    assert db.list_switch_credentials(temp_db) == []
+    assert db.get_setting(temp_db, "enable_secret_%d" % sid) is None
+    prof = db.list_pc_profiles(temp_db)[0]
+    assert prof["has_cred"] == 0
+    assert prof["source_ip"] == "10.1.1.1"      # IP는 유지
+    assert pcprofile.get_source_ip(temp_db) == "10.1.1.1"
+
+
+def test_credentials_api_endpoints(tmp_path, monkeypatch):
+    """GET /api/credentials + POST /api/credentials/delete 동작."""
+    monkeypatch.chdir(tmp_path)
+    import app as app_module
+    from core import credentials
+    application = app_module.create_app(demo_mode=True)
+    from core import collector
+    collector.shutdown_workers()
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    sid = db.import_switches_bulk(
+        dbp, [{"name": "SW-CRED", "ip": "10.0.0.99", "vendor": "cisco_ios"}])[0]
+    db.update_cred_blob(dbp, sid, credentials.encrypt_credential("u", "p12345678"))
+
+    client = application.test_client()
+    data = client.get("/api/credentials").get_json()
+    assert any(s["id"] == sid for s in data["switches"])
+
+    r = client.post("/api/credentials/delete", json={"kind": "switch", "id": sid})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    data = client.get("/api/credentials").get_json()
+    assert not any(s["id"] == sid for s in data["switches"])
+
+    # 잘못된 kind → 400
+    assert client.post("/api/credentials/delete",
+                       json={"kind": "nope"}).status_code == 400
+
+
 def test_auto_collect_falls_back_to_profile_cred(temp_db, monkeypatch):
     """스위치 blob이 없거나 이 PC에서 복호화 불가 → 프로필 계정으로 수집."""
     from core import collector

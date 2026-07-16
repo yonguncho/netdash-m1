@@ -3650,6 +3650,85 @@ function loadConfigTab(switchId) {
   });
 })();
 
+// ─── 저장 계정 관리 (관리자) ─────────────────────────────────────
+function loadCreds() {
+  var sw = document.getElementById("creds-switches");
+  var fw = document.getElementById("creds-firewalls");
+  var pf = document.getElementById("creds-profiles");
+  sw.innerHTML = fw.innerHTML = pf.innerHTML =
+    "<tr><td colspan=6 style='color:#64748b'>불러오는 중...</td></tr>";
+  fetch("/api/credentials").then(function (r) { return r.json(); }).then(function (d) {
+    var delBtn = function (kind, key) {
+      return "<button class='btn btn--secondary creds-del' style='font-size:11px;padding:2px 8px' " +
+        "data-kind='" + kind + "' data-key='" + encodeURIComponent(key) + "'>삭제</button>";
+    };
+    var rows = (d.switches || []).map(function (s) {
+      return "<tr><td>" + escHtml(s.name || "-") + "</td><td><code>" + escHtml(s.ip || "-") +
+        "</code></td><td>" + delBtn("switch", s.id) + "</td></tr>";
+    });
+    sw.innerHTML = rows.length ? rows.join("")
+      : "<tr><td colspan=3 style='color:#64748b'>저장된 계정이 없습니다.</td></tr>";
+    rows = (d.firewalls || []).map(function (f) {
+      return "<tr><td>" + escHtml(f.name || "-") + "</td><td><code>" + escHtml(f.host || "-") +
+        "</code></td><td>" + delBtn("firewall", f.id) + "</td></tr>";
+    });
+    fw.innerHTML = rows.length ? rows.join("")
+      : "<tr><td colspan=3 style='color:#64748b'>저장된 계정이 없습니다.</td></tr>";
+    rows = (d.pc_profiles || []).map(function (p) {
+      return "<tr><td>" + escHtml(p.hostname || "-") + "</td><td><code>" + escHtml(p.mac || "-") +
+        "</code></td><td><code>" + escHtml(p.source_ip || "(자동)") + "</code></td><td>" +
+        (p.has_cred ? "저장됨" : "-") + "</td><td style='font-size:11px;color:#64748b'>" +
+        escHtml((p.updated_at || "").slice(0, 16)) + "</td><td>" +
+        delBtn("profile", p.mac) + "</td></tr>";
+    });
+    pf.innerHTML = rows.length ? rows.join("")
+      : "<tr><td colspan=6 style='color:#64748b'>등록된 PC 프로필이 없습니다.</td></tr>";
+  }).catch(function (e) {
+    console.error(e);
+    sw.innerHTML = "<tr><td colspan=3>오류</td></tr>";
+  });
+}
+
+(function () {
+  var btn = document.getElementById("btn-creds");
+  if (!btn) return;
+  btn.addEventListener("click", function () { openModal("modal-creds"); loadCreds(); });
+
+  // 개별 삭제(위임)
+  document.getElementById("modal-creds").addEventListener("click", function (e) {
+    var t = e.target.closest(".creds-del");
+    if (!t) return;
+    var kind = t.getAttribute("data-kind");
+    var key = decodeURIComponent(t.getAttribute("data-key"));
+    var label = {switch: "스위치", firewall: "방화벽", profile: "PC 프로필"}[kind] || kind;
+    if (!confirm(label + " 저장 계정을 삭제할까요? (장비 설정은 그대로, 접속 계정만 삭제)")) return;
+    var body = {kind: kind};
+    if (kind === "profile") body.mac = key; else body.id = parseInt(key, 10);
+    fetch("/api/credentials/delete", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) loadCreds(); else alert(res.error || "삭제 실패");
+    }).catch(function (e2) { console.error(e2); alert("삭제 오류"); });
+  });
+
+  // 전체 삭제
+  var clearBtn = document.getElementById("btn-creds-clear-all");
+  if (clearBtn) clearBtn.addEventListener("click", function () {
+    if (!confirm("저장된 접속 계정을 전부 삭제할까요?\n(스위치·방화벽·PC 프로필 계정 — 이후 수집 시 계정을 다시 입력해야 합니다)")) return;
+    fetch("/api/credentials/delete", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({kind: "all"}),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) {
+        alert("삭제 완료 — 스위치 " + (res.switches || 0) + "건, 방화벽 " + (res.firewalls || 0) +
+          "건, PC 프로필 " + (res.profiles || 0) + "건");
+        loadCreds();
+      } else alert(res.error || "삭제 실패");
+    }).catch(function (e2) { console.error(e2); alert("삭제 오류"); });
+  });
+})();
+
 // ─── 접근 로그(감사) ─────────────────────────────────────────────
 (function () {
   var btn = document.getElementById("btn-audit");

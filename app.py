@@ -506,6 +506,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return "전체 진단 실행"
             if p == "/api/switches/bulk-zone":
                 return "존 일괄 지정"
+            if p == "/api/credentials/delete":
+                return "저장 계정 삭제"
             if p.startswith("/api/switches/") and p.endswith("/collect"):
                 return "스위치 수집 실행"
             if p.startswith("/api/firewalls/") and p.endswith("/collect"):
@@ -1790,6 +1792,64 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify({"ok": True, "updated": n})
         except Exception as e:
             log_event("error", "bulk_set_zone_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    # ── 저장 계정 관리(관리자) — 목록 조회 + 삭제 ─────────────────
+    @app.route("/api/credentials", methods=["GET"])
+    def list_credentials_endpoint():
+        """저장 계정 현황: 스위치·방화벽(계정 보유만) + PC 프로필. blob은 비노출."""
+        try:
+            return jsonify({
+                "switches": db.list_switch_credentials(db_path),
+                "firewalls": db.list_firewall_credentials(db_path),
+                "pc_profiles": db.list_pc_profiles(db_path),
+            })
+        except Exception as e:
+            log_event("error", "list_credentials_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/credentials/delete", methods=["POST"])
+    @rate_limit("delete_credential", max_requests=30, window_seconds=60)
+    def delete_credential_endpoint():
+        """저장 계정 삭제. body: {kind: switch|firewall|profile|all, id?, mac?}
+
+        - switch: 해당 스위치의 저장 계정 + enable secret 삭제
+        - firewall: 해당 방화벽의 저장 계정 삭제
+        - profile: 해당 PC 프로필 삭제(계정·출발지 IP 포함)
+        - all: 전체 삭제(스위치·방화벽·프로필 계정 — 프로필 IP는 유지)
+        """
+        try:
+            data = request.get_json(silent=True) or {}
+            kind = data.get("kind")
+            if kind == "switch":
+                sid = int(data.get("id"))
+                db.update_cred_blob(db_path, sid, None)
+                db.set_setting(db_path, "enable_secret_%d" % sid, "")
+                log_event("info", "credential_deleted", kind="switch", switch_id=sid)
+                return jsonify({"ok": True})
+            if kind == "firewall":
+                fid = int(data.get("id"))
+                db.clear_firewall_credential(db_path, fid)
+                log_event("info", "credential_deleted", kind="firewall", firewall_id=fid)
+                return jsonify({"ok": True})
+            if kind == "profile":
+                mac = (data.get("mac") or "").strip()[:64]
+                if not mac:
+                    return jsonify({"error": "mac required"}), 400
+                n = db.delete_pc_profile(db_path, mac)
+                log_event("info", "credential_deleted", kind="profile", mac=mac, deleted=n)
+                return jsonify({"ok": True, "deleted": n})
+            if kind == "all":
+                res = db.clear_all_credentials(db_path)
+                log_event("warning", "credential_deleted", kind="all", **res)
+                return jsonify({"ok": True, **res})
+            return jsonify({"error": "kind must be switch|firewall|profile|all"}), 400
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid id"}), 400
+        except Exception as e:
+            log_event("error", "delete_credential_error",
+                      error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/switches/bulk-delete", methods=["POST"])
