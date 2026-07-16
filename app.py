@@ -2405,9 +2405,15 @@ if __name__ == "__main__":
         app.run(host=host, port=port, debug=debug, threaded=True)
     except Exception:
         # console=False(windowed) exe에서는 콘솔에 트레이스백이 보이지 않으므로
-        # 작업 디렉터리에 에러 로그를 남겨 진단을 가능하게 한다.
+        # 데이터 디렉터리(exe 폴더 또는 LOCALAPPDATA 폴백)에 에러 로그를 남긴다.
+        # cwd는 관리자 실행 시 System32라 쓰기 실패할 수 있어 사용하지 않는다.
         try:
-            with open("netdash_error.log", "w", encoding="utf-8") as _f:
+            from core.config_loader import get_data_dir
+            _err_path = get_data_dir() / "netdash_error.log"
+        except Exception:
+            _err_path = Path("netdash_error.log")
+        try:
+            with open(_err_path, "w", encoding="utf-8") as _f:
                 _f.write(traceback.format_exc())
         except OSError:
             pass

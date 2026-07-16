@@ -1,9 +1,12 @@
 import os
+import sys
 import tempfile
 import textwrap
+from pathlib import Path
 
 import pytest
 
+from core import config_loader
 from core.config_loader import Config, load_config
 
 
@@ -96,6 +99,80 @@ def test_production_loopback_autogenerates_token(tmp_path, monkeypatch, no_api_t
     assert token_file.read_text(encoding="utf-8").strip() == cfg.api_token
     cfg2 = load_config(str(yaml_file), demo_mode=False)
     assert cfg2.api_token == cfg.api_token
+
+
+# ---------------------------------------------------------------------------
+# exe(frozen)에서 DB 경로가 cwd가 아닌 exe 폴더에 고정되는지 검증
+# (버그: 관리자 실행 시 cwd=System32 → 'unable to open database file')
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def _reset_data_dir_cache(monkeypatch):
+    monkeypatch.setattr(config_loader, "_data_dir_cache", None)
+    yield
+    config_loader._data_dir_cache = None
+
+
+def test_get_data_dir_dev_mode_is_cwd(tmp_path, monkeypatch, _reset_data_dir_cache):
+    """비 frozen(개발/테스트) 모드: 기존 동작 유지 — cwd 기준."""
+    monkeypatch.chdir(tmp_path)
+    assert config_loader.get_data_dir() == Path.cwd()
+
+
+def test_get_data_dir_frozen_uses_exe_dir(tmp_path, monkeypatch, _reset_data_dir_cache):
+    """frozen exe: cwd가 아니라 exe가 있는 폴더를 사용."""
+    exe_dir = tmp_path / "app_folder"
+    exe_dir.mkdir()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "netdash.exe"))
+    # cwd를 다른 곳(System32 상황 모사)으로 바꿔도 exe 폴더가 선택되어야 함
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    assert config_loader.get_data_dir() == exe_dir.resolve()
+
+
+def test_get_data_dir_frozen_fallback_when_exe_dir_unwritable(tmp_path, monkeypatch, _reset_data_dir_cache):
+    """frozen exe + exe 폴더 쓰기 불가 → %LOCALAPPDATA%\\NetDash 폴백."""
+    exe_dir = tmp_path / "readonly_program_files"
+    exe_dir.mkdir()
+    local_appdata = tmp_path / "LocalAppData"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "netdash.exe"))
+    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
+    monkeypatch.setattr(config_loader, "_is_dir_writable", lambda d: False)
+    result = config_loader.get_data_dir()
+    assert result == local_appdata / "NetDash"
+    assert result.is_dir()  # 폴백 디렉터리가 실제 생성됨
+
+
+def test_get_db_path_relative_anchored_to_data_dir(tmp_path, monkeypatch, _reset_data_dir_cache):
+    """상대 db_path는 데이터 디렉터리에 고정, 절대 경로는 그대로."""
+    exe_dir = tmp_path / "app_folder"
+    exe_dir.mkdir()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "netdash.exe"))
+    cfg = config_loader._get_default_config(demo_mode=True)  # db_path="netdash.db"
+    assert cfg.get_db_path() == exe_dir.resolve() / "netdash.db"
+    # 절대 경로는 손대지 않음
+    abs_db = tmp_path / "explicit" / "custom.db"
+    cfg_abs = Config(db_path=str(abs_db))
+    assert cfg_abs.get_db_path() == abs_db
+
+
+def test_local_token_created_in_data_dir_when_frozen(tmp_path, monkeypatch, _reset_data_dir_cache):
+    """frozen exe: netdash_token.txt도 cwd가 아닌 데이터 디렉터리에 생성."""
+    exe_dir = tmp_path / "app_folder"
+    exe_dir.mkdir()
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "netdash.exe"))
+    monkeypatch.chdir(other)
+    token = config_loader._ensure_local_token()
+    assert len(token) >= 32
+    assert (exe_dir / "netdash_token.txt").exists()
+    assert not (other / "netdash_token.txt").exists()
 
 
 def test_production_mode_allows_missing_api_token_in_demo(tmp_path, no_api_token_env):

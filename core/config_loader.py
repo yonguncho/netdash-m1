@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import ipaddress
 import secrets
 from pathlib import Path
@@ -13,6 +14,58 @@ from . import utils
 logger = logging.getLogger(__name__)
 
 REQUIRED_KEYS = ["db_path", "flap_threshold", "upload_max_mb"]
+
+# 데이터 디렉터리 캐시(쓰기 가능 검사를 매 호출마다 반복하지 않기 위함)
+_data_dir_cache: Path | None = None
+
+
+def _is_dir_writable(d: Path) -> bool:
+    """디렉터리에 실제 파일을 만들어 보고 쓰기 가능 여부를 판정(best-effort)."""
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / (".netdash_write_probe_%d" % os.getpid())
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def get_data_dir() -> Path:
+    """DB·토큰·로그가 저장될 쓰기 가능한 데이터 디렉터리를 결정.
+
+    - 개발/테스트(비 frozen): 기존 동작 유지 — cwd 기준 상대경로.
+    - exe(frozen): cwd가 아닌 **exe가 있는 폴더** 기준. exe를 어디서 실행하든
+      (관리자 권한 실행 시 cwd=System32, 바로가기 실행 등) DB 위치가 고정된다.
+      exe 폴더가 쓰기 불가(Program Files·읽기전용·네트워크 공유)면
+      %LOCALAPPDATA%\\NetDash 로 폴백 — 'unable to open database file' 방지.
+    """
+    global _data_dir_cache
+    if _data_dir_cache is not None:
+        return _data_dir_cache
+
+    if not getattr(sys, "frozen", False):
+        return Path.cwd()  # dev/test: 캐시하지 않음(테스트가 cwd를 바꿈)
+
+    exe_dir = Path(sys.executable).resolve().parent
+    if _is_dir_writable(exe_dir):
+        _data_dir_cache = exe_dir
+        return exe_dir
+
+    fallback = Path(os.getenv("LOCALAPPDATA")
+                    or (Path.home() / "AppData" / "Local")) / "NetDash"
+    try:
+        fallback.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # 최후: exe 폴더 그대로 반환(원래 에러가 그대로 나되 위치는 명확)
+        _data_dir_cache = exe_dir
+        utils.log_event("error", "data_dir_unwritable", exe_dir=str(exe_dir))
+        return exe_dir
+    utils.log_event("warning", "data_dir_fallback",
+                    exe_dir=str(exe_dir), data_dir=str(fallback),
+                    reason="exe folder not writable")
+    _data_dir_cache = fallback
+    return fallback
 
 
 @dataclass
@@ -43,8 +96,22 @@ class Config:
     logging_config: dict[str, Any] = field(default_factory=lambda: {})
 
     def get_db_path(self) -> Path:
-        """Get database path from config."""
-        return Path(self.db_path)
+        """Get database path from config.
+
+        상대경로면 데이터 디렉터리(get_data_dir) 기준으로 고정한다.
+        exe(frozen)에서는 실행 위치(cwd)와 무관하게 항상 exe 폴더(또는
+        LOCALAPPDATA 폴백)에 DB가 생겨 'unable to open database file'을 막는다.
+        개발/테스트에서는 get_data_dir()==cwd 라 기존 동작과 동일하다.
+        """
+        p = Path(self.db_path)
+        if p.is_absolute():
+            return p
+        resolved = get_data_dir() / p
+        try:
+            resolved.parent.mkdir(parents=True, exist_ok=True)  # db_path에 하위폴더 포함 대비
+        except OSError:
+            pass
+        return resolved
 
     def get_raw_outputs_path(self) -> Path:
         """Get raw outputs path from config."""
@@ -139,7 +206,8 @@ def _ensure_local_token() -> str:
     생성해 파일로 영속화한다. 파일 쓰기 실패 시 메모리 전용 토큰(세션 한정)을 반환.
     secrets.token_urlsafe(32)는 길이/엔트로피 검증을 통과한다.
     """
-    token_path = Path(_LOCAL_TOKEN_FILE)
+    # DB와 동일한 데이터 디렉터리에 고정(cwd 의존 제거 — 관리자 실행 등에서도 재사용 안정)
+    token_path = get_data_dir() / _LOCAL_TOKEN_FILE
     try:
         if token_path.exists():
             existing = token_path.read_text(encoding="utf-8").strip()
