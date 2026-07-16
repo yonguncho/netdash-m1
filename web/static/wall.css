@@ -32,8 +32,27 @@ body {
 
 .wall-problems {
   flex: 1; overflow: auto; padding: 6px 32px 16px;
-  display: flex; flex-wrap: wrap; gap: 14px; align-content: flex-start;
+  display: flex; flex-direction: column; gap: 18px;
 }
+
+/* 카테고리 섹션(도달 불가 / 수집 실패 / 경보 / 설비 연결 실패) */
+.wall-cat {
+  background: #0e1526; border: 1px solid #1e293b; border-radius: 12px;
+  padding: 14px 18px;
+}
+.wall-cat__title {
+  font-size: 18px; font-weight: 800; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 10px;
+}
+.wall-cat--bad .wall-cat__title { color: #f87171; }
+.wall-cat--warn .wall-cat__title { color: #fbbf24; }
+.wall-cat__count {
+  font-size: 14px; font-weight: 700; color: #e2e8f0;
+  background: #1e293b; border-radius: 10px; padding: 1px 10px;
+}
+.wall-cat__grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.wall-cat--warn .pcard { border-color: #f59e0b; background: #1a1607; }
+.wall-cat--warn .pcard__why { color: #fbbf24; }
 .wall-ok {
   width: 100%; text-align: center; margin-top: 8vh;
   font-size: 44px; color: #22c55e; font-weight: 700;

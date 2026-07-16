@@ -74,7 +74,9 @@ class _DriverMismatchError(RuntimeError):
 
 _EVENT_IFACE_RE = re.compile(
     r"((?:GigabitEthernet|TenGigabitEthernet|FastEthernet|Ethernet|Eth|Gi|Te|Fa|"
-    r"Port-?channel|Po|Vlan|mgmt)\s?\d+(?:/\d+)*(?:\.\d+)?)", re.IGNORECASE)
+    r"Port-?channel|Port|Po|Vlan|mgmt)\s?\d(?:[\d/.:]*\d)?)", re.IGNORECASE)
+# 'Port' = EXOS("Port 1:5") 대응. 꼬리는 숫자로 끝나야 함 —
+# "Port1:5: link down"의 구분자 콜론이 포트명에 딸려오는 것 방지.
 
 
 def _extract_event_ports(events, kind):

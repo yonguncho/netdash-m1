@@ -24,7 +24,9 @@ _FLAP = re.compile(
 # 인터페이스 토큰 추출
 _IFACE = re.compile(
     r"((?:GigabitEthernet|TenGigabitEthernet|FastEthernet|Ethernet|Eth|Gi|Te|Fa|"
-    r"Port-?channel|Po|Vlan|mgmt)\s?\d[\d/.:]*)", re.IGNORECASE)
+    r"Port-?channel|Port|Po|Vlan|mgmt)\s?\d(?:[\d/.:]*\d)?)", re.IGNORECASE)
+# 주의: 'Port'는 EXOS 로그("Port 1:5 link down") 대응 — Port-channel보다 뒤에 둬야
+# "Port-channel10"이 "Port"로 잘리지 않는다. 꼬리는 숫자로 끝나야 함(구분자 방지).
 
 # 로그 줄 타임스탬프 형식 (벤더별). 연도 없는 syslog는 현재 연도로 가정 —
 # 윈도우 판정은 '줄 사이 상대 간격'만 쓰므로 연말 경계 외엔 영향 없음.

@@ -1112,6 +1112,43 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             unreach = [s for s in switches if reach.get(s["id"]) is False]
             fac = db.get_facility_hosts(db_path)
             fac_off = [h for h in fac if not h.get("online")]
+
+            def _alert_detail(sw):
+                """경보 스위치의 문제 포트를 switch_logs 이벤트에서 추출해 상세 표기."""
+                import json as _json
+                crit = sw.get("alert") == "critical"
+                kind = "looping" if crit else "flapping"
+                ports = []
+                try:
+                    logs = db.get_switch_logs(db_path, sw["id"])
+                    if logs and logs.get("events_json"):
+                        ports = collector._extract_event_ports(
+                            _json.loads(logs["events_json"]), kind)
+                except Exception:
+                    pass
+                base = "LOOP 경보" if crit else "FLAP 경보"
+                return base + ((" [" + ", ".join(ports) + "]") if ports else "")
+
+            # 카테고리별 정돈된 문제 목록(관제 화면 섹션 렌더용)
+            categories = [
+                {"key": "unreach", "title": "도달 불가", "severity": "bad",
+                 "items": [{"name": s.get("name"), "ip": s.get("ip"),
+                            "detail": "TCP-22 응답 없음"} for s in unreach[:30]]},
+                {"key": "failed", "title": "수집 실패", "severity": "bad",
+                 "items": [{"name": s.get("name"), "ip": s.get("ip"),
+                            "detail": (s.get("last_error") or "")[:90]}
+                           for s in failed[:30]]},
+                {"key": "alert", "title": "경보(FLAP/LOOP)", "severity": "warn",
+                 "items": [{"name": s.get("name"), "ip": s.get("ip"),
+                            "detail": _alert_detail(s)} for s in alerts_sw[:30]]},
+                {"key": "facility", "title": "설비 연결 실패", "severity": "warn",
+                 "items": [{"name": h.get("ip"), "ip": h.get("mac") or "",
+                            "detail": "%s 포트 %s" % (h.get("switch_name") or "-",
+                                                      h.get("port") or "-")}
+                           for h in fac_off[:30]]},
+            ]
+
+            # 구버전 호환(problems 평면 목록) — 카테고리에서 파생
             problems = []
             seen = set()
             for s, why in ([(x, "도달 불가") for x in unreach] +
@@ -1130,6 +1167,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "facility_total": len(fac),
                 "facility_offline": len(fac_off),
                 "unacked_alerts": db.count_unacked_events(db_path),
+                "categories": categories,
                 "problems": problems[:30],
                 "recent_events": db.list_device_events(db_path, limit=12),
             })

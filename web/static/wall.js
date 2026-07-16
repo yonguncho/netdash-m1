@@ -32,16 +32,27 @@ function refresh() {
     setTile("t-facoff", d.facility_offline || 0, true);
     setTile("t-unack", d.unacked_alerts || 0, true);
 
+    // 카테고리별 섹션 렌더(도달 불가 / 수집 실패 / 경보 / 설비 연결 실패)
     var host = document.getElementById("wall-problems");
-    var problems = d.problems || [];
-    if (!problems.length) {
+    var cats = (d.categories || []).filter(function (c) {
+      return (c.items || []).length > 0;
+    });
+    if (!cats.length) {
       host.innerHTML = "<div class='wall-ok'>✓ 이상 없음<small>모든 장비 정상 · " +
         (d.total_switches || 0) + "대 감시 중</small></div>";
     } else {
-      host.innerHTML = problems.map(function (p) {
-        return "<div class='pcard'><div class='pcard__name'>" + esc(p.name) + "</div>" +
-          "<div class='pcard__ip'>" + esc(p.ip) + "</div>" +
-          "<div class='pcard__why'>⚠ " + esc(p.why) + "</div></div>";
+      host.innerHTML = cats.map(function (c) {
+        return "<div class='wall-cat wall-cat--" + esc(c.severity || "warn") + "'>" +
+          "<div class='wall-cat__title'>" + esc(c.title) +
+          " <span class='wall-cat__count'>" + c.items.length + "</span></div>" +
+          "<div class='wall-cat__grid'>" +
+          c.items.map(function (p) {
+            return "<div class='pcard'><div class='pcard__name'>" + esc(p.name || "-") + "</div>" +
+              (p.ip ? "<div class='pcard__ip'>" + esc(p.ip) + "</div>" : "") +
+              (p.detail ? "<div class='pcard__why'>" + esc(p.detail) + "</div>" : "") +
+              "</div>";
+          }).join("") +
+          "</div></div>";
       }).join("");
     }
 
@@ -49,8 +60,11 @@ function refresh() {
     tick.innerHTML = (d.recent_events || []).map(function (ev) {
       var kind = KIND_KO[ev.kind] || ev.kind || "-";
       var where = [ev.label, ev.ip].filter(Boolean).join(" ");
+      // 이벤트 상세(message)에 포트 등 핵심 정보가 있으므로 함께 표시
+      var msg = (ev.message || "").slice(0, 90);
       return "<span>" + esc((ev.ts || "").replace("T", " ").slice(5, 16)) +
-        " <b>" + esc(kind) + "</b> " + esc(where) + "</span>";
+        " <b>" + esc(kind) + "</b> " + esc(where) +
+        (msg ? " — " + esc(msg) : "") + "</span>";
     }).join("");
   }).catch(function (e) { console.error(e); });
 }

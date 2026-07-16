@@ -85,8 +85,43 @@ def test_wall_page(client):
 def test_wall_data_api(client):
     r = client.get("/api/wall")
     b = r.get_json()
-    for key in ("total_switches", "unreachable", "failed", "problems", "recent_events", "unacked_alerts"):
+    for key in ("total_switches", "unreachable", "failed", "problems", "recent_events",
+                "unacked_alerts", "categories"):
         assert key in b
+    # 카테고리 4종(도달 불가/수집 실패/경보/설비) — 관제 화면 섹션 렌더용
+    keys = [c["key"] for c in b["categories"]]
+    assert keys == ["unreach", "failed", "alert", "facility"]
+
+
+def test_wall_alert_category_includes_ports(client):
+    """경보(FLAP) 스위치의 카테고리 상세에 문제 포트가 표기된다 — v3.96."""
+    import json as _json
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    sid = db.save_switch(dbp, "FLAP-SW", "10.66.0.1", "extreme")
+    db.set_switch_alert(dbp, sid, "warning")
+    events = [{"type": "flapping", "detail": "Port1:5: link up/down 4회/10분", "count": 4}]
+    db.save_switch_logs(dbp, sid, "recent", _json.dumps(events), "warning")
+    b = client.get("/api/wall").get_json()
+    alert_cat = [c for c in b["categories"] if c["key"] == "alert"][0]
+    mine = [i for i in alert_cat["items"] if i["name"] == "FLAP-SW"]
+    assert mine and "FLAP 경보" in mine[0]["detail"]
+    assert "Port1:5" in mine[0]["detail"]      # 어떤 포트인지 표기
+
+
+def test_exos_flap_log_port_detected():
+    """EXOS 로그('Port 1:5 link down')에서 포트 인식 — '?'로 뭉치던 문제 수정."""
+    from core import log_analyzer
+    from core.collector import _extract_event_ports
+    log = "\n".join(
+        ["04/07/2025 10:0%d:00.00 <Info:vlan.msgs.portLinkStateDown> Port 1:5 link down" % i
+         for i in range(4)] +
+        ["04/07/2025 10:0%d:30.00 <Info:vlan.msgs.portLinkStateUp> Port 1:5 link up" % i
+         for i in range(4)])
+    res = log_analyzer.analyze(log)
+    flaps = [e for e in res["events"] if e["type"] == "flapping"]
+    assert flaps and flaps[0]["detail"].startswith("Port1:5")   # '?' 아님
+    assert _extract_event_ports(flaps, "flapping") == ["Port1:5"]
 
 
 # ─── config 일괄 다운로드(ZIP) ─────────────────────────────
