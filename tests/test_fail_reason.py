@@ -56,10 +56,15 @@ def test_reset_stale_collecting(temp_db):
 
 
 def test_app_startup_resets_stale(client):
-    """create_app 경로에 reset_stale_collecting 호출 존재(클라이언트 픽스처가 생성 검증)."""
+    """주 서버 기동 경로에 reset_stale_collecting 호출 존재(클라이언트 픽스처가 생성 검증).
+
+    v3.92: 주 서버 초기화가 _start_primary_services로 분리됨(읽기 전용 → 승격 재사용).
+    create_app(비 readonly)이 이를 호출하는 것까지 함께 확인한다.
+    """
     import inspect
     import app as _app
-    assert "reset_stale_collecting" in inspect.getsource(_app.create_app)
+    assert "reset_stale_collecting" in inspect.getsource(_app._start_primary_services)
+    assert "_start_primary_services" in inspect.getsource(_app.create_app)
 
 
 def test_ui_shows_fail_reason():

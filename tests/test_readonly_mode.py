@@ -85,6 +85,55 @@ def test_readonly_skips_write_background_threads(tmp_path, monkeypatch):
         db.READONLY = False
 
 
+def test_promotion_enables_writes(tmp_path, monkeypatch):
+    """주 서버 종료(락 획득) 시 _promote_to_primary → 쓰기 게이트 해제 + 서비스 기동."""
+    monkeypatch.chdir(tmp_path)
+    import app as app_module
+    app_module.create_app(demo_mode=True)  # 스키마 준비
+    collector.shutdown_workers()
+
+    started = []
+    monkeypatch.setattr(app_module, "_start_primary_services",
+                        lambda cfg, dbp: started.append("services"))
+    ro = app_module.create_app(demo_mode=True,
+                               readonly_info={"hostname": "PRIMARY-PC"})
+    try:
+        client = ro.test_client()
+        # 승격 전: 쓰기 423 + state readonly
+        assert client.post("/api/switches/bulk-collect", json={}).status_code == 423
+        assert client.get("/api/state").get_json()["readonly"] is True
+
+        from config import get_config
+        app_module._promote_to_primary(ro, get_config(demo_mode=True),
+                                       get_config(demo_mode=True).get_db_path())
+
+        # 승격 후: 게이트 해제(423 아님) + state readonly False + 서비스 기동됨
+        assert started == ["services"]
+        assert db.READONLY is False
+        r = client.post("/api/switches/bulk-collect", json={})
+        assert r.status_code != 423  # 게이트 통과(내용 검증은 기존 엔드포인트 테스트 몫)
+        state = client.get("/api/state").get_json()
+        assert state["readonly"] is False
+        assert state["primary_host"] is None
+    finally:
+        db.READONLY = False
+
+
+def test_readonly_without_promote_watch_starts_no_thread(tmp_path, monkeypatch):
+    """promote_watch 기본값 False — 테스트/라이브러리 사용 시 감시 스레드 미기동."""
+    import threading as _th
+    monkeypatch.chdir(tmp_path)
+    import app as app_module
+    app_module.create_app(demo_mode=True)
+    collector.shutdown_workers()
+    try:
+        app_module.create_app(demo_mode=True, readonly_info={"hostname": "P"})
+        names = [t.name for t in _th.enumerate()]
+        assert "promote-watch" not in names
+    finally:
+        db.READONLY = False
+
+
 def test_readonly_connection_is_query_only(tmp_path, monkeypatch):
     """READONLY 플래그가 켜지면 get_db 연결로 쓰기 시도 시 실패(안전벨트)."""
     import sqlite3

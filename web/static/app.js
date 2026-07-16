@@ -42,7 +42,17 @@ function showReadonlyBanner(primaryHost) {
     document.body.insertBefore(el, document.body.firstChild);
   }
   el.textContent = "읽기 전용 모드 — 주 서버(" + (primaryHost || "다른 PC") +
-    ")가 DB를 사용 중입니다. 조회는 가능하며, 수집·수정은 주 서버에서 하세요.";
+    ")가 DB를 사용 중입니다. 조회는 가능하며, 주 서버 종료 시 자동으로 전환됩니다.";
+}
+
+function clearReadonlyBanner() {
+  // 승격(주 서버 전환) 감지: 배너를 초록으로 바꿔 8초간 알린 뒤 제거
+  var el = document.getElementById("readonly-banner");
+  if (!el || el.dataset.promoted) return;
+  el.dataset.promoted = "1";
+  el.style.background = "#15803d";
+  el.textContent = "주 서버로 전환되었습니다 — 수집·수정 기능이 활성화되었습니다.";
+  setTimeout(function () { el.remove(); }, 8000);
 }
 
 // ─── 이벤트 위임 (CSP 'self' 호환: inline onclick 금지) ──────────────
@@ -3782,6 +3792,7 @@ function pollState() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.readonly) showReadonlyBanner(data.primary_host);
+      else clearReadonlyBanner();
       _switches = data.switches || [];
       renderSwitchGrid(_switches);
       renderSwitchTable(_switches);

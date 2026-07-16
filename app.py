@@ -296,7 +296,98 @@ def rate_limit(endpoint, max_requests=5, window_seconds=60):
     return decorator
 
 
-def create_app(demo_mode=None, readonly_info=None):
+def _start_primary_services(config, db_path):
+    """주 서버 전용 초기화 — 시작 시 DB 정비 쓰기 + 쓰기 백그라운드 스레드.
+
+    정상 기동(주 서버)과 읽기 전용 → 주 서버 자동 승격 양쪽에서 재사용.
+    """
+    # 런타임 로그를 파일로도 보존(서버 오류 진단용) — DB 옆 netdash.log
+    try:
+        from pathlib import Path as _Path
+        _attach_file_logger(_Path(str(db_path)).parent / "netdash.log")
+    except Exception as e:
+        log_event("warning", "file_logger_failed", error=str(e))
+    db.init_schema(db_path)
+    db.validate_schema(db_path)
+    # 이전 실행 중단으로 박제된 '수집중' 상태 복구(재시작 후 실제 수집은 없음)
+    try:
+        db.reset_stale_collecting(db_path)
+    except Exception as e:
+        log_event("warning", "stale_reset_failed", error=str(e))
+    # 벤더 별칭(cisco/extreme...) → 표준 값(cisco_ios/extreme_exos...) 일괄 정규화
+    try:
+        db.normalize_vendor_values(db_path)
+    except Exception as e:
+        log_event("warning", "vendor_normalize_failed", error=str(e))
+    # 버전이 빈 스위치를 기존 config 백업의 version 줄로 백필(재수집 불필요)
+    try:
+        db.backfill_versions_from_config(db_path)
+    except Exception as e:
+        log_event("warning", "version_backfill_failed", error=str(e))
+
+    collector.init_collector()
+    # M14: 하루 N회 자동 수집 스케줄러 시작(설정으로 on/off)
+    try:
+        from core import scheduler
+        scheduler.start_scheduler(db_path)
+    except Exception as e:
+        log_event("warning", "scheduler_start_failed", error=str(e))
+    # 스위치 도달성 감시(TCP-22, 부하 없는 1분 내 끊김 감지 — 설정으로 on/off)
+    if not config.app.get("demo_mode"):
+        try:
+            from core import reachability
+            reachability.start_monitor(db_path)
+        except Exception as e:
+            log_event("warning", "reachability_start_failed", error=str(e))
+        # 알람 이메일 발송 스레드(설정으로 on/off, 60초 묶음 발송)
+        try:
+            from core import notifier
+            notifier.start_notifier(db_path)
+        except Exception as e:
+            log_event("warning", "notifier_start_failed", error=str(e))
+
+
+def _promote_to_primary(app, config, db_path):
+    """읽기 전용 인스턴스를 주 서버로 승격(인스턴스 락 획득 후 호출).
+
+    새 DB 연결부터 쓰기가 허용되고, 주 서버 백그라운드가 기동된다.
+    """
+    db.READONLY = False
+    _start_primary_services(config, db_path)
+    app.config["IS_READONLY"] = False
+    app.config["READONLY_PRIMARY"] = None
+    log_event("info", "promoted_to_primary")
+    print("=" * 56)
+    print("  주 서버가 종료되어 이 프로그램이 [주 서버]로 전환되었습니다.")
+    print("  수집·수정 기능이 활성화되었습니다.")
+    print("=" * 56, flush=True)
+
+
+PROMOTE_POLL_SEC = 5  # 주 서버 종료 감지 주기
+
+
+def _watch_and_promote(app, config, db_path, url):
+    """읽기 전용 모드 감시 스레드: 주 서버 종료 시 자동 승격.
+
+    인스턴스 락 획득을 주기적으로 시도 — 주 서버가 종료(크래시 포함)하면
+    OS가 락을 해제하므로 획득에 성공하고, 그 순간 승격한다.
+    여러 읽기 전용 인스턴스가 있어도 락은 하나만 얻으므로 승격도 하나만 된다.
+    """
+    from core import instance_lock
+    from core.config_loader import get_data_dir
+    while app.config.get("IS_READONLY"):
+        time.sleep(PROMOTE_POLL_SEC)
+        try:
+            acquired, _ = instance_lock.acquire(get_data_dir(), url)
+        except Exception as e:
+            log_event("warning", "promote_watch_error", error=str(e))
+            continue
+        if acquired:
+            _promote_to_primary(app, config, db_path)
+            return
+
+
+def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     """Factory function to create and configure Flask app.
 
     readonly_info: 다른 PC의 주 서버가 DB(인스턴스 락)를 소유 중일 때 그 정보
@@ -318,71 +409,44 @@ def create_app(demo_mode=None, readonly_info=None):
 
     db_path = config.get_db_path()
 
+    app.config["IS_READONLY"] = readonly
+    app.config["READONLY_PRIMARY"] = (
+        ((readonly_info or {}).get("hostname") or "다른 PC") if readonly else None)
+
     if readonly:
         # 프로세스 전역 안전벨트: 모든 DB 연결이 query_only로 열림
         db.READONLY = True
-        primary_host = (readonly_info or {}).get("hostname") or "다른 PC"
-        app.config["READONLY_PRIMARY"] = primary_host
-        log_event("info", "app_readonly_mode", primary_host=primary_host)
+        log_event("info", "app_readonly_mode",
+                  primary_host=app.config["READONLY_PRIMARY"])
 
         @app.before_request
         def _readonly_gate():
-            # 쓰기 메서드 전체 차단 — 조회(GET)와 정적 리소스는 그대로 허용
+            # 쓰기 메서드 전체 차단 — 조회(GET)와 정적 리소스는 그대로 허용.
+            # (승격되면 IS_READONLY=False가 되어 게이트가 열린다)
+            if not app.config.get("IS_READONLY"):
+                return None
             if request.method in ("POST", "PUT", "DELETE", "PATCH"):
                 return jsonify({
                     "error": "다른 사용자(주 서버: %s)가 DB를 사용 중입니다. "
                              "지금은 조회만 가능합니다. 수집·수정은 주 서버에서 "
-                             "하거나, 주 서버 종료 후 이 프로그램을 다시 시작하세요."
-                             % primary_host,
+                             "하세요. (주 서버 종료 시 이 프로그램이 자동으로 "
+                             "주 서버가 됩니다)"
+                             % app.config.get("READONLY_PRIMARY"),
                     "readonly": True,
                 }), 423
+
+        if promote_watch:
+            # 주 서버 종료 감지 → 자동 승격 (프로덕션 exe 전용 — 테스트는 미기동)
+            _pw_host = config.app.get("host", "127.0.0.1")
+            _pw_port = config.app.get("port", 8082)
+            _pw_open = "127.0.0.1" if _pw_host in ("0.0.0.0", "::") else _pw_host
+            threading.Thread(
+                target=_watch_and_promote,
+                args=(app, config, db_path, f"http://{_pw_open}:{_pw_port}"),
+                daemon=True, name="promote-watch").start()
     else:
         db.READONLY = False
-        # 런타임 로그를 파일로도 보존(서버 오류 진단용) — DB 옆 netdash.log
-        # (읽기 전용 인스턴스는 스킵 — 두 PC가 같은 로그 파일에 쓰면 충돌)
-        try:
-            from pathlib import Path as _Path
-            _attach_file_logger(_Path(str(db_path)).parent / "netdash.log")
-        except Exception as e:
-            log_event("warning", "file_logger_failed", error=str(e))
-        db.init_schema(db_path)
-        db.validate_schema(db_path)
-        # 이전 실행 중단으로 박제된 '수집중' 상태 복구(재시작 후 실제 수집은 없음)
-        try:
-            db.reset_stale_collecting(db_path)
-        except Exception as e:
-            log_event("warning", "stale_reset_failed", error=str(e))
-        # 벤더 별칭(cisco/extreme...) → 표준 값(cisco_ios/extreme_exos...) 일괄 정규화
-        try:
-            db.normalize_vendor_values(db_path)
-        except Exception as e:
-            log_event("warning", "vendor_normalize_failed", error=str(e))
-        # 버전이 빈 스위치를 기존 config 백업의 version 줄로 백필(재수집 불필요)
-        try:
-            db.backfill_versions_from_config(db_path)
-        except Exception as e:
-            log_event("warning", "version_backfill_failed", error=str(e))
-
-        collector.init_collector()
-        # M14: 하루 N회 자동 수집 스케줄러 시작(설정으로 on/off)
-        try:
-            from core import scheduler
-            scheduler.start_scheduler(db_path)
-        except Exception as e:
-            log_event("warning", "scheduler_start_failed", error=str(e))
-        # 스위치 도달성 감시(TCP-22, 부하 없는 1분 내 끊김 감지 — 설정으로 on/off)
-        if not config.app.get("demo_mode"):
-            try:
-                from core import reachability
-                reachability.start_monitor(db_path)
-            except Exception as e:
-                log_event("warning", "reachability_start_failed", error=str(e))
-            # 알람 이메일 발송 스레드(설정으로 on/off, 60초 묶음 발송)
-            try:
-                from core import notifier
-                notifier.start_notifier(db_path)
-            except Exception as e:
-                log_event("warning", "notifier_start_failed", error=str(e))
+        _start_primary_services(config, db_path)
 
     # Load demo data in demo mode
     if config.app.get("demo_mode") and not readonly:
@@ -559,7 +623,8 @@ def create_app(demo_mode=None, readonly_info=None):
                 "switches": switches,
                 "snapshots": snapshots,
                 "demo": config.app.get("demo_mode", False),
-                "readonly": readonly,
+                # 승격되면 실시간으로 False가 되어 UI 배너가 해제된다
+                "readonly": bool(app.config.get("IS_READONLY")),
                 "primary_host": app.config.get("READONLY_PRIMARY"),
             })
         except Exception as e:
@@ -2413,12 +2478,14 @@ if __name__ == "__main__":
             print("-" * 56)
             print("  - 현황 조회: 가능 (수집된 정보 실시간 확인)")
             print("  - 정보 수집·수정: 불가 — 주 서버(" + str(_o_host) + ")에서 하세요.")
-            print("  - 주 서버 종료 후 이 프로그램을 다시 시작하면 모든 기능 사용 가능.")
+            print("  - 주 서버가 종료되면 이 프로그램이 자동으로 주 서버가 됩니다.")
             print("=" * 56, flush=True)
             log_event("warning", "app_start_readonly",
                       other_host=str(_o_host))
 
-        app = create_app(demo_mode=demo_mode, readonly_info=_readonly_info)
+        # 주의: _readonly_info가 빈 dict여도(정보 파일 유실) 읽기 전용 + 감시는 켠다
+        app = create_app(demo_mode=demo_mode, readonly_info=_readonly_info,
+                         promote_watch=_readonly_info is not None)
 
         # CWE-306 fix: In production mode, API token MUST be configured.
         # (config_loader auto-generates a token for loopback binds; this is a safety net.)
