@@ -1,6 +1,7 @@
 import logging
 import hmac
 import os
+import sys
 import re
 import io
 import argparse
@@ -2358,6 +2359,39 @@ if __name__ == "__main__":
         # Create config with determined demo_mode
         reset_config()
         config = get_config(demo_mode=demo_mode)
+
+        # 단일 인스턴스 보장 — DB를 열기 전에(create_app 이전) 검사해야 한다.
+        # 다른 PC가 같은 공유폴더의 exe/DB로 이미 실행 중이면 SQLite(WAL)가
+        # 다중 호스트 접근을 지원하지 않아 db_error가 나므로, 명확히 안내 후 종료.
+        from core import instance_lock
+        from core.config_loader import get_data_dir
+        _lk_host = config.app.get("host", "127.0.0.1")
+        _lk_port = config.app.get("port", 8082)
+        _lk_open_host = "127.0.0.1" if _lk_host in ("0.0.0.0", "::") else _lk_host
+        _acquired, _other = instance_lock.acquire(
+            get_data_dir(), url=f"http://{_lk_open_host}:{_lk_port}")
+        if not _acquired:
+            _o_host = (_other or {}).get("hostname", "알 수 없음")
+            _o_url = (_other or {}).get("url", "http://<서버PC IP>:8082")
+            print("=" * 56)
+            print("  NetDash가 이미 다른 곳에서 실행 중입니다.")
+            print("  실행 중인 PC: " + str(_o_host))
+            print("-" * 56)
+            print("  같은 폴더(DB)를 여러 PC에서 동시에 열 수 없습니다.")
+            print("  (SQLite 데이터베이스는 다중 PC 동시 접근을 지원하지 않음)")
+            print()
+            print("  이용 방법 중 하나를 선택하세요:")
+            print("   1) 실행 중인 PC(" + str(_o_host) + ")의 브라우저로 이용")
+            print("   2) 그 PC의 NetDash를 종료한 뒤 이 PC에서 다시 실행")
+            print("   3) 이 PC 로컬 폴더에 exe를 복사해 별도 DB로 사용")
+            print("=" * 56, flush=True)
+            log_event("error", "app_start_blocked_other_instance",
+                      other_host=str(_o_host))
+            try:
+                input("아무 키나 누르면 종료합니다...")
+            except Exception:
+                time.sleep(15)
+            sys.exit(1)
 
         app = create_app(demo_mode=demo_mode)
 

@@ -333,6 +333,14 @@ def _restrict_db_permissions(db_path):
         return
     _acl_applied.add(db_path_str)
 
+    # 네트워크 경로(UNC/원격 드라이브)에는 owner-only ACL을 적용하지 않는다.
+    # 공유폴더에서 처음 실행한 PC의 계정에만 권한이 남아 다른 PC에서
+    # 'unable to open database file'(db_error)이 나던 문제. 공유폴더의
+    # 접근 통제는 파일서버의 NTFS/공유 권한이 담당한다.
+    if utils.is_network_path(db_path_str):
+        utils.log_event("info", "db_acl_skip_network_path", path=db_path_str)
+        return
+
     if platform.system() == "Windows":
         # Windows: Use icacls to set owner-only ACL
         try:

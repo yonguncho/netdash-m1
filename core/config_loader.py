@@ -139,6 +139,14 @@ def _resolve_config_path(path: str = "config.yaml") -> str:
     if env_path := os.getenv("NETDASH_CONFIG"):
         env_path_resolved = str(Path(env_path).resolve())  # Normalize to absolute
         return env_path_resolved
+    # 1.5. exe(frozen): exe 옆의 config.yaml이 번들 기본값보다 우선.
+    # 사용자가 host/port 등을 파일로 오버라이드 가능(예: 다른 PC에서 브라우저
+    # 접속을 허용하려고 host: 0.0.0.0 + api_token 설정). 파일이 없으면 기존처럼
+    # 번들 config 사용 — 기존 사용자 동작 불변.
+    if getattr(sys, "frozen", False):
+        exe_cfg = Path(sys.executable).resolve().parent / path
+        if exe_cfg.exists():
+            return str(exe_cfg)
     # 2. Project root (parent of core/)
     project_root = Path(__file__).parent.parent
     project_config = project_root / path
@@ -241,8 +249,12 @@ def _restrict_token_permissions(path: str) -> None:
     """토큰 파일을 소유자 전용으로 제한(외부 바인딩 시 유일한 인증 수단).
 
     DB 파일(db._restrict_db_permissions)과 동일 정책. 실패해도 무해(best-effort).
+    네트워크 경로는 스킵(다른 PC 접근 차단 방지 — db와 동일 사유).
     """
     import os
+    if utils.is_network_path(path):
+        utils.log_event("info", "token_acl_skip_network_path", path=str(path))
+        return
     try:
         if os.name == "nt":
             import subprocess
