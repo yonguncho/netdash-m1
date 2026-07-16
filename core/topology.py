@@ -126,12 +126,58 @@ _ZONE_FLOOR_RE = _re_zone.compile(r"(?<![A-Za-z0-9])(B?\d{1,2}F)(?![A-Za-z0-9])"
                                   _re_zone.I)
 
 
+# 명명규칙 파싱용 — 장비타입 토큰(SW/ASW/FASW 등, 2글자 접두까지 허용)
+_ZONE_DEVTYPE_RE = _re_zone.compile(
+    r"^([A-Z]{0,2}SW|SWITCH|RTR|ROUTER|FW|FIREWALL|AP|L[234])$", _re_zone.I)
+# 층 토큰: F1, 4F, B1, B1F 형태
+_ZONE_FLOOR_TOKEN_RE = _re_zone.compile(r"^(B?\d{1,2}F?|F\d{1,2})$", _re_zone.I)
+# 모델명으로 보이는 토큰(5420M, X590 등) — 존 이름에서 제외
+_ZONE_MODEL_RE = _re_zone.compile(r"^[A-Z]{0,2}\d{3,}[A-Z]{0,2}$", _re_zone.I)
+
+
+def _parse_zone_tokens(host):
+    """언더스코어 명명규칙(사이트_층_존..._장비타입_번호)에서 존 토큰 추출.
+
+    예: SKBA_F1_DMZ_SW_1 → "DMZ" / SKBA_F1_VDI_NASSW_1 → "VDI NAS".
+    마지막 의미 토큰이 장비타입(SW 계열)일 때만 이 규칙을 적용해
+    임의 문자열(random_host 등)을 존으로 오인하지 않는다.
+    """
+    tokens = [t for t in _re_zone.split(r"[_\-]+", (host or "").strip().upper()) if t]
+    if len(tokens) < 3:
+        return ""
+    while tokens and tokens[-1].isdigit():   # 뒤 번호(인덱스) 제거
+        tokens.pop()
+    if not tokens:
+        return ""
+    last = tokens[-1]
+    if _ZONE_DEVTYPE_RE.match(last):
+        tokens.pop()                          # 순수 장비타입(SW/FASW...) 제거
+    elif len(last) > 4 and last.endswith("SW"):
+        tokens[-1] = last[:-2]                # 결합형(NASSW → NAS)은 SW만 분리
+    else:
+        return ""                             # 명명규칙 형태 아님 — 기존 규칙으로
+    core = [t for t in tokens
+            if not _ZONE_FLOOR_TOKEN_RE.match(t)      # 층 제거
+            and not _ZONE_MODEL_RE.match(t)           # 모델명 제거
+            and not t.isdigit()]
+    if len(core) >= 2:
+        core = core[1:]                       # 첫 토큰 = 사이트 코드로 간주
+    return " ".join(core) if core else ""
+
+
 def infer_zone(name, hostname=""):
-    """hostname/이름 토큰으로 존 추정. 우선순위: 의미토큰(DMZ/SERVERFARM/ECO-*) → 층(4F/B1F).
+    """hostname/이름 토큰으로 존 자동 분류.
+
+    우선순위: 의미토큰(DMZ/SERVERFARM/ECO-*) → 명명규칙 파싱(사이트_층_존_SW_번호,
+    예: SKBA_F1_VDI_NASSW_1 → "VDI NAS") → 층(4F/B1F).
     아무것도 못 찾으면 "" 반환(→ 프론트에서 '미지정')."""
     t = "%s %s" % (name or "", hostname or "")
     for rx, z in _ZONE_RULES:
         if rx.search(t):
+            return z
+    for cand in (hostname, name):
+        z = _parse_zone_tokens(cand)
+        if z:
             return z
     m = _ZONE_FLOOR_RE.search(name or hostname or "")
     if m:

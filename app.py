@@ -591,8 +591,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             snapshots = db.get_snapshots(db_path)
 
             # hostname → TPS 물리 위치 라벨 + 랙 그룹핑 키 주입(포맷 일치 시)
-            from core import tps_location, serverroom
+            from core import tps_location, serverroom, topology as _topo
             for sw in switches:
+                # 존 자동 분류(hostname 명명규칙) — 명시 zone 없을 때 표시용
+                if not sw.get("zone"):
+                    _za = _topo.infer_zone(sw.get("name"), sw.get("hostname"))
+                    if _za:
+                        sw["zone_auto"] = _za
                 info = tps_location.parse(sw.get("hostname"))
                 if info:
                     sw["tps_location"] = info["label"]

@@ -13,6 +13,21 @@ def test_infer_zone_tokens():
     assert infer_zone("", "X_4F_DMZ_1") == "DMZ"
 
 
+def test_infer_zone_naming_convention():
+    """언더스코어 명명규칙(사이트_층_존_장비타입_번호) 자동 분류 — v3.95."""
+    from core.topology import infer_zone
+    assert infer_zone("", "SKBA_F1_DMZ_SW_1") == "DMZ"
+    assert infer_zone("", "SKBA_F1_VDI_NASSW_1") == "VDI NAS"   # 결합형: NASSW → NAS
+    assert infer_zone("", "SKBA_F1_OA_FASW_3") == "OA"          # 장비타입 변형(FASW)
+    assert infer_zone("", "CORE_SW_1") == "CORE"
+    assert infer_zone("", "SKBA_2F_5420M_MES_SW_2") == "MES"    # 모델명(5420M) 제외
+    # 명명규칙 형태가 아니면 기존 동작 유지(빈 값 → 미지정)
+    assert infer_zone("", "random_host_no_zone") == ""
+    # 의미토큰(DMZ 등)이 명명규칙보다 우선 — 기존 규칙 회귀 없음
+    assert infer_zone("", "SKChem_HQ_4F_5420M_DMZ1_DA1") == "DMZ"
+    assert infer_zone("", "SKChem_IBS_B1F_X590_BB1") == "B1F"
+
+
 def test_update_switch_zone_persists(temp_db):
     from core import db
     sid = db.save_switch(temp_db, "SWZ", "10.0.0.9", "extreme")
