@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS switches (
     location TEXT,
     status TEXT DEFAULT 'new',
     alert TEXT DEFAULT 'none',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
     last_collected TIMESTAMP,
     cred_blob TEXT
 )
@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS port_events (
     port_name TEXT NOT NULL,
     event_type TEXT NOT NULL,
     count INTEGER DEFAULT 1,
-    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    first_seen TIMESTAMP DEFAULT (datetime('now','localtime')),
+    last_seen TIMESTAMP DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (switch_id) REFERENCES switches(id)
 )
 """
@@ -51,7 +51,7 @@ CREATE_SNAPSHOTS_TABLE = """
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     switch_id INTEGER NOT NULL,
-    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    collected_at TIMESTAMP DEFAULT (datetime('now','localtime')),
     duration_seconds INTEGER,
     FOREIGN KEY (switch_id) REFERENCES switches(id)
 )
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     hostname TEXT,
     ledger_switch TEXT,
     ledger_port TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (switch_id) REFERENCES switches(id)
 )
 """
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS events (
     switch_id INTEGER,
     snapshot_id INTEGER,
     data TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (switch_id) REFERENCES switches(id),
     FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
 )
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS firewalls (
     auth_type TEXT DEFAULT 'token',
     status TEXT DEFAULT 'new',
     last_collected TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
     cred_blob TEXT,
     location TEXT
 )
@@ -211,7 +211,7 @@ CREATE TABLE IF NOT EXISTS switch_logs (
 CREATE_AUDIT_LOG_TABLE = """
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT DEFAULT (datetime('now')),
+    ts TEXT DEFAULT (datetime('now','localtime')),
     client_ip TEXT,
     action TEXT,
     target TEXT,
@@ -226,7 +226,7 @@ CREATE_CONFIG_BACKUPS_TABLE = """
 CREATE TABLE IF NOT EXISTS config_backups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     switch_id INTEGER,
-    ts TEXT DEFAULT (datetime('now')),
+    ts TEXT DEFAULT (datetime('now','localtime')),
     hash TEXT,
     content TEXT
 )
@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS config_backups (
 CREATE_DEVICE_EVENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS device_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT DEFAULT (datetime('now')),
+    ts TEXT DEFAULT (datetime('now','localtime')),
     kind TEXT,
     severity TEXT DEFAULT 'info',
     subnet TEXT,
@@ -595,6 +595,44 @@ def init_schema(db_path):
                     cursor.execute("PRAGMA foreign_keys=ON")
                 except Exception:
                     pass
+            # ── 타임스탬프 로컬시간 일원화(1회 마이그레이션) ────────────
+            # 과거 버전은 CURRENT_TIMESTAMP/datetime('now') = UTC로 저장해
+            # 화면 시간이 PC 시간보다 9시간(KST) 이전으로 표시됐다.
+            # 기존 행을 datetime(col,'localtime')으로 변환하고 플래그로 재실행 방지.
+            # (pc_profiles.updated_at은 처음부터 localtime — 변환 대상 제외)
+            try:
+                done = cursor.execute(
+                    "SELECT value FROM app_settings WHERE key='ts_localtime_migrated'"
+                ).fetchone()
+                if not done:
+                    for table, cols in [
+                        ("switches", ("created_at", "last_collected")),
+                        ("port_events", ("first_seen", "last_seen")),
+                        ("snapshots", ("collected_at",)),
+                        ("hosts", ("updated_at",)),
+                        ("events", ("created_at",)),
+                        ("firewalls", ("created_at", "last_collected")),
+                        ("device_events", ("ts",)),
+                        ("audit_log", ("ts",)),
+                        ("config_backups", ("ts",)),
+                        ("switch_logs", ("updated",)),
+                        ("neighbors", ("updated",)),
+                        ("facility_hosts", ("updated",)),
+                    ]:
+                        for col in cols:
+                            try:
+                                cursor.execute(
+                                    "UPDATE %s SET %s = datetime(%s, 'localtime') "
+                                    "WHERE %s IS NOT NULL AND datetime(%s) IS NOT NULL"
+                                    % (table, col, col, col, col))
+                            except Exception:
+                                pass   # 구버전 스키마에 없는 테이블/컬럼은 스킵
+                    cursor.execute(
+                        "INSERT INTO app_settings (key, value) "
+                        "VALUES ('ts_localtime_migrated', '1')")
+                    utils.log_event("info", "ts_localtime_migrated")
+            except Exception as _e:
+                utils.log_event("warning", "ts_localtime_migrate_skip", error=str(_e))
             conn.commit()
             utils.log_event("info", "schema_created", tables=8)
 
@@ -867,7 +905,7 @@ def save_neighbors(db_path, switch_id, neighbors):
                 for n in neighbors or []:
                     conn.execute(
                         "INSERT INTO neighbors (switch_id, local_port, remote_name, remote_port, "
-                        "remote_ip, platform, updated) VALUES (?,?,?,?,?,?,datetime('now'))",
+                        "remote_ip, platform, updated) VALUES (?,?,?,?,?,?,datetime('now','localtime'))",
                         (switch_id, n.get("local_port"), n.get("remote_name"),
                          n.get("remote_port"), n.get("remote_ip"), n.get("platform")))
             except Exception as e:
@@ -932,10 +970,12 @@ def save_device_event(db_path, kind, severity="info", subnet=None, ip=None,
     with _db_lock:
         with get_db(db_path) as conn:
             try:
+                # ts를 명시(datetime('now','localtime')): 구버전 DB의 컬럼 DEFAULT는
+                # UTC로 남아있으므로 기본값에 의존하면 9시간 어긋난다(전 INSERT 공통).
                 conn.execute(
                     """INSERT INTO device_events
-                       (kind, severity, subnet, ip, mac, switch_id, label, message)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (kind, severity, subnet, ip, mac, switch_id, label, message, ts)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))""",
                     (kind, severity, subnet, ip, mac, switch_id, label, message))
             except Exception as e:
                 log_event("warning", "save_device_event_skipped", error=str(e))
@@ -961,7 +1001,7 @@ def list_device_events(db_path, limit=200, only_unack=False, kind=None, days=Non
                 conds.append("kind=?")
                 params.append(str(kind))
             if days:
-                conds.append("ts >= datetime('now', ?)")
+                conds.append("ts >= datetime('now','localtime', ?)")
                 params.append("-%d days" % int(days))
             sql = "SELECT * FROM device_events"
             if conds:
@@ -984,7 +1024,7 @@ def purge_device_events(db_path, retention_days=90):
         with get_db(db_path) as conn:
             try:
                 cur = conn.execute(
-                    "DELETE FROM device_events WHERE ts < datetime('now', ?)",
+                    "DELETE FROM device_events WHERE ts < datetime('now','localtime', ?)",
                     ("-%d days" % days,))
                 return cur.rowcount
             except Exception:
@@ -1030,8 +1070,9 @@ def save_config_backup(db_path, switch_id, content):
                 first = row is None
                 if row and row["hash"] == h:
                     return False, False          # 변경 없음 → 저장 생략
-                cur.execute("INSERT INTO config_backups (switch_id, hash, content) "
-                            "VALUES (?, ?, ?)", (switch_id, h, text))
+                cur.execute("INSERT INTO config_backups (switch_id, hash, content, ts) "
+                            "VALUES (?, ?, ?, datetime('now','localtime'))",
+                            (switch_id, h, text))
                 # 스위치당 최근 20개만 보관(무한 증가 방지)
                 cur.execute(
                     "DELETE FROM config_backups WHERE switch_id=? AND id NOT IN "
@@ -1101,8 +1142,8 @@ def save_audit(db_path, client_ip, action, target="", method="", path=""):
         with get_db(db_path) as conn:
             try:
                 conn.execute(
-                    "INSERT INTO audit_log (client_ip, action, target, method, path) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO audit_log (client_ip, action, target, method, path, ts) "
+                    "VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))",
                     (str(client_ip or "")[:64], str(action or "")[:100],
                      str(target or "")[:200], str(method or "")[:10], str(path or "")[:200]))
                 conn.execute(
@@ -1206,7 +1247,7 @@ def save_facility_hosts(db_path, hosts):
                         cur.execute(
                             """INSERT OR REPLACE INTO facility_hosts
                                (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, port_desc, updated)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))""",
                             (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
                              h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
                              1 if h.get("direct", 1) else 0, h.get("via"), h.get("port_desc")))
@@ -1214,7 +1255,7 @@ def save_facility_hosts(db_path, hosts):
                         cur.execute(
                             """INSERT OR REPLACE INTO facility_hosts
                                (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, updated)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))""",
                             (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
                              h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
                              1 if h.get("direct", 1) else 0, h.get("via")))
@@ -1252,7 +1293,7 @@ def save_switch_logs(db_path, switch_id, recent_lines, events_json, log_alert):
                 cur.execute(
                     """INSERT OR REPLACE INTO switch_logs
                        (switch_id, recent_lines, events_json, log_alert, updated)
-                       VALUES (?, ?, ?, ?, datetime('now'))""",
+                       VALUES (?, ?, ?, ?, datetime('now','localtime'))""",
                     (switch_id, recent_lines, events_json, log_alert))
             except Exception as e:
                 log_event("warning", "save_switch_logs_skipped", error=str(e))
@@ -1335,13 +1376,15 @@ def upsert_port_event(db_path, switch_id, port_name, event_type):
             existing = cursor.fetchone()
             if existing:
                 cursor.execute(
-                    "UPDATE port_events SET count=count+1, last_seen=CURRENT_TIMESTAMP WHERE id=?",
+                    "UPDATE port_events SET count=count+1, last_seen=(datetime('now','localtime')) WHERE id=?",
                     (existing[0],),
                 )
             else:
                 cursor.execute(
-                    """INSERT INTO port_events (switch_id, port_name, event_type)
-                       VALUES (?, ?, ?)""",
+                    """INSERT INTO port_events (switch_id, port_name, event_type,
+                                                first_seen, last_seen)
+                       VALUES (?, ?, ?, datetime('now','localtime'),
+                               datetime('now','localtime'))""",
                     (switch_id, port_name, event_type),
                 )
 
@@ -1396,7 +1439,7 @@ def upsert_switch(db_path, row):
             # Use UPDATE + INSERT OR IGNORE to preserve created_at for existing switches, create new created_at for new ones.
             switch_name = row.get("name")
             cursor.execute(
-                """UPDATE switches SET ip = ?, vendor = ?, model = ?, status = ?, last_collected = CURRENT_TIMESTAMP
+                """UPDATE switches SET ip = ?, vendor = ?, model = ?, status = ?, last_collected = (datetime('now','localtime'))
                    WHERE name = ?""",
                 (row.get("ip"), row.get("vendor", ""), row.get("model"), row.get("status", "new"), switch_name)
             )
@@ -1546,7 +1589,7 @@ def set_switch_status(db_path, switch_id, status, error=None):
                     # '마지막 수집' 컬럼이 항상 비어 있었음
                     cursor.execute(
                         "UPDATE switches SET status = ?, last_error = NULL, "
-                        "last_collected = CURRENT_TIMESTAMP WHERE id = ?",
+                        "last_collected = (datetime('now','localtime')) WHERE id = ?",
                         (status, switch_id))
                 else:
                     cursor.execute(
@@ -1565,7 +1608,7 @@ def update_switch_status(db_path, switch_id, status, error=None):
         with get_db(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE switches SET status = ?, last_collected = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE switches SET status = ?, last_collected = (datetime('now','localtime')) WHERE id = ?",
                 (status, switch_id)
             )
 
@@ -1621,7 +1664,7 @@ def _detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs):
                     event_data = json.dumps({"vlan": vlan, "mac": mac, "port": port})
                     cursor.execute(
                         """INSERT INTO events (event_type, event_name, switch_id, data, created_at)
-                           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                           VALUES (?, ?, ?, ?, (datetime('now','localtime')))""",
                         ("disconnected", f"disconnected:{mac}:{port}", switch_id, event_data)
                     )
 
@@ -1659,7 +1702,8 @@ def save_snapshot(db_path, switch_id, parsed_or_duration=_UNSET, duration_second
         with get_db(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO snapshots (switch_id, duration_seconds) VALUES (?, ?)",
+                "INSERT INTO snapshots (switch_id, duration_seconds, collected_at) "
+                "VALUES (?, ?, datetime('now','localtime'))",
                 (switch_id, duration)
             )
             snapshot_id = cursor.lastrowid
@@ -1822,7 +1866,7 @@ def save_hosts(db_path, hosts):
                 if existing:
                     cursor.execute(
                         """UPDATE hosts SET mac=?, switch_id=?, port=?, located=?,
-                               confidence=?, reason=?, updated_at=CURRENT_TIMESTAMP
+                               confidence=?, reason=?, updated_at=(datetime('now','localtime'))
                            WHERE ip=?""",
                         (host_data.get("mac"), host_data.get("switch_id"),
                          host_data.get("port"), host_data.get("located", False),
@@ -1832,8 +1876,9 @@ def save_hosts(db_path, hosts):
                 else:
                     cursor.execute(
                         """INSERT INTO hosts
-                           (ip, mac, switch_id, port, located, confidence, reason)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                           (ip, mac, switch_id, port, located, confidence, reason,
+                            updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))""",
                         (ip, host_data.get("mac"), host_data.get("switch_id"),
                          host_data.get("port"), host_data.get("located", False),
                          host_data.get("confidence", 0.0), host_data.get("reason")),
@@ -1882,15 +1927,16 @@ def save_ledger_hosts(db_path, rows):
                 if ex:
                     cursor.execute(
                         """UPDATE hosts SET mac=?, hostname=?, ledger_switch=?, ledger_port=?,
-                               updated_at=CURRENT_TIMESTAMP WHERE ip=?""",
+                               updated_at=(datetime('now','localtime')) WHERE ip=?""",
                         (new_mac or ex[1], new_hostname or ex[2],
                          new_lsw or ex[3], new_lport or ex[4], ip),
                     )
                     results.append(ex[0])
                 else:
                     cursor.execute(
-                        """INSERT INTO hosts (ip, mac, hostname, ledger_switch, ledger_port)
-                           VALUES (?, ?, ?, ?, ?)""",
+                        """INSERT INTO hosts (ip, mac, hostname, ledger_switch,
+                                              ledger_port, updated_at)
+                           VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))""",
                         (ip, new_mac, new_hostname, new_lsw, new_lport),
                     )
                     results.append(cursor.lastrowid)
@@ -2139,7 +2185,7 @@ def set_firewall_status(db_path, firewall_id, status):
     with _db_lock:
         with get_db(db_path) as conn:
             conn.execute(
-                "UPDATE firewalls SET status=?, last_collected=datetime('now') WHERE id=?",
+                "UPDATE firewalls SET status=?, last_collected=datetime('now','localtime') WHERE id=?",
                 (status, firewall_id),
             )
 
