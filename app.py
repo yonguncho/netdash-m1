@@ -508,6 +508,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return "존 일괄 지정"
             if p == "/api/credentials/delete":
                 return "저장 계정 삭제"
+            if p == "/api/servers":
+                return "서버 등록"
+            if p == "/api/servers/collect-all":
+                return "서버 일괄 수집"
+            if p.startswith("/api/servers/") and p.endswith("/collect"):
+                return "서버 수집 실행"
             if p.startswith("/api/switches/") and p.endswith("/collect"):
                 return "스위치 수집 실행"
             if p.startswith("/api/firewalls/") and p.endswith("/collect"):
@@ -1090,6 +1096,127 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify({"history": db.get_port_history(db_path, switch_id, port=port)})
         except Exception as e:
             log_event("error", "port_history_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    # ── 서버(리눅스/윈도우) 현황 ───────────────────────────────────
+    @app.route("/api/servers", methods=["GET"])
+    def list_servers_endpoint():
+        """서버 목록. 물리 서버 + location이 랙 형식(A09U27)이면 room_* 주입
+        (서버실 현황 탭 포함용 — VM은 물리 위치가 없으므로 제외)."""
+        try:
+            from core import serverroom
+            servers = db.list_servers(db_path)
+            for sv in servers:
+                if not sv.get("is_vm"):
+                    room = serverroom.parse_rack(sv.get("location"))
+                    if room:
+                        sv["room_rack"] = room["rack"]
+                        sv["room_unit"] = room["unit"]
+                        sv["room_label"] = room["label"]
+            return jsonify({"servers": servers})
+        except Exception as e:
+            log_event("error", "list_servers_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/servers", methods=["POST"])
+    @rate_limit("save_server", max_requests=60, window_seconds=60)
+    def save_server_endpoint():
+        """서버 등록. body: {name, ip, os_type(linux|windows), location?, is_vm?}"""
+        try:
+            data = request.get_json(silent=True) or {}
+            name = (data.get("name") or "").strip()[:100]
+            ip = (data.get("ip") or "").strip()
+            if not name or not ip:
+                return jsonify({"error": "name과 ip는 필수입니다"}), 400
+            try:
+                validated_ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                return jsonify({"error": "IP 거부: %s" % e}), 400
+            os_type = data.get("os_type") if data.get("os_type") in ("linux", "windows") else "linux"
+            sid = db.save_server(db_path, name, validated_ip, os_type=os_type,
+                                 location=(data.get("location") or "").strip()[:60] or None,
+                                 is_vm=1 if data.get("is_vm") else 0)
+            log_event("info", "server_saved", server_id=sid, ip=validated_ip)
+            return jsonify({"ok": True, "id": sid}), 201
+        except Exception as e:
+            log_event("error", "save_server_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/servers/<int:server_id>", methods=["PUT"])
+    @rate_limit("update_server", max_requests=60, window_seconds=60)
+    def update_server_endpoint(server_id):
+        try:
+            data = request.get_json(silent=True) or {}
+            fields = {}
+            for k in ("name", "os_type", "location", "hostname"):
+                if k in data:
+                    fields[k] = (str(data[k]) or "").strip()[:100] or None
+            if "is_vm" in data:
+                fields["is_vm"] = 1 if data.get("is_vm") else 0
+            if not db.get_server(db_path, server_id):
+                return jsonify({"error": "not found"}), 404
+            db.update_server(db_path, server_id, **fields)
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "update_server_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/servers/<int:server_id>", methods=["DELETE"])
+    @rate_limit("delete_server", max_requests=30, window_seconds=60)
+    def delete_server_endpoint(server_id):
+        try:
+            n = db.delete_server(db_path, server_id)
+            return (jsonify({"ok": True}) if n else (jsonify({"error": "not found"}), 404))
+        except Exception as e:
+            log_event("error", "delete_server_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/servers/<int:server_id>/collect", methods=["POST"])
+    @rate_limit("collect_server_host", max_requests=30, window_seconds=60)
+    def collect_server_endpoint(server_id):
+        """서버 수집(백그라운드). 계정 없이도 무자격 수집(스캔·역DNS·ARP 대조) 수행.
+        body: {username?, password?, persist?}"""
+        try:
+            from core import server_collector
+            sv = db.get_server(db_path, server_id)
+            if not sv:
+                return jsonify({"error": "not found"}), 404
+            data = request.get_json(silent=True) or {}
+            username = (data.get("username") or "").strip() or None
+            password = data.get("password") or None
+            # 계정 미입력 시 저장 계정 사용(SSH 상세) — 없으면 무자격 수집만
+            if not (username and password):
+                blob = db.get_server_credential(db_path, server_id)
+                if blob:
+                    dec = credentials.decrypt_credential(blob)
+                    if dec and "|" in dec:
+                        username, password = dec.split("|", 1)
+            elif data.get("persist"):
+                cred_blob = credentials.encrypt_credential(username, password)
+                if cred_blob:
+                    db.update_server_cred(db_path, server_id, cred_blob)
+                    log_event("info", "server_credential_persisted", server_id=server_id)
+            threading.Thread(
+                target=server_collector.collect_server,
+                args=(db_path, server_id, username, password), daemon=True).start()
+            return jsonify({"ok": True, "status": "collecting"}), 202
+        except Exception as e:
+            log_event("error", "collect_server_host_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/servers/collect-all", methods=["POST"])
+    @rate_limit("collect_all_servers", max_requests=6, window_seconds=60)
+    def collect_all_servers_endpoint():
+        """등록된 전 서버 일괄 수집(백그라운드, 저장 계정 있으면 SSH 상세 포함)."""
+        try:
+            from core import server_collector
+            threading.Thread(target=server_collector.collect_all_servers,
+                             args=(db_path,), daemon=True).start()
+            return jsonify({"ok": True, "status": "collecting"}), 202
+        except Exception as e:
+            log_event("error", "collect_all_servers_error",
+                      error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/wall", methods=["GET"])

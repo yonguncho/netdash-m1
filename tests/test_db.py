@@ -36,6 +36,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "facility_hosts",
         # PC 프로필(수집 PC별 출발지 IP·계정 — 다중 PC 운영)
         "pc_profiles",
+        # 서버(리눅스/윈도우) 현황
+        "servers",
         # NX-OS 포트채널 멤버
         "port_channels",
         # CDP/LLDP 이웃(물리 연결)

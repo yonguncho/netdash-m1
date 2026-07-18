@@ -296,6 +296,31 @@ CREATE TABLE IF NOT EXISTS facility_hosts (
 )
 """
 
+# 서버(리눅스/윈도우) 현황 — 스위치와 별도 수명주기.
+# 수집: 무자격(포트스캔+역DNS+스위치 ARP/MAC 대조) + SSH 상세(자격증명 시).
+# is_vm=0(물리) + location이 랙 형식(A09U27)이면 서버실 현황에 포함.
+CREATE_SERVERS_TABLE = """
+CREATE TABLE IF NOT EXISTS servers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    ip TEXT NOT NULL UNIQUE,
+    os_type TEXT DEFAULT 'linux',
+    hostname TEXT,
+    mac TEXT,
+    is_vm INTEGER DEFAULT 0,
+    location TEXT,
+    open_ports TEXT,
+    os_info TEXT,
+    switch_name TEXT,
+    switch_port TEXT,
+    status TEXT DEFAULT 'new',
+    last_error TEXT,
+    last_collected TIMESTAMP,
+    cred_blob TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+)
+"""
+
 # PC 프로필: 수집 PC(MAC) 단위 출발지 IP·계정 — 다중 PC 운영 시 각 PC가
 # 자기 IP/계정으로 수집하도록 함(core/pcprofile.py 참조)
 CREATE_PC_PROFILES_TABLE = """
@@ -453,6 +478,7 @@ def init_schema(db_path):
                 CREATE_VLAN_NAMES_TABLE,
                 CREATE_SWITCH_LOGS_TABLE,
                 CREATE_FACILITY_HOSTS_TABLE,
+                CREATE_SERVERS_TABLE,
                 CREATE_PC_PROFILES_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
                 CREATE_NEIGHBORS_TABLE,
@@ -2348,6 +2374,131 @@ def delete_pc_profile(db_path, mac):
             cur = conn.cursor()
             cur.execute("DELETE FROM pc_profiles WHERE mac=?", (mac,))
             return cur.rowcount
+
+
+# ── 서버(리눅스/윈도우) 현황 CRUD ───────────────────────────────────
+_SERVER_FIELDS = ("name", "ip", "os_type", "hostname", "mac", "is_vm",
+                  "location", "open_ports", "os_info", "switch_name",
+                  "switch_port", "status", "last_error")
+
+
+def list_servers(db_path):
+    """서버 목록(계정 blob 제외, has_cred만 노출)."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM servers ORDER BY name LIMIT 10000")
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            d["has_cred"] = bool(d.pop("cred_blob", None))
+            rows.append(d)
+        return rows
+
+
+def get_server(db_path, server_id):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM servers WHERE id=?", (server_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def save_server(db_path, name, ip, os_type="linux", location=None, is_vm=0):
+    """서버 등록(IP 기준 upsert). 반환: server id."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM servers WHERE ip=?", (ip,))
+            row = cur.fetchone()
+            if row:
+                cur.execute(
+                    "UPDATE servers SET name=?, os_type=?, location=?, is_vm=? "
+                    "WHERE id=?", (name, os_type, location, int(bool(is_vm)), row["id"]))
+                return row["id"]
+            cur.execute(
+                "INSERT INTO servers (name, ip, os_type, location, is_vm) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (name, ip, os_type, location, int(bool(is_vm))))
+            return cur.lastrowid
+
+
+def update_server(db_path, server_id, **fields):
+    """서버 필드 갱신(None 값은 건너뜀 — 기존값 보존). collected=True면 수집시각 갱신."""
+    collected = fields.pop("collected", False)
+    sets, params = [], []
+    for k, v in fields.items():
+        if k in _SERVER_FIELDS and v is not None:
+            sets.append("%s=?" % k)
+            params.append(v)
+    if collected:
+        sets.append("last_collected=datetime('now','localtime')")
+    if not sets:
+        return False
+    params.append(server_id)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("UPDATE servers SET %s WHERE id=?" % ", ".join(sets), params)
+    return True
+
+
+def delete_server(db_path, server_id):
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM servers WHERE id=?", (server_id,))
+            return cur.rowcount
+
+
+def update_server_cred(db_path, server_id, cred_blob):
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("UPDATE servers SET cred_blob=? WHERE id=?",
+                         (cred_blob, server_id))
+
+
+def get_server_credential(db_path, server_id):
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT cred_blob FROM servers WHERE id=?", (server_id,))
+        row = cur.fetchone()
+        return row["cred_blob"] if row and row["cred_blob"] else None
+
+
+def find_mac_location(db_path, ip):
+    """이미 수집된 스위치 데이터에서 IP의 MAC과 연결 위치(스위치/포트)를 대조.
+
+    ① 최신 스냅샷 arp_entries에서 IP→MAC ② mac_entries에서 MAC→스위치/포트.
+    ③ 폴백: facility_hosts(설비 스캔 결과). 반환: {mac, switch_name, port} (없으면 빈 dict).
+    """
+    out = {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT a.mac FROM arp_entries a WHERE a.ip=? ORDER BY a.id DESC LIMIT 1",
+                (ip,))
+            row = cur.fetchone()
+            if row and row["mac"]:
+                out["mac"] = row["mac"]
+                cur.execute(
+                    "SELECT m.port, s.name AS switch_name FROM mac_entries m "
+                    "JOIN switches s ON s.id = m.switch_id "
+                    "WHERE m.mac=? ORDER BY m.id DESC LIMIT 1", (row["mac"],))
+                loc = cur.fetchone()
+                if loc:
+                    out["switch_name"] = loc["switch_name"]
+                    out["port"] = loc["port"]
+            if not out:
+                cur.execute(
+                    "SELECT mac, switch_name, port FROM facility_hosts "
+                    "WHERE ip=? ORDER BY id DESC LIMIT 1", (ip,))
+                fh = cur.fetchone()
+                if fh:
+                    out = {"mac": fh["mac"], "switch_name": fh["switch_name"],
+                           "port": fh["port"]}
+        except Exception:
+            pass
+    return {k: v for k, v in out.items() if v}
 
 
 # ── 저장 계정 관리(관리자 화면 — 목록/삭제) ─────────────────────────

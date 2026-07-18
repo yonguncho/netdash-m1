@@ -5,6 +5,7 @@
 // ─── 전역 상태 ────────────────────────────────────────────────────
 let _switches = [];
 let _firewalls = [];
+let _servers = [];
 let _currentSwitchId = null;
 let _pollTimer = null;
 
@@ -241,7 +242,8 @@ document.querySelectorAll(".tab-nav__btn").forEach(btn => {
     if (btn.dataset.tab === "switch") renderSwitchTable(_switches);
     if (btn.dataset.tab === "firewall") loadFirewalls();
     if (btn.dataset.tab === "facility") loadFacility();
-    if (btn.dataset.tab === "room") { loadFirewalls(); renderRoom(_switches); }
+    if (btn.dataset.tab === "server") loadServers();
+    if (btn.dataset.tab === "room") { loadFirewalls(); loadServers(); renderRoom(_switches); }
     if (btn.dataset.tab === "topology") loadTopology();
   });
 });
@@ -652,11 +654,13 @@ var _roomViewMode = "card";  // card | rack
 })();
 
 function renderRoom(switches) {
-  // 서버실 소속 = location이 "A09U27" 형식(room_rack 주입됨). 스위치 + 방화벽 모두.
+  // 서버실 소속 = location이 "A09U27" 형식(room_rack 주입됨).
+  // 스위치 + 방화벽 + 물리 서버(VM 제외 — API에서 물리만 room_* 주입).
   var roomSw = (switches || _switches || []).filter(function (sw) { return sw.room_rack; });
   var roomFw = (_firewalls || []).filter(function (f) { return f.room_rack; });
-  if (_roomViewMode === "rack") renderRoomRackView(roomSw, roomFw);
-  else renderRoomGrid(roomSw, roomFw);
+  var roomSrv = (_servers || []).filter(function (s) { return s.room_rack; });
+  if (_roomViewMode === "rack") renderRoomRackView(roomSw, roomFw, roomSrv);
+  else renderRoomGrid(roomSw, roomFw, roomSrv);
 }
 
 var _ROOM_EMPTY = "서버실 위치(A09U27 형식)가 지정된 장비가 없습니다. 스위치/방화벽 수정 → 위치에 A09U27처럼 입력하세요.";
@@ -688,20 +692,37 @@ function _fwCardHTML(f) {
     "</div></div>";
 }
 
-function renderRoomGrid(switches, firewalls) {
+// 서버 카드(서버실 그리드용) — 스위치/방화벽 카드와 동일 골격.
+function _srvCardHTML(s) {
+  var sc = s.reachable === false ? "critical" : (s.status === "failed" ? "critical" : "done");
+  var loc = s.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(s.room_label) + "</span>" : "";
+  return "<div class='sw-card sw-card--" + sc + "'>" +
+    "<div class='sw-card__icon'><div class='sw-icon'>🖥</div></div>" +
+    "<div class='sw-card__name'>🖥 " + escHtml(s.name) + "</div>" +
+    "<div class='sw-card__meta'><span>" + escHtml(s.ip) + "</span>" + loc +
+      "<span style='font-size:10px'>" + escHtml((s.os_type || "linux")) + " · 서버</span></div>" +
+    "<div class='sw-card__status'><span class='dot dot--" + sc + "'></span>" +
+      "<span>서버 · " + escHtml(s.status || "new") + "</span></div>" +
+    "</div>";
+}
+
+function renderRoomGrid(switches, firewalls, servers) {
   switches = _applyLocFilter(switches, "loc-filter-room");
   firewalls = _applyLocFilter(firewalls || [], "loc-filter-room");
+  servers = _applyLocFilter(servers || [], "loc-filter-room");
   var grid = document.getElementById("room-grid");
   if (!grid) return;
-  if (!switches.length && !firewalls.length) {
+  if (!switches.length && !firewalls.length && !servers.length) {
     grid.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
   // 현황판 카드뷰와 동일한 평면 그리드(랙 오름차순 → U 내림차순 정렬만 적용)
   switches = switches.slice().sort(_roomSort);
   firewalls = firewalls.slice().sort(_roomSort);
+  servers = servers.slice().sort(_roomSort);
   grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, false); }).join("") +
-                   firewalls.map(_fwCardHTML).join("");
+                   firewalls.map(_fwCardHTML).join("") +
+                   servers.map(_srvCardHTML).join("");
   switches.forEach(function (sw) {
     // 그리드 스코프 조회: swcard-<id>가 현황판/서버실 두 그리드에 중복 생성되어
     // document.getElementById는 항상 앞선 현황판 카드를 반환했다(서버실 카드 클릭
@@ -738,17 +759,19 @@ function _roomInferDT(name) {
 }
 function _roomKind(d) {
   if (d.k === "fw") return _RACK_KIND["Firewall"];
+  if (d.k === "srv") return _RACK_KIND["Server"];
   var dt = d.o.device_type || _roomInferDT(d.o.name);
   return _RACK_KIND[dt] || _RACK_KIND["_"];
 }
 
 // 실제 42U 랙 배치도 — U42(상단)→U1(하단), 장비를 해당 U에 종류색으로 배치
-function renderRoomRackView(switches, firewalls) {
+function renderRoomRackView(switches, firewalls, servers) {
   var host = document.getElementById("room-rack-view");
   if (!host) return;
   switches = _applyLocFilter(switches, "loc-filter-room");
   firewalls = _applyLocFilter(firewalls || [], "loc-filter-room");
-  if (!switches.length && !firewalls.length) {
+  servers = _applyLocFilter(servers || [], "loc-filter-room");
+  if (!switches.length && !firewalls.length && !servers.length) {
     host.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
@@ -760,6 +783,7 @@ function renderRoomRackView(switches, firewalls) {
   }
   switches.forEach(function (sw) { _put({ k: "sw", o: sw }); });
   firewalls.forEach(function (f) { _put({ k: "fw", o: f }); });
+  servers.forEach(function (s) { _put({ k: "srv", o: s }); });
 
   // 열(A/B) 단위로 줄 분리, 각 줄에 랙 나란히
   var rows = {};
@@ -778,9 +802,10 @@ function renderRoomRackView(switches, firewalls) {
       var d = map[u];
       if (d) {
         var k = _roomKind(d);
-        var obj = d.o, isFw = d.k === "fw";
-        var down = isFw ? (obj.reachable === false) : (obj.status === "failed" || obj.reachable === false);
+        var obj = d.o, isFw = d.k === "fw", isSrv = d.k === "srv";
+        var down = obj.status === "failed" || obj.reachable === false;
         var act = isFw ? ("data-action='detail-fw' data-id='" + obj.id + "'")
+                       : isSrv ? ""   // 서버는 랙뷰에서 클릭 상세 없음(서버 현황 탭에서 관리)
                        : ("data-action='detail-switch' data-payload='" + payloadAttr((obj)) + "'");
         slots += "<div class='ru ru--dev' " + act +
           " style='background:" + k.c + "22;border-left:4px solid " + k.c + "'" +
@@ -3709,6 +3734,139 @@ function loadCreds() {
         loadCreds();
       } else alert(res.error || "삭제 실패");
     }).catch(function (e2) { console.error(e2); alert("삭제 오류"); });
+  });
+})();
+
+// ─── 서버 현황 (리눅스/윈도우) ───────────────────────────────────
+var _srvCollectId = null;
+
+function loadServers() {
+  return fetch("/api/servers").then(function (r) { return r.json(); }).then(function (d) {
+    _servers = d.servers || [];
+    renderServers();
+    // 서버실 현황이 열려 있으면 물리 서버 반영
+    if (document.getElementById("tab-room").classList.contains("active")) renderRoom(_switches);
+  }).catch(function (e) { console.error("servers:", e); });
+}
+
+function renderServers() {
+  var body = document.getElementById("server-table-body");
+  if (!body) return;
+  var q = (document.getElementById("server-search") || {}).value;
+  q = (q || "").trim().toLowerCase();
+  var rows = _servers.filter(function (s) {
+    if (!q) return true;
+    return [s.name, s.ip, s.hostname, s.mac].some(function (v) {
+      return (v || "").toLowerCase().indexOf(q) >= 0;
+    });
+  });
+  if (!rows.length) {
+    body.innerHTML = "<tr><td colspan='13' style='color:#64748b'>" +
+      (_servers.length ? "검색 결과가 없습니다." : "등록된 서버가 없습니다. [+ 서버 등록]으로 추가하세요.") + "</td></tr>";
+    return;
+  }
+  body.innerHTML = rows.map(function (s) {
+    var kind = s.is_vm ? "<span style='color:#8b5cf6'>VM</span>"
+                       : "<span style='color:#2563eb'>물리</span>";
+    var sc = s.status === "failed" ? "critical" : (s.status === "done" ? "done" : "new");
+    var swp = [s.switch_name, s.switch_port].filter(Boolean).join(" ");
+    return "<tr>" +
+      "<td>" + escHtml(s.name) + "</td>" +
+      "<td><code>" + escHtml(s.ip) + "</code></td>" +
+      "<td>" + escHtml(s.hostname || "-") + "</td>" +
+      "<td><code style='font-size:11px'>" + escHtml(s.mac || "-") + "</code></td>" +
+      "<td>" + escHtml(s.os_info || s.os_type || "-") + "</td>" +
+      "<td>" + kind + "</td>" +
+      "<td style='font-size:11px;max-width:180px'>" + escHtml(s.open_ports || "-") + "</td>" +
+      "<td>" + escHtml(s.switch_name || "-") + "</td>" +
+      "<td>" + escHtml(s.switch_port || "-") + "</td>" +
+      "<td>" + escHtml(s.location || "-") + "</td>" +
+      "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(s.status || "new") + "</span>" +
+        (s.status === "failed" && s.last_error ? "<div style='font-size:11px;color:#991b1b'>" + escHtml(s.last_error) + "</div>" : "") + "</td>" +
+      "<td><button class='btn btn--primary' style='font-size:11px;padding:2px 8px' data-action='collect-server' data-id='" + s.id + "'>수집</button></td>" +
+      "<td><button class='btn btn--ghost' style='font-size:11px;padding:2px 8px' data-action='delete-server' data-id='" + s.id + "'>삭제</button></td>" +
+      "</tr>";
+  }).join("");
+}
+
+(function () {
+  var addBtn = document.getElementById("btn-server-add");
+  if (addBtn) addBtn.addEventListener("click", function () {
+    ["srv-name", "srv-ip", "srv-location"].forEach(function (id) { document.getElementById(id).value = ""; });
+    document.getElementById("srv-os").value = "linux";
+    document.getElementById("srv-isvm").checked = false;
+    openModal("modal-add-server");
+  });
+  var saveBtn = document.getElementById("btn-srv-save");
+  if (saveBtn) saveBtn.addEventListener("click", function () {
+    var body = {
+      name: document.getElementById("srv-name").value.trim(),
+      ip: document.getElementById("srv-ip").value.trim(),
+      os_type: document.getElementById("srv-os").value,
+      location: document.getElementById("srv-location").value.trim(),
+      is_vm: document.getElementById("srv-isvm").checked,
+    };
+    if (!body.name || !body.ip) { alert("이름과 IP는 필수입니다."); return; }
+    fetch("/api/servers", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    }).then(function (r) { return r.json().then(function (j) { return {s: r.status, j: j}; }); })
+      .then(function (res) {
+        if (res.s === 201) { closeModal("modal-add-server"); loadServers(); }
+        else alert(res.j.error || "등록 실패");
+      }).catch(function (e) { console.error(e); alert("등록 오류"); });
+  });
+
+  var searchEl = document.getElementById("server-search");
+  if (searchEl) searchEl.addEventListener("input", renderServers);
+
+  var allBtn = document.getElementById("btn-server-collect-all");
+  if (allBtn) allBtn.addEventListener("click", function () {
+    if (!_servers.length) { alert("등록된 서버가 없습니다."); return; }
+    fetch("/api/servers/collect-all", {method: "POST"}).then(function (r) { return r.json(); })
+      .then(function () {
+        alert("전체 수집을 시작했습니다. 잠시 후 새로고침하면 결과가 반영됩니다.");
+        setTimeout(loadServers, 8000);
+      }).catch(function (e) { console.error(e); alert("수집 오류"); });
+  });
+
+  // 수집(계정 입력) / 삭제 위임
+  document.getElementById("tab-server").addEventListener("click", function (e) {
+    var t = e.target.closest("[data-action]");
+    if (!t) return;
+    var id = parseInt(t.getAttribute("data-id"), 10);
+    var action = t.getAttribute("data-action");
+    if (action === "collect-server") {
+      _srvCollectId = id;
+      var s = _servers.find(function (x) { return x.id === id; });
+      document.getElementById("srv-collect-title").textContent = "서버 수집 — " + (s ? s.name : id);
+      document.getElementById("srv-username").value = "";
+      document.getElementById("srv-password").value = "";
+      document.getElementById("srv-persist").checked = false;
+      openModal("modal-server-collect");
+    } else if (action === "delete-server") {
+      if (!confirm("이 서버를 삭제할까요?")) return;
+      fetch("/api/servers/" + id, {method: "DELETE"}).then(function (r) { return r.json(); })
+        .then(function (res) { if (res.ok) loadServers(); else alert(res.error || "삭제 실패"); });
+    }
+  });
+
+  var collectBtn = document.getElementById("btn-srv-collect");
+  if (collectBtn) collectBtn.addEventListener("click", function () {
+    if (_srvCollectId == null) return;
+    var body = {
+      username: document.getElementById("srv-username").value.trim(),
+      password: document.getElementById("srv-password").value,
+      persist: document.getElementById("srv-persist").checked,
+    };
+    fetch("/api/servers/" + _srvCollectId + "/collect", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) {
+        closeModal("modal-server-collect");
+        alert("수집을 시작했습니다. 잠시 후 결과가 반영됩니다.");
+        setTimeout(loadServers, 6000);
+      } else alert(res.error || "수집 실패");
+    }).catch(function (e) { console.error(e); alert("수집 오류"); });
   });
 })();
 

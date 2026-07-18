@@ -54,6 +54,63 @@
     </div>
   </div>
 
+  <!-- 서버 등록 모달 -->
+  <div id="modal-add-server" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box" style="width:420px">
+      <div class="modal__header">
+        <span>서버 등록</span>
+        <button class="modal__close" data-close="modal-add-server">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label>이름 <span class="required">*</span></label>
+        <input id="srv-name" type="text" placeholder="WEB-01">
+        <label>IP <span class="required">*</span></label>
+        <input id="srv-ip" type="text" placeholder="10.92.10.5">
+        <label>OS</label>
+        <select id="srv-os">
+          <option value="linux">Linux</option>
+          <option value="windows">Windows</option>
+        </select>
+        <label>위치 (물리 서버 — A09U27 형식이면 서버실 현황에 표시)</label>
+        <input id="srv-location" type="text" placeholder="A09U27">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:8px;cursor:pointer">
+          <input id="srv-isvm" type="checkbox"> VM (가상 서버 — 서버실 현황 제외, MAC으로 자동 판정도 됨)</label>
+      </div>
+      <div class="modal__footer">
+        <button id="btn-srv-save" class="btn btn--primary">등록</button>
+        <button class="btn btn--ghost" data-close="modal-add-server">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 서버 수집(SSH 계정) 모달 -->
+  <div id="modal-server-collect" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box" style="width:420px">
+      <div class="modal__header">
+        <span id="srv-collect-title">서버 수집</span>
+        <button class="modal__close" data-close="modal-server-collect">&times;</button>
+      </div>
+      <div class="modal__body">
+        <p style="font-size:12px;color:#64748b;margin-bottom:8px">
+          계정 없이 [수집]하면 열린 포트·hostname·연결 스위치만 수집합니다.
+          SSH 계정을 입력하면 OS·인터페이스 MAC·리스닝 포트까지 수집합니다.
+          (Windows는 OpenSSH 서버가 설치된 경우)</p>
+        <label>SSH 계정 (선택)</label>
+        <input id="srv-username" type="text" autocomplete="off">
+        <label>비밀번호</label>
+        <input id="srv-password" type="password" autocomplete="new-password">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:8px;cursor:pointer">
+          <input id="srv-persist" type="checkbox"> 계정 저장 (다음 수집·전체 수집에 자동 사용)</label>
+      </div>
+      <div class="modal__footer">
+        <button id="btn-srv-collect" class="btn btn--primary">수집</button>
+        <button class="btn btn--ghost" data-close="modal-server-collect">취소</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 저장 계정 관리 모달 -->
   <div id="modal-creds" class="modal hidden">
     <div class="modal__backdrop"></div>
@@ -136,6 +193,7 @@
   <nav class="tab-nav">
     <button class="tab-nav__btn active" data-tab="dashboard">현황판</button>
     <button class="tab-nav__btn" data-tab="room">서버실 현황</button>
+    <button class="tab-nav__btn" data-tab="server">서버 현황</button>
     <button class="tab-nav__btn" data-tab="facility">설비 현황</button>
     <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
     <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
@@ -201,6 +259,33 @@
         <p class="placeholder">서버실 위치(A09U27 형식)가 지정된 장비가 없습니다.</p>
       </div>
       <div id="room-rack-view" class="rack-view" style="display:none"></div>
+    </div>
+
+    <!-- 서버 현황 탭 (리눅스/윈도우 서버 — 포트스캔+역DNS+ARP대조, SSH 상세) -->
+    <div id="tab-server" class="tab-pane">
+      <div class="pane-toolbar">
+        <span class="pane-toolbar__title">서버 현황</span>
+        <div class="pane-toolbar__actions">
+          <input id="server-search" placeholder="이름·IP·hostname·MAC 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:210px">
+          <button id="btn-server-add" class="btn btn--primary" style="font-size:12px">+ 서버 등록</button>
+          <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="전 서버 일괄 수집 — 계정 없이도 포트/hostname/연결 스위치를 수집하고, 저장 계정이 있으면 SSH 상세까지">전체 수집</button>
+        </div>
+      </div>
+      <p style="margin:4px 0 10px;font-size:12px;color:#64748b">
+        계정 없이도 <b>열린 포트·hostname·MAC·연결 스위치/포트</b>(기존 스위치 수집 데이터 대조)를 수집합니다.
+        SSH 계정을 입력하면 OS·리스닝 포트까지 수집. <b>물리 서버</b>는 위치를 <code>A09U27</code> 형식으로 넣으면 서버실 현황에 표시됩니다.
+      </p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>이름</th><th>IP</th><th>hostname</th><th>MAC</th><th>OS</th><th>구분</th>
+                <th>열린 포트</th><th>연결 스위치</th><th>포트</th><th>위치</th><th>상태</th><th>수집</th><th></th></tr>
+          </thead>
+          <tbody id="server-table-body">
+            <tr><td colspan="13" style="color:#64748b">등록된 서버가 없습니다. [+ 서버 등록]으로 추가하세요.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- 설비 현황 탭 (대역 ping sweep + ARP + MAC 대조) -->
