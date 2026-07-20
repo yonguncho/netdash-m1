@@ -40,6 +40,38 @@ def test_wall_facility_detail_variants(tmp_path, monkeypatch):
     assert fac[-1]["name"] == "10.0.0.4"
 
 
+def test_mac_alive_keeps_online_when_arp_missing(temp_db, monkeypatch):
+    """ICMP 차단 장비: ARP엔 없어도 MAC 테이블에 살아있으면 online 유지."""
+    from core import facility
+    # 이전 스캔에서 online이던 설비(MAC BB:AA...)
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.5.0.0/24", "ip": "10.5.0.7", "mac": "BB:AA:CC:DD:EE:01",
+         "switch_name": "SW-L2", "port": "Gi1/0/7", "direct": 1, "online": 1}])
+    # MAC 테이블엔 그 MAC이 여전히 존재(포트 UP)
+    monkeypatch.setattr(db, "get_mac_to_switchport",
+                        lambda dbp: {"bb:aa:cc:dd:ee:01": [(1, "SW-L2", "Gi1/0/7")]})
+    # 이번 스캔은 ping 무응답 → ARP 비어(by_ip 빈 dict)
+    facility._apply_scan(temp_db, "10.5.0.0/24", {})
+    hosts = {h["ip"]: h for h in db.get_facility_hosts(temp_db)}
+    assert hosts["10.5.0.7"]["online"] == 1        # MAC 생존 → online 유지
+    # 오프라인 이벤트도 안 생겨야 함
+    offs = [e for e in db.list_device_events(temp_db, limit=20)
+            if e["kind"] == "device_offline" and e["ip"] == "10.5.0.7"]
+    assert not offs
+
+
+def test_mac_gone_marks_offline(temp_db, monkeypatch):
+    """MAC 테이블에도 없고 ARP에도 없으면 오프라인(정상 감지 유지)."""
+    from core import facility
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.5.0.0/24", "ip": "10.5.0.8", "mac": "BB:AA:CC:DD:EE:02",
+         "switch_name": "SW-L2", "port": "Gi1/0/8", "direct": 1, "online": 1}])
+    monkeypatch.setattr(db, "get_mac_to_switchport", lambda dbp: {})
+    facility._apply_scan(temp_db, "10.5.0.0/24", {})
+    hosts = {h["ip"]: h for h in db.get_facility_hosts(temp_db)}
+    assert hosts["10.5.0.8"]["online"] == 0
+
+
 def test_offline_event_includes_last_location(tmp_path, monkeypatch):
     """연결 끊김 알람 메시지에 마지막 확인 스위치/포트가 병기된다."""
     monkeypatch.chdir(tmp_path)

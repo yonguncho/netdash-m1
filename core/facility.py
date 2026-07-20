@@ -651,6 +651,14 @@ def _apply_scan(db_path, subnet, by_ip):
     existing = {h["ip"]: h for h in db.get_facility_hosts(db_path) if h.get("subnet") == subnet}
     merged = list(by_ip.values())   # 이번에 응답한 설비(online=1)
     new_cnt = off_cnt = 0
+    # MAC 생존 신호: ping(ICMP)에 응답 안 해 ARP에 없더라도, 그 MAC이 아직
+    # 스위치 MAC 테이블(최신 스냅샷)에 살아 있으면 '연결됨'으로 본다. ICMP 차단
+    # 장비(윈도우 서버·보안장비 등)가 포트 UP·MAC 학습 상태인데 오프라인으로
+    # 오탐되던 문제 해결. MAC 테이블은 L2 프레임 기준이라 ARP보다 생존을 잘 반영.
+    try:
+        mac_alive = set(db.get_mac_to_switchport(db_path).keys())
+    except Exception:
+        mac_alive = set()
     for ip, host in by_ip.items():
         ex = existing.get(ip)
         if ex is None:
@@ -677,6 +685,13 @@ def _apply_scan(db_path, subnet, by_ip):
                         host.get("switch_name"), host.get("port")))
     for ip, ex in existing.items():
         if ip in by_ip:
+            continue
+        # ARP엔 없지만 MAC 테이블에 살아있으면 online 유지(ICMP 차단 장비 오탐 방지)
+        ex_mac = (ex.get("mac") or "").lower()
+        if ex_mac and ex_mac in mac_alive:
+            keep = {k: ex.get(k) for k in _KEEP_COLS}
+            keep["online"] = 1
+            merged.append(keep)
             continue
         off = {k: ex.get(k) for k in _KEEP_COLS}
         off["online"] = 0
