@@ -9,6 +9,7 @@
 """
 import logging
 import ipaddress
+import re
 
 from . import db
 
@@ -414,3 +415,138 @@ def build_topology(db_path):
             pass
 
     return {"nodes": nodes, "links": link_list}
+
+
+# ─── 서버실 트리 구성도 (v4.2) ──────────────────────────────────────
+def _latest_configs(db_path, sids):
+    """{switch_id: running-config 텍스트} — 최신 백업."""
+    out = {}
+    with db.get_db(db_path) as conn:
+        cur = conn.cursor()
+        for sid in sids:
+            try:
+                cur.execute("SELECT content FROM config_backups WHERE switch_id=? "
+                            "ORDER BY id DESC LIMIT 1", (sid,))
+                row = cur.fetchone()
+                if row and row["content"]:
+                    out[sid] = row["content"]
+            except Exception:
+                continue
+    return out
+
+
+def parse_svi_subnets(cfg):
+    """running-config에서 L3 인터페이스의 (VLAN, 대역) 추출.
+
+    interface Vlan10 / ip address 10.0.10.1 255.255.255.0 → {vlan:10, cidr:10.0.10.0/24}.
+    라우티드 물리 인터페이스(Vlan 아님)는 vlan=None. 중복 대역 제거.
+    """
+    import ipaddress as _ip
+    out, seen = [], set()
+    cur_vlan = "__none__"
+    in_iface = False
+    for line in (cfg or "").splitlines():
+        m = re.match(r"^\s*interface\s+(\S+)", line, re.I)
+        if m:
+            in_iface = True
+            name = m.group(1)
+            vm = re.match(r"Vl(?:an)?0*(\d+)", name, re.I)
+            cur_vlan = int(vm.group(1)) if vm else None
+            continue
+        if in_iface:
+            m2 = re.search(r"^\s*ip address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)",
+                           line, re.I)
+            if m2:
+                try:
+                    net = str(_ip.IPv4Network("%s/%s" % (m2.group(1), m2.group(2)),
+                                              strict=False))
+                except (ValueError, _ip.AddressValueError):
+                    continue
+                if net.startswith(("127.", "169.254.")) or net in seen:
+                    continue
+                seen.add(net)
+                out.append({"vlan": cur_vlan, "cidr": net})
+    return out
+
+
+def classify_l3(cfg):
+    """running-config로 L3/L2 판정. 없으면 None(미수집).
+
+    L3: 'ip routing' 있음 / SVI(대역) 2개 이상 / 기본경로 외 정적 라우트 존재.
+    L2: 관리 SVI 1개 이하 + default gateway/route만.
+    """
+    if not cfg:
+        return None
+    if re.search(r"^\s*ip routing\b", cfg, re.M):
+        return "L3"
+    if len(parse_svi_subnets(cfg)) >= 2:
+        return "L3"
+    routes = re.findall(r"^\s*ip route\s+(\S+)\s+\S+", cfg, re.M)
+    if any(r != "0.0.0.0" for r in routes):
+        return "L3"
+    return "L2"
+
+
+_INTERNET_FW_RE = _re_zone.compile(
+    r"internet|외부|ext|perimeter|edge|외부망|인터넷", _re_zone.I)
+
+
+def _fw_tree_role(fw):
+    """방화벽 역할: internet_fw(외부/인터넷 경계) or firewall(구간)."""
+    blob = " ".join(str(fw.get(k) or "") for k in ("name", "zone", "location"))
+    return "internet_fw" if _INTERNET_FW_RE.search(blob) else "firewall"
+
+
+def build_serverroom_tree(db_path):
+    """서버실(랙 위치 지정) 방화벽·L3/백본 스위치 트리 구성도.
+
+    - 포함: location이 랙형식(A09U27)인 방화벽 + config상 L3/백본 스위치. L2 숨김.
+    - 링크: build_topology의 직결(CDP/LLDP/ARP-MAC/L3인접) 중 포함 노드 간만.
+    - L3/백본 노드에 SVI 대역(VLAN 병기) 부착 → 프론트에서 세로 박스로 표시.
+    - 역할 tier: internet(가상)→internet_fw→backbone→(l3/l4/firewall).
+    Returns: {nodes, links, roots} — roots=최상위(백본/인터넷FW) id 목록.
+    """
+    from . import serverroom
+    base = build_topology(db_path)
+    switches = {s["id"]: s for s in db.get_switches(db_path)}
+    try:
+        fws = {"f%d" % f["id"]: f for f in db.list_firewalls(db_path)}
+    except Exception:
+        fws = {}
+    cfgs = _latest_configs(db_path, list(switches.keys()))
+
+    keep = {}
+    for n in base["nodes"]:
+        nid = n["id"]
+        if n["kind"] == "sw":
+            sw = switches.get(nid)
+            if not sw or not serverroom.parse_rack(sw.get("location")):
+                continue                       # 서버실 아님
+            cfg = cfgs.get(nid, "")
+            cls = classify_l3(cfg)
+            dt = (n.get("device_type") or "").lower()
+            is_backbone = "backbone" in dt or "core" in dt
+            is_l4 = "l4" in dt
+            if not is_backbone and not is_l4 and cls == "L2":
+                continue                       # L2 노드 숨김(대역은 상위 L3가 대표)
+            n["role"] = ("backbone" if is_backbone else "l4" if is_l4 else "l3")
+            n["subnets_vlan"] = parse_svi_subnets(cfg)
+            n["l3_class"] = cls
+            keep[nid] = n
+        else:
+            fw = fws.get(nid)
+            if not fw or not serverroom.parse_rack(fw.get("location")):
+                continue
+            n["role"] = _fw_tree_role(fw)
+            keep[nid] = n
+
+    links = [l for l in base["links"] if l["a"] in keep and l["b"] in keep]
+
+    # tier 계층(위→아래): internet_fw=1, backbone=2, l3/l4/firewall=3
+    tier = {"internet_fw": 1, "backbone": 2, "l3": 3, "l4": 3, "firewall": 3}
+    for nid, n in keep.items():
+        n["tier"] = tier.get(n.get("role"), 3)
+
+    roots = [nid for nid, n in keep.items()
+             if n["role"] in ("internet_fw", "backbone")]
+    return {"nodes": list(keep.values()), "links": links, "roots": roots}

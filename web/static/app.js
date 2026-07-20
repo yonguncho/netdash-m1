@@ -2307,9 +2307,145 @@ function renderTopology() {
     l2b.style.fontSize = "12px";
   }
 
-  if (_topoMode === "tps") _renderTpsMap(host);
-  else if (_topoMode === "zone") _renderZoneMap(host);
-  else _renderCoreMap(host);
+  _renderTree(host);   // v4.2: 서버실 트리 단일 뷰(존/TPS/코어 모드 폐지)
+}
+
+// ─── 서버실 트리 구성도 (v4.2) ──────────────────────────────────────
+// role→아이콘 라벨(_deviceSymbol) 및 색
+var _TREE_ICON = {
+  internet_fw: "방화벽", firewall: "방화벽", backbone: "백본", l3: "L3", l4: "L4",
+};
+var _TREE_COLOR = {
+  internet_fw: "#ef4444", firewall: "#ef4444", backbone: "#a855f7",
+  l3: "#8b5cf6", l4: "#f59e0b",
+};
+
+function _renderTree(host) {
+  var nodes = _topoData.nodes || [];
+  var links = _topoData.links || [];
+  if (!nodes.length) {
+    host.innerHTML = "<p style='color:#94a3b8;padding:20px'>서버실(위치 A09U27 형식)에 지정된 방화벽·L3/백본 스위치가 없습니다. 장비 위치를 지정하고 수집하면 구성도가 그려집니다.</p>";
+    return;
+  }
+  var byId = {}; nodes.forEach(function (n) { byId[n.id] = n; });
+
+  // 가상 Internet 루트 + 상위 연결(논리) — 물리 링크가 없어도 계층을 세운다
+  var hasInternetFw = nodes.some(function (n) { return n.role === "internet_fw"; });
+  var backbones = nodes.filter(function (n) { return n.role === "backbone"; });
+
+  // tier: 0=Internet(가상) 1=internet_fw 2=backbone 3=l3/l4/firewall
+  var TIER_INTERNET = 0;
+  var tierNodes = { 0: [], 1: [], 2: [], 3: [] };
+  nodes.forEach(function (n) { (tierNodes[n.tier] = tierNodes[n.tier] || []).push(n); });
+
+  // 레이아웃 좌표 계산
+  var colW = 200, rowH = 170, marginX = 90, marginY = 70;
+  var maxCols = Math.max(1, tierNodes[1].length, tierNodes[2].length, tierNodes[3].length);
+  var width = Math.max(720, marginX * 2 + maxCols * colW);
+  // tier3에 대역 박스가 붙으므로 하단 여유
+  var height = marginY * 2 + 4 * rowH + 120;
+
+  _topoRenderedPos = {};
+  function _place(tierList, tierIdx) {
+    var n = tierList.length;
+    tierList.forEach(function (node, i) {
+      var x = n === 1 ? width / 2 : marginX + (i + 0.5) * ((width - marginX * 2) / n);
+      var y = marginY + tierIdx * rowH;
+      var ov = _topoLayout[node.id];
+      _topoRenderedPos[node.id] = ov ? { x: ov.x, y: ov.y } : { x: x, y: y };
+    });
+  }
+  _place(tierNodes[1], 1); _place(tierNodes[2], 2); _place(tierNodes[3], 3);
+  var internetPos = { x: width / 2, y: marginY + TIER_INTERNET * rowH };
+
+  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
+    " preserveAspectRatio='xMidYMid meet' viewBox='0 0 " + width + " " + height +
+    "' style='cursor:grab;display:block;background:#0f172a'>"];
+
+  function _pos(id) { return _topoRenderedPos[id]; }
+  function _line(x1, y1, x2, y2, color, dashed, label) {
+    var d = dashed ? " stroke-dasharray='5 4'" : "";
+    var s = "<line x1='" + x1 + "' y1='" + y1 + "' x2='" + x2 + "' y2='" + y2 +
+      "' stroke='" + (color || "#475569") + "' stroke-width='1.8'" + d + "/>";
+    if (label) {
+      s += "<text x='" + ((x1 + x2) / 2) + "' y='" + ((y1 + y2) / 2 - 3) +
+        "' fill='#94a3b8' font-size='10' text-anchor='middle'>" + esc(label) + "</text>";
+    }
+    return s;
+  }
+
+  // 1) 가상 계층 링크(Internet→FW→Backbone) — 물리 데이터 없이도 트리 골격
+  var internetChildren = hasInternetFw ? tierNodes[1] : backbones;
+  internetChildren.forEach(function (n) {
+    var p = _pos(n.id);
+    svg.push(_line(internetPos.x, internetPos.y + 20, p.x, p.y - 20, "#334155", true));
+  });
+  if (hasInternetFw) {
+    tierNodes[1].forEach(function (fw) {
+      backbones.forEach(function (bb) {
+        var a = _pos(fw.id), b = _pos(bb.id);
+        svg.push(_line(a.x, a.y + 20, b.x, b.y - 20, "#334155", true));
+      });
+    });
+  }
+
+  // 2) 실측 링크(직결 CDP/LLDP/ARP-MAC) — 실선, 포트 라벨
+  links.forEach(function (l) {
+    var a = _pos(l.a), b = _pos(l.b);
+    if (!a || !b) return;
+    var port = [l.a_port, l.b_port].filter(Boolean).join(" ↔ ");
+    svg.push(_line(a.x, a.y, b.x, b.y, l.l3 ? "#38bdf8" : "#22c55e", !!l.l3, port));
+  });
+
+  // 3) Internet 가상 노드
+  svg.push("<g transform='translate(" + (internetPos.x - 17) + "," + (internetPos.y - 17) + ")'>" +
+    "<circle cx='17' cy='17' r='16' fill='#0ea5e9' fill-opacity='0.15' stroke='#0ea5e9' stroke-width='1.8'/>" +
+    "<text x='17' y='21' fill='#0ea5e9' font-size='11' text-anchor='middle'>🌐</text></g>" +
+    "<text x='" + internetPos.x + "' y='" + (internetPos.y + 34) +
+    "' fill='#94a3b8' font-size='11' text-anchor='middle'>Internet</text>");
+
+  // 4) 장비 노드 + 대역 박스
+  nodes.forEach(function (n) {
+    var p = _pos(n.id);
+    var color = _TREE_COLOR[n.role] || "#64748b";
+    var down = n.reachable === false || n.status === "failed";
+    var label = _TREE_ICON[n.role] || "L2";
+    svg.push("<g class='topo-node' data-swid='" + esc(n.id) + "' style='cursor:move'>");
+    svg.push(_deviceSymbol(label, p.x - 17, p.y - 17, down ? "#ef4444" : color));
+    svg.push("<text x='" + p.x + "' y='" + (p.y + 32) + "' fill='#e2e8f0' font-size='12'" +
+      " text-anchor='middle'>" + (down ? "🔴 " : "") + esc(n.name || "") + "</text>");
+    svg.push("<text x='" + p.x + "' y='" + (p.y + 46) + "' fill='#64748b' font-size='10'" +
+      " text-anchor='middle'>" + esc(n.ip || "") + "</text>");
+    // 대역 박스(L3/백본만) — VLAN·CIDR 세로 나열
+    var subs = n.subnets_vlan || [];
+    if (subs.length && (n.role === "l3" || n.role === "backbone")) {
+      var bx = p.x - 82, by = p.y + 56, bw = 164;
+      var shown = subs.slice(0, 10);
+      var bh = 20 + shown.length * 15;
+      svg.push("<rect x='" + bx + "' y='" + by + "' width='" + bw + "' height='" + bh +
+        "' rx='5' fill='#0b1220' stroke='" + color + "' stroke-opacity='0.5'/>");
+      svg.push("<text x='" + (bx + 8) + "' y='" + (by + 14) + "' fill='" + color +
+        "' font-size='10' font-weight='700'>대역 " + subs.length + "개</text>");
+      shown.forEach(function (s, i) {
+        var vtag = (s.vlan != null ? "V" + s.vlan + " " : "");
+        svg.push("<text x='" + (bx + 8) + "' y='" + (by + 30 + i * 15) +
+          "' fill='#cbd5e1' font-size='10'>" + esc(vtag + s.cidr) + "</text>");
+      });
+      if (subs.length > shown.length) {
+        svg.push("<text x='" + (bx + 8) + "' y='" + (by + 30 + shown.length * 15) +
+          "' fill='#64748b' font-size='9'>+" + (subs.length - shown.length) + " more</text>");
+      }
+    }
+    svg.push("</g>");
+  });
+
+  svg.push("</svg>");
+  host.innerHTML = "<div id='topo-tip' style='position:fixed;display:none;background:#1e293b;" +
+    "color:#e2e8f0;padding:4px 8px;border-radius:4px;font-size:12px;z-index:99;pointer-events:none'></div>" +
+    svg.join("");
+  _topoBindZoomPan(host, width, height);
+  _topoBindDrag(host);
+  _topoBindTips(host);
 }
 
 // 장비 심볼(SVG) — 실제 네트워크 구성도 스타일 아이콘(34x34 기준, 채색 + 입체감)

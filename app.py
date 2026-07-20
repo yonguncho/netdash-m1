@@ -1334,10 +1334,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
     @app.route("/api/topology", methods=["GET"])
     def get_topology():
-        """스위치·방화벽 연결 관계(수집 데이터 기반 추론) + 도달성."""
+        """서버실 트리 구성도(방화벽+L3/백본, L2 숨김, 대역 박스) + 도달성."""
         try:
             from core import topology, reachability
-            topo = topology.build_topology(db_path)
+            topo = topology.build_serverroom_tree(db_path)
             reach = reachability.get_state()
             fw_reach = reachability.get_fw_state()
             for n in topo.get("nodes", []):
