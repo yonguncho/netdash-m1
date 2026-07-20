@@ -2369,7 +2369,7 @@ function _renderTree(host) {
       "' stroke='" + (color || "#475569") + "' stroke-width='1.8'" + d + "/>";
     if (label) {
       s += "<text x='" + ((x1 + x2) / 2) + "' y='" + ((y1 + y2) / 2 - 3) +
-        "' fill='#94a3b8' font-size='10' text-anchor='middle'>" + esc(label) + "</text>";
+        "' fill='#94a3b8' font-size='10' text-anchor='middle'>" + escHtml(label) + "</text>";
     }
     return s;
   }
@@ -2410,12 +2410,12 @@ function _renderTree(host) {
     var color = _TREE_COLOR[n.role] || "#64748b";
     var down = n.reachable === false || n.status === "failed";
     var label = _TREE_ICON[n.role] || "L2";
-    svg.push("<g class='topo-node' data-swid='" + esc(n.id) + "' style='cursor:move'>");
+    svg.push("<g class='topo-node' data-swid='" + escHtml(n.id) + "' style='cursor:move'>");
     svg.push(_deviceSymbol(label, p.x - 17, p.y - 17, down ? "#ef4444" : color));
     svg.push("<text x='" + p.x + "' y='" + (p.y + 32) + "' fill='#e2e8f0' font-size='12'" +
-      " text-anchor='middle'>" + (down ? "🔴 " : "") + esc(n.name || "") + "</text>");
+      " text-anchor='middle'>" + (down ? "🔴 " : "") + escHtml(n.name || "") + "</text>");
     svg.push("<text x='" + p.x + "' y='" + (p.y + 46) + "' fill='#64748b' font-size='10'" +
-      " text-anchor='middle'>" + esc(n.ip || "") + "</text>");
+      " text-anchor='middle'>" + escHtml(n.ip || "") + "</text>");
     // 대역 박스(L3/백본만) — VLAN·CIDR 세로 나열
     var subs = n.subnets_vlan || [];
     if (subs.length && (n.role === "l3" || n.role === "backbone")) {
@@ -2429,7 +2429,7 @@ function _renderTree(host) {
       shown.forEach(function (s, i) {
         var vtag = (s.vlan != null ? "V" + s.vlan + " " : "");
         svg.push("<text x='" + (bx + 8) + "' y='" + (by + 30 + i * 15) +
-          "' fill='#cbd5e1' font-size='10'>" + esc(vtag + s.cidr) + "</text>");
+          "' fill='#cbd5e1' font-size='10'>" + escHtml(vtag + s.cidr) + "</text>");
       });
       if (subs.length > shown.length) {
         svg.push("<text x='" + (bx + 8) + "' y='" + (by + 30 + shown.length * 15) +
