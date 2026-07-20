@@ -2480,13 +2480,24 @@ def find_mac_location(db_path, ip):
             row = cur.fetchone()
             if row and row["mac"]:
                 out["mac"] = row["mac"]
+                # 물리 포트 우선: 같은 MAC이 여러 포트(Po·물리)에 보이면 물리 포트를
+                # 고른다(포트채널 집합보다 실제 케이블이 꽂힌 멤버포트를 표시하기 위함).
                 cur.execute(
-                    "SELECT m.port, s.name AS switch_name FROM mac_entries m "
+                    "SELECT m.port, m.switch_id, s.name AS switch_name FROM mac_entries m "
                     "JOIN switches s ON s.id = m.switch_id "
-                    "WHERE m.mac=? ORDER BY m.id DESC LIMIT 1", (row["mac"],))
-                loc = cur.fetchone()
+                    "WHERE m.mac=? ORDER BY m.id DESC LIMIT 20", (row["mac"],))
+                rows = cur.fetchall()
+                loc = None
+                for r in rows:                      # 물리 포트(Po/Vlan 아님) 우선
+                    p = (r["port"] or "").lower()
+                    if not p.startswith(("po", "port-channel", "vl", "vlan")):
+                        loc = r
+                        break
+                if loc is None and rows:
+                    loc = rows[0]
                 if loc:
                     out["switch_name"] = loc["switch_name"]
+                    out["switch_id"] = loc["switch_id"]
                     out["port"] = loc["port"]
             if not out:
                 cur.execute(

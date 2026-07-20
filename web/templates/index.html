@@ -69,6 +69,7 @@
         <input id="srv-ip" type="text" placeholder="10.92.10.5">
         <label>OS</label>
         <select id="srv-os">
+          <option value="auto">자동 인식 (계정 입력 후 수집 시)</option>
           <option value="linux">Linux</option>
           <option value="windows">Windows</option>
         </select>
@@ -193,10 +194,10 @@
   <nav class="tab-nav">
     <button class="tab-nav__btn active" data-tab="dashboard">현황판</button>
     <button class="tab-nav__btn" data-tab="room">서버실 현황</button>
-    <button class="tab-nav__btn" data-tab="server">서버 현황</button>
-    <button class="tab-nav__btn" data-tab="facility">설비 현황</button>
     <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
     <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
+    <button class="tab-nav__btn" data-tab="server">서버 현황</button>
+    <button class="tab-nav__btn" data-tab="facility">설비 현황</button>
     <button class="tab-nav__btn" data-tab="vlan">VLAN</button>
     <button class="tab-nav__btn" data-tab="topology">토폴로지</button>
   </nav>
@@ -266,14 +267,18 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">서버 현황</span>
         <div class="pane-toolbar__actions">
-          <input id="server-search" placeholder="이름·IP·hostname·MAC 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:210px">
+          <input id="server-search" placeholder="이름·IP·hostname·MAC 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:180px">
+          <input id="server-common-user" placeholder="공통 SSH 계정" autocomplete="off" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:120px" title="여기에 계정/비밀번호를 넣고 '전체 수집'하면 모든 서버에 이 계정으로 SSH 접속해 OS·상세를 수집합니다">
+          <input id="server-common-pass" type="password" placeholder="비밀번호" autocomplete="new-password" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:110px">
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer" title="입력한 공통 계정을 각 서버에 저장(다음부터 자동 사용)"><input type="checkbox" id="server-common-persist"> 계정 저장</label>
           <button id="btn-server-add" class="btn btn--primary" style="font-size:12px">+ 서버 등록</button>
-          <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="전 서버 일괄 수집 — 계정 없이도 포트/hostname/연결 스위치를 수집하고, 저장 계정이 있으면 SSH 상세까지">전체 수집</button>
+          <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="등록된 전 서버를 일괄 (재)수집. 공통 계정을 입력하면 그 계정으로 접속해 OS를 자동 인식하고 상세까지 수집합니다.">전체 수집</button>
         </div>
       </div>
       <p style="margin:4px 0 10px;font-size:12px;color:#64748b">
         계정 없이도 <b>열린 포트·hostname·MAC·연결 스위치/포트</b>(기존 스위치 수집 데이터 대조)를 수집합니다.
-        SSH 계정을 입력하면 OS·리스닝 포트까지 수집. <b>물리 서버</b>는 위치를 <code>A09U27</code> 형식으로 넣으면 서버실 현황에 표시됩니다.
+        공통 SSH 계정을 입력하면 <b>OS를 자동 인식</b>하고 OS·리스닝 포트까지 수집합니다.
+        <b>물리 서버</b>는 위치를 <code>A09U27</code> 형식으로 넣으면 서버실 현황에 표시됩니다.
       </p>
       <div class="table-wrap">
         <table class="data-table">

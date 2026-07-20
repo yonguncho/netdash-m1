@@ -3793,7 +3793,7 @@ function renderServers() {
   var addBtn = document.getElementById("btn-server-add");
   if (addBtn) addBtn.addEventListener("click", function () {
     ["srv-name", "srv-ip", "srv-location"].forEach(function (id) { document.getElementById(id).value = ""; });
-    document.getElementById("srv-os").value = "linux";
+    document.getElementById("srv-os").value = "auto";
     document.getElementById("srv-isvm").checked = false;
     openModal("modal-add-server");
   });
@@ -3822,9 +3822,23 @@ function renderServers() {
   var allBtn = document.getElementById("btn-server-collect-all");
   if (allBtn) allBtn.addEventListener("click", function () {
     if (!_servers.length) { alert("등록된 서버가 없습니다."); return; }
-    fetch("/api/servers/collect-all", {method: "POST"}).then(function (r) { return r.json(); })
+    var body = {
+      username: (document.getElementById("server-common-user") || {}).value || "",
+      password: (document.getElementById("server-common-pass") || {}).value || "",
+      persist: (document.getElementById("server-common-persist") || {}).checked || false,
+    };
+    var withCred = body.username && body.password;
+    var msg = withCred
+      ? "공통 계정으로 전 서버를 재수집합니다. OS를 자동 인식하고 상세까지 수집합니다.\n계속할까요?"
+      : "전 서버를 수집합니다. (공통 계정 미입력 — 포트/hostname/연결 스위치만, 저장 계정 있는 서버는 상세 포함)\n계속할까요?";
+    if (!confirm(msg)) return;
+    fetch("/api/servers/collect-all", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); })
       .then(function () {
-        alert("전체 수집을 시작했습니다. 잠시 후 새로고침하면 결과가 반영됩니다.");
+        alert("전체 수집을 시작했습니다. 잠시 후 목록에 반영됩니다.");
+        // 비밀번호 입력란은 비워 화면 잔류 방지
+        var pw = document.getElementById("server-common-pass"); if (pw) pw.value = "";
         setTimeout(loadServers, 8000);
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
   });

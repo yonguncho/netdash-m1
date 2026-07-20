@@ -1132,7 +1132,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 validated_ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
             except ValueError as e:
                 return jsonify({"error": "IP 거부: %s" % e}), 400
-            os_type = data.get("os_type") if data.get("os_type") in ("linux", "windows") else "linux"
+            os_type = data.get("os_type") if data.get("os_type") in ("linux", "windows", "auto") else "auto"
             sid = db.save_server(db_path, name, validated_ip, os_type=os_type,
                                  location=(data.get("location") or "").strip()[:60] or None,
                                  is_vm=1 if data.get("is_vm") else 0)
@@ -1208,11 +1208,22 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @app.route("/api/servers/collect-all", methods=["POST"])
     @rate_limit("collect_all_servers", max_requests=6, window_seconds=60)
     def collect_all_servers_endpoint():
-        """등록된 전 서버 일괄 수집(백그라운드, 저장 계정 있으면 SSH 상세 포함)."""
+        """등록된 전 서버 일괄 (재)수집(백그라운드).
+
+        body: {username?, password?, persist?} — 공통 계정(선택). 주면 전 서버에
+        그 계정으로 접속해 OS 자동 인식 + 상세 수집. 없으면 서버별 저장 계정 사용.
+        """
         try:
             from core import server_collector
-            threading.Thread(target=server_collector.collect_all_servers,
-                             args=(db_path,), daemon=True).start()
+            data = request.get_json(silent=True) or {}
+            cu = (data.get("username") or "").strip() or None
+            cp = data.get("password") or None
+            persist = bool(data.get("persist"))
+            threading.Thread(
+                target=server_collector.collect_all_servers,
+                kwargs={"db_path": db_path, "common_user": cu,
+                        "common_pass": cp, "persist": persist},
+                daemon=True).start()
             return jsonify({"ok": True, "status": "collecting"}), 202
         except Exception as e:
             log_event("error", "collect_all_servers_error",

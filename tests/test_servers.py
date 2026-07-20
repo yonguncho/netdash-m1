@@ -96,3 +96,75 @@ def test_collect_server_no_cred_still_scans(temp_db, monkeypatch):
     assert res["status"] == "done"
     sv = db.get_server(temp_db, sid)
     assert sv["open_ports"] == "22,80" and sv["hostname"] == "myhost"
+
+
+def test_status_uses_open_ports_not_port22(temp_db, monkeypatch):
+    """상태 판정은 열린 포트 존재 기준(22 유무 아님). 포트 없고 정보도 없으면 failed."""
+    monkeypatch.setattr(server_collector, "reverse_dns", lambda ip: "")
+    monkeypatch.setattr(server_collector, "netbios_name", lambda ip, **k: "")
+    monkeypatch.setattr(db, "find_mac_location", lambda dbp, ip: {})
+    # 22 없이 다른 포트만 열림 → 도달(up)
+    sid = db.save_server(temp_db, "S1", "10.0.0.21")
+    monkeypatch.setattr(server_collector, "scan_ports", lambda ip, **k: [3389, 445])
+    assert server_collector.collect_server(temp_db, sid)["status"] == "done"
+    # 열린 포트 전무 + 정보 없음 → failed(도달 불가)
+    sid2 = db.save_server(temp_db, "S2", "10.0.0.22")
+    monkeypatch.setattr(server_collector, "scan_ports", lambda ip, **k: [])
+    r = server_collector.collect_server(temp_db, sid2)
+    assert r["status"] == "failed" and "도달 불가" in db.get_server(temp_db, sid2)["last_error"]
+
+
+def test_hostname_netbios_fallback(temp_db, monkeypatch):
+    """역DNS 실패 시 NetBIOS 이름으로 hostname 폴백."""
+    sid = db.save_server(temp_db, "S", "10.0.0.30")
+    monkeypatch.setattr(server_collector, "scan_ports", lambda ip, **k: [445])
+    monkeypatch.setattr(server_collector, "reverse_dns", lambda ip: "")
+    monkeypatch.setattr(server_collector, "netbios_name", lambda ip, **k: "WINSRV01")
+    monkeypatch.setattr(db, "find_mac_location", lambda dbp, ip: {})
+    server_collector.collect_server(temp_db, sid)
+    assert db.get_server(temp_db, sid)["hostname"] == "WINSRV01"
+
+
+def test_os_auto_detect(temp_db, monkeypatch):
+    """os_type='auto'면 접속해서 OS 판별 후 확정."""
+    sid = db.save_server(temp_db, "S", "10.0.0.40", os_type="auto")
+    monkeypatch.setattr(server_collector, "scan_ports", lambda ip, **k: [22])
+    monkeypatch.setattr(server_collector, "reverse_dns", lambda ip: "")
+    monkeypatch.setattr(server_collector, "netbios_name", lambda ip, **k: "")
+    monkeypatch.setattr(db, "find_mac_location", lambda dbp, ip: {})
+    monkeypatch.setattr(server_collector, "detect_os", lambda ip, u, p: "linux")
+    monkeypatch.setattr(server_collector, "_ssh_detail_linux",
+                        lambda ip, u, p: {"os_info": "Linux 5.15"})
+    server_collector.collect_server(temp_db, sid, "admin", "pw123")
+    sv = db.get_server(temp_db, sid)
+    assert sv["os_type"] == "linux" and sv["os_info"] == "Linux 5.15"
+
+
+def test_find_mac_location_prefers_physical_port(temp_db):
+    """같은 MAC이 Po10과 물리포트에 보이면 물리포트를 택한다(케이블 실제 위치)."""
+    import sqlite3
+    sid = db.import_switches_bulk(
+        temp_db, [{"name": "SW", "ip": "10.0.0.99", "vendor": "cisco_ios"}])[0]
+    snap = db.save_snapshot(temp_db, sid, 1)
+    conn = sqlite3.connect(str(temp_db))
+    conn.execute("INSERT INTO arp_entries (snapshot_id, switch_id, ip, mac) VALUES (?,?,?,?)",
+                 (snap, sid, "10.0.0.50", "AA:BB:CC:00:11:22"))
+    for port in ("Po10", "Gi1/0/5"):
+        conn.execute("INSERT INTO mac_entries (snapshot_id, switch_id, vlan, mac, port) "
+                     "VALUES (?,?,?,?,?)", (snap, sid, 10, "AA:BB:CC:00:11:22", port))
+    conn.commit(); conn.close()
+    loc = db.find_mac_location(temp_db, "10.0.0.50")
+    assert loc["port"] == "Gi1/0/5"          # Po가 아니라 물리포트
+    assert loc["switch_id"] == sid
+
+
+def test_collect_all_common_cred_persist(temp_db, monkeypatch):
+    """전체 수집 공통 계정 + persist → 각 서버에 계정 저장."""
+    s1 = db.save_server(temp_db, "A", "10.0.0.61")
+    s2 = db.save_server(temp_db, "B", "10.0.0.62")
+    monkeypatch.setattr(server_collector, "collect_server",
+                        lambda dbp, sid, u, p: {"status": "done"})
+    server_collector.collect_all_servers(temp_db, common_user="root",
+                                         common_pass="pw12345", persist=True)
+    assert db.get_server_credential(temp_db, s1)
+    assert db.get_server_credential(temp_db, s2)
