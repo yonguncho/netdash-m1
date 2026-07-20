@@ -682,9 +682,17 @@ def _apply_scan(db_path, subnet, by_ip):
         off["online"] = 0
         merged.append(off)                       # 삭제하지 않고 오프라인으로 유지
         if ex.get("online"):                     # 온라인→사라짐 = 연결 끊김(신규 이벤트)
+            # 마지막 확인 위치(오프라인 시 MAC이 테이블에서 빠져 재조회 불가)를 메시지에
+            # 병기 — 어느 스위치/포트에 붙어 있던 설비인지 알람만으로 특정 가능.
+            _loc = ""
+            if ex.get("switch_name") and ex.get("port"):
+                _loc = " (마지막 위치: %s %s)" % (ex["switch_name"], ex["port"])
+            elif ex.get("switch_name"):
+                _loc = " (마지막 스위치: %s, 포트 미확인)" % ex["switch_name"]
             db.save_device_event(db_path, "device_offline", "warning", subnet=subnet, ip=ip,
                                  mac=ex.get("mac"), switch_id=ex.get("switch_id"),
-                                 label=ex.get("switch_name"), message="설비 연결 끊김: " + ip)
+                                 label=ex.get("switch_name"),
+                                 message="설비 연결 끊김: " + ip + _loc)
             off_cnt += 1
 
     db.clear_facility_subnet(db_path, subnet)

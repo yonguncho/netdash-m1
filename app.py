@@ -1240,6 +1240,26 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             fac = db.get_facility_hosts(db_path)
             fac_off = [h for h in fac if not h.get("online")]
 
+            def _facility_detail(h):
+                """오프라인 설비의 위치 표기 — 오프라인이면 MAC이 테이블에서
+                빠져 포트가 비므로, 마지막 확인 위치/경유/대역으로 상황을 명확히 한다."""
+                sw = h.get("switch_name")
+                port = h.get("port")
+                if sw and port:
+                    tag = "%s · %s" % (sw, port)
+                    return tag if h.get("direct") else (tag + " (경유)")
+                if h.get("via"):
+                    return "경유 %s" % h["via"]
+                if sw:
+                    return "%s (포트 미확인)" % sw
+                return "위치 미확인 · %s" % (h.get("subnet") or "대역 미상")
+
+            # 오프라인 설비는 '위치 확인된 것'(직접 포트) 먼저 노출 — 미확인 노이즈는 뒤로
+            fac_off = sorted(
+                fac_off,
+                key=lambda h: (0 if (h.get("switch_name") and h.get("port")) else
+                               1 if h.get("via") or h.get("switch_name") else 2))
+
             def _alert_detail(sw):
                 """경보 스위치의 문제 포트를 switch_logs 이벤트에서 추출해 상세 표기."""
                 import json as _json
@@ -1270,8 +1290,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                             "detail": _alert_detail(s)} for s in alerts_sw[:30]]},
                 {"key": "facility", "title": "설비 연결 실패", "severity": "warn",
                  "items": [{"name": h.get("ip"), "ip": h.get("mac") or "",
-                            "detail": "%s 포트 %s" % (h.get("switch_name") or "-",
-                                                      h.get("port") or "-")}
+                            "detail": _facility_detail(h)}
                            for h in fac_off[:30]]},
             ]
 
