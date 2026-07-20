@@ -23,7 +23,13 @@ COMMANDS = {
     # 시리얼/모델: Catalyst 일부(9300L 등)는 show version에 'System Serial Number'
     # 줄이 없고 하단 스위치 표(Serial No. 열)에만 있음 → show inventory의 SN이 가장 확실.
     "inventory": "show inventory",
+    # 라우터/음성게이트웨이(VG3X0 등)는 'show interface status'(스위치 전용) 미지원.
+    # status가 비면 이 출력으로 포트/상태를 도출한다.
+    "port_brief": "show ip interface brief",
 }
+
+# 'show interface status' 미지원(라우터/VG) 판별 — IOS의 무효 명령 응답 패턴
+_INVALID_CMD = re.compile(r"%\s*(invalid input|incomplete command|ambiguous)", re.I)
 
 # MAC: dot(0050.56a1.b2c3) / colon / hyphen 형식 모두 허용
 _MAC = r"[0-9a-fA-F][0-9a-fA-F:.\-]{10,18}[0-9a-fA-F]"
@@ -99,6 +105,13 @@ def parse(outputs, switch_id):
     descriptions = _parse_descriptions(outputs.get("description", ""))
     errors = parse_interface_errors(outputs.get("errors", ""))
     ports = _parse_ports(outputs.get("status", ""), descriptions, switch_id, errors)
+    # 라우터/음성게이트웨이(VG3X0 등): 'show interface status' 미지원 → 포트 0.
+    # 'show ip interface brief'로 폴백 파싱(L3 인터페이스 상태·IP 도출).
+    if not ports:
+        ports = _parse_ports_brief(outputs.get("port_brief", ""), descriptions, switch_id)
+        if ports:
+            utils.log_event("info", "cisco_ios_brief_fallback",
+                            switch_id=switch_id, ports=len(ports))
     macs = _parse_macs(outputs.get("mac", ""), switch_id)
     arps = _parse_arps(outputs.get("arp", ""), switch_id)
     vlans = parse_vlans(outputs.get("vlan", ""), switch_id)
@@ -217,6 +230,61 @@ def _parse_ports(status_output, descriptions, switch_id, errors=None):
             "crc_errors": err.get("crc", 0),
             "in_errors": err.get("in_errors", 0),
             "out_errors": err.get("out_errors", 0),
+        })
+    return utils.deduplicate_list(ports, lambda p: p["name"])
+
+
+def _parse_ports_brief(brief_output, descriptions, switch_id):
+    """show ip interface brief → 포트 상태/IP (라우터·음성게이트웨이 폴백).
+
+    형식: Interface  IP-Address  OK?  Method  Status  Protocol
+      GigabitEthernet0/0  10.92.1.5   YES  NVRAM  up                    up
+      FastEthernet0/0     unassigned  YES  NVRAM  administratively down down
+    Status가 'administratively down'(두 단어)일 수 있어 Protocol(마지막 토큰) 기준으로
+    역파싱한다. IP는 speed 컬럼 대신 표기(라우터는 속도 개념이 포트 상태보다 덜 중요).
+    """
+    ports = []
+    if not brief_output or _INVALID_CMD.search(brief_output):
+        return ports
+    if len(brief_output) > 1_000_000:
+        return ports
+    for i, line in enumerate(brief_output.split("\n")):
+        if i > 10000 or len(line) > 500:
+            continue
+        toks = line.split()
+        if len(toks) < 5:
+            continue
+        if toks[0].lower() == "interface":       # 헤더
+            continue
+        if toks[2].upper() not in ("YES", "NO"):   # OK? 컬럼 확인(데이터 행)
+            continue
+        port = _abbr(utils.normalize_port(toks[0]))  # 약어 통일(Gi0/0 — CDP/MAC과 일치)
+        if not port:
+            continue
+        ip = toks[1]
+        protocol = toks[-1].lower()              # 마지막 토큰 = Protocol
+        # Status는 Method 뒤 ~ Protocol 앞(여러 단어 가능: 'administratively down')
+        status_words = toks[4:-1]
+        status_raw = " ".join(status_words).lower()
+        if "administratively down" in status_raw or "admin" in status_raw:
+            status = "disabled"
+        elif protocol == "up" or "up" in status_raw:
+            status = "up"
+        else:
+            status = "down"
+        ip_disp = ip if ip.lower() not in ("unassigned", "") else ""
+        ports.append({
+            "switch_id": switch_id,
+            "name": port,
+            "status": status,
+            "vlan": 1,
+            "speed": ("IP " + ip_disp) if ip_disp else "routed",
+            "duplex": "",
+            "port_type": "routed",
+            "description": descriptions.get(port, ""),
+            "crc_errors": 0,
+            "in_errors": 0,
+            "out_errors": 0,
         })
     return utils.deduplicate_list(ports, lambda p: p["name"])
 

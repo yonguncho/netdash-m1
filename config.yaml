@@ -32,6 +32,9 @@ collector:
       errors: "show interfaces"
       neighbors: "show cdp neighbors detail"
       lldp: "show lldp neighbors detail"
+      # 라우터/음성게이트웨이(VG3X0 등)는 'show interfaces status'(스위치 전용)를
+      # 지원하지 않아 포트 0대 → 'show ip interface brief'로 폴백 파싱.
+      port_brief: "show ip interface brief"
     arista_eos:
       status: "show interfaces"
       description: "show interfaces description"

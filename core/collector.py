@@ -308,7 +308,10 @@ def _parse_model(vendor, text):
                        r'PID:\s*([A-Z0-9][\w./-]+)',   # show inventory(가장 확실)
                        r"Hardware\s*\n\s*cisco\s+(\S+(?:\s+\S+)?)"],
         "cisco_ios": [r"Model Number\s*:\s*(\S+)",
-                      r"cisco\s+((?:WS|C|IE|ME|CGR|ASR|ISR)[\w-]+)\s*\("],
+                      # VG3X0(음성게이트웨이)·라우터 계열 포함. 'cisco VG320 (revision..)'
+                      r"cisco\s+((?:WS|C|IE|ME|CGR|ASR|ISR|VG|CISCO)[\w-]+)\s*\(",
+                      # show version 이미지명의 플랫폼 토큰(VG3X0-universalk9-M)
+                      r"IOS Software,\s*([A-Z0-9]+VG[0-9X]+|VG[0-9X]+)[- ]"],
         "arista_eos": [r"^\s*Arista\s+(\S+)"],
         "extreme_exos": [r"System Type:\s*(\S+)",
                          r"PlatformName:\s*(\S+)"],

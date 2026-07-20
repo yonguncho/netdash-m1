@@ -385,7 +385,9 @@ def _get_default_collector_config() -> dict:
         "allowed_ip_ranges": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
         "commands": {
             "cisco_ios": {"status": "show interfaces", "description": "show interfaces description",
-                         "mac": "show mac address-table dynamic", "arp": "show arp"},
+                         "mac": "show mac address-table dynamic", "arp": "show arp",
+                         # 라우터/VG(음성게이트웨이)용 폴백 — status 미지원 시 포트 도출
+                         "port_brief": "show ip interface brief"},
             "arista_eos": {"status": "show interfaces", "description": "show interfaces description",
                           "mac": "show mac address-table dynamic", "arp": "show ip arp"},
             "extreme_exos": {"status": "show ports no-refresh", "description": "show ports description",
