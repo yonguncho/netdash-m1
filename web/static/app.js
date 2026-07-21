@@ -2434,24 +2434,26 @@ function _tBindEditor(host, W, H) {
       if (_tLinkFrom !== id) _tMakeEdge(_tLinkFrom, id);
       _tLinkFrom = null; _renderEditor();
     });
-    // 드래그 이동 / 클릭 편집 — 편집 모드에서만
+    // 드래그 이동(양쪽 모드 다 가능 — 이동은 무해) / 클릭 편집(편집 모드에서만).
+    // 드래그 중엔 노드 그룹만 transform으로 옮겨 부드럽게(전체 재렌더 X), 놓을 때 1회 확정.
     g.addEventListener("mousedown", function (e) {
-      if (!_tEditMode || _tLinkFrom) return;   // 보기 전용이거나 연결 대기 중이면 무시
-      e.stopPropagation();
+      if (_tLinkFrom) return;                  // 연결 대기 중이면 클릭으로 연결(드래그 아님)
+      e.stopPropagation();                     // 캔버스 팬 방지
       _tSelId = id;                            // 선택(복사/삭제 대상)
       var n = _tNode(id); if (!n) return;
       var vb = svgEl._vb || { w: W, h: H };
       var rect = svgEl.getBoundingClientRect();
       var sx = vb.w / (rect.width || 1), sy = vb.h / (rect.height || 1);
-      var ox = n.x, oy = n.y, px = e.clientX, py = e.clientY, moved = false;
+      var px = e.clientX, py = e.clientY, moved = false, dx = 0, dy = 0;
       function mm(ev) {
-        moved = Math.abs(ev.clientX - px) + Math.abs(ev.clientY - py) > 3;
-        n.x = ox + (ev.clientX - px) * sx; n.y = oy + (ev.clientY - py) * sy;
-        _renderEditor();
+        dx = (ev.clientX - px) * sx; dy = (ev.clientY - py) * sy;
+        if (Math.abs(ev.clientX - px) + Math.abs(ev.clientY - py) > 3) moved = true;
+        g.setAttribute("transform", "translate(" + dx + "," + dy + ")");   // 이 노드만 이동(가벼움)
       }
       function mu() {
         window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
-        if (!moved) _openNodeModal(id);   // 이동 없이 클릭 = 편집 모달
+        if (moved) { n.x += dx; n.y += dy; _renderEditor(); }   // 확정 후 1회 재렌더(선/박스 갱신)
+        else if (_tEditMode) _openNodeModal(id);                // 이동 없이 클릭 = 편집(편집 모드만)
       }
       window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
     });
@@ -3941,7 +3943,8 @@ function _topoBindZoomPan(host, width, height) {
   }, { passive: false });
   var drag = null;
   svgEl.addEventListener("mousedown", function (e) {
-    if (e.target.closest && e.target.closest(".topo-node")) return;   // 노드=드래그가 처리
+    // 노드/연결손잡이 위에서는 팬하지 않음(노드 드래그·연결이 처리). 빈 캔버스만 팬.
+    if (e.target.closest && e.target.closest(".topo-node, .tnode, .tlink-handle")) return;
     drag = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y }; svgEl.style.cursor = "grabbing";
   });
   // window 리스너는 추적 등록 — 재렌더 시 _topoWinClear로 정리(누수 방지)
