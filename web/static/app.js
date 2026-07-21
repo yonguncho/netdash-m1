@@ -2279,6 +2279,8 @@ var _tdiag = { nodes: [], edges: [] };   // {nodes:[{id,kind,ip,name,x,y,subnets
 var _tEditMode = false;                   // 편집 모드(끄면 보기 전용 — 실수 클릭 방지)
 var _tLinkFrom = null;                    // 연결 시작 노드(🔗 손잡이 클릭)
 var _tEditId = null;                      // 편집 중 노드 id
+var _tSelId = null;                       // 선택된 노드(Ctrl+C 복사 / Delete 삭제 대상)
+var _tClip = null;                        // 복사 버퍼(노드 스냅샷)
 var _tSeq = 1;
 
 // 각 장비 종류 → 전용 SVG 심볼(_deviceSymbol) + 색 + 팔레트 라벨
@@ -2365,7 +2367,8 @@ function _renderEditor() {
   _tdiag.nodes.forEach(function (n) {
     var meta = _TOPO_KIND[n.kind] || _TOPO_KIND.l2;
     var color = (n.reachable === false || n.status === "failed") ? "#ef4444" : meta.color;
-    var hl = (_tLinkFrom === n.id) ? "<circle cx='" + n.x + "' cy='" + n.y + "' r='26' fill='none' stroke='#38bdf8' stroke-width='2'/>" : "";
+    var hl = (_tLinkFrom === n.id) ? "<circle cx='" + n.x + "' cy='" + n.y + "' r='26' fill='none' stroke='#38bdf8' stroke-width='2'/>" :
+      (_tSelId === n.id) ? "<rect x='" + (n.x - 24) + "' y='" + (n.y - 24) + "' width='48' height='48' rx='6' fill='none' stroke='#facc15' stroke-width='2' stroke-dasharray='4 3'/>" : "";
     svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tEditMode ? "move" : "default") + "'>");
     svg.push(hl);
     svg.push(_deviceSymbol(meta.sym, n.x - 17, n.y - 17, color));   // 종류별 전용 아이콘
@@ -2426,6 +2429,7 @@ function _tBindEditor(host, W, H) {
     g.addEventListener("mousedown", function (e) {
       if (!_tEditMode || _tLinkFrom) return;   // 보기 전용이거나 연결 대기 중이면 무시
       e.stopPropagation();
+      _tSelId = id;                            // 선택(복사/삭제 대상)
       var n = _tNode(id); if (!n) return;
       var vb = svgEl._vb || { w: W, h: H };
       var rect = svgEl.getBoundingClientRect();
@@ -4025,6 +4029,32 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
       _renderEditor();
       if (!nodes.length) alert("서버실 현황(위치 A09U27 지정)에 등록된 장비가 없습니다.");
     }).catch(function () { alert("서버실 현황 불러오기 오류"); });
+  });
+
+  // 키보드: 편집 모드에서 Ctrl+C 복사 / Ctrl+V 붙여넣기 / Delete 삭제
+  document.addEventListener("keydown", function (e) {
+    // 토폴로지 탭 활성 + 편집 모드일 때만. 입력창/모달 포커스 중이면 무시(일반 복사 보존)
+    var topoActive = document.getElementById("tab-topology");
+    if (!topoActive || !topoActive.classList.contains("active") || !_tEditMode) return;
+    var t = e.target, tag = (t && t.tagName || "").toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    var mod = e.ctrlKey || e.metaKey;
+    if (mod && (e.key === "c" || e.key === "C")) {
+      var n = _tNode(_tSelId);
+      if (n) { _tClip = JSON.parse(JSON.stringify(n)); e.preventDefault(); }
+    } else if (mod && (e.key === "v" || e.key === "V")) {
+      if (_tClip) {
+        var c = JSON.parse(JSON.stringify(_tClip));
+        c.id = "n" + (_tSeq++); c.x = (c.x || 100) + 40; c.y = (c.y || 100) + 40;
+        _tdiag.nodes.push(c); _tSelId = c.id; _renderEditor(); e.preventDefault();
+      }
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      if (_tSelId && _tNode(_tSelId)) {
+        _tdiag.nodes = _tdiag.nodes.filter(function (x) { return x.id !== _tSelId; });
+        _tdiag.edges = _tdiag.edges.filter(function (ed) { return ed.a !== _tSelId && ed.b !== _tSelId; });
+        _tSelId = null; _renderEditor(); e.preventDefault();
+      }
+    }
   });
 })();
 
