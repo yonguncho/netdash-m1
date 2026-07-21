@@ -303,6 +303,10 @@ def test_topology_editor_ui():
     assert '"AP"' in js and '"PC"' in js and '"인터넷"' in js  # _deviceSymbol 분기
     assert "ap:" in js and "pc:" in js       # _TOPO_KIND에 AP/PC 종류
     assert 'value="ap"' in html and 'value="pc"' in html  # 편집 모달 종류
+    # v4.4.6: 설비 아이콘 + 대역 박스 + 존(그룹) 박스
+    assert "facility:" in js and "subnet:" in js and "zone:" in js
+    assert 'value="facility"' in html and 'value="subnet"' in html and 'value="zone"' in html
+    assert "_tnToggleFields" in js and 'id="tn-color"' in html  # 존 색상/필드 토글
     # 화면 맞춤 유지
     assert "svgEl._fit" in js and 'id="btn-topo-fit"' in html
 

@@ -63,13 +63,15 @@
         <button class="modal__close" data-close="modal-topo-node">&times;</button>
       </div>
       <div class="modal__body">
-        <label>IP (입력하면 등록 장비에서 hostname·모델 자동 채움)</label>
-        <div style="display:flex;gap:6px">
-          <input id="tn-ip" type="text" placeholder="10.0.0.1" style="flex:1">
-          <button id="tn-lookup" class="btn btn--secondary" style="font-size:12px">자동 채움</button>
+        <div id="tn-ip-row">
+          <label>IP (입력하면 등록 장비에서 hostname·모델 자동 채움)</label>
+          <div style="display:flex;gap:6px">
+            <input id="tn-ip" type="text" placeholder="10.0.0.1" style="flex:1">
+            <button id="tn-lookup" class="btn btn--secondary" style="font-size:12px">자동 채움</button>
+          </div>
+          <div id="tn-auto" style="font-size:12px;color:#22c55e;margin:6px 0;min-height:16px"></div>
         </div>
-        <div id="tn-auto" style="font-size:12px;color:#22c55e;margin:6px 0;min-height:16px"></div>
-        <label>표시 이름</label>
+        <label>표시 이름 (존 박스는 존 이름)</label>
         <input id="tn-name" type="text" placeholder="장비 이름">
         <label>구분</label>
         <select id="tn-kind">
@@ -82,13 +84,22 @@
           <option value="ap">AP (무선)</option>
           <option value="server">서버</option>
           <option value="pc">PC</option>
+          <option value="facility">설비</option>
+          <option value="subnet">대역 박스 (네트워크 대역만)</option>
+          <option value="zone">존(그룹) 박스</option>
         </select>
-        <label style="margin-top:8px">대역 (L3/L2 아래 네트워크 — 자동 제안 + 직접 추가)</label>
-        <div id="tn-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0"></div>
-        <div style="display:flex;gap:6px">
-          <input id="tn-subnet-input" type="text" placeholder="10.0.30.0/24" style="flex:1;font-size:12px">
-          <button id="tn-subnet-add" class="btn btn--secondary" style="font-size:12px">+ 추가</button>
-          <button id="tn-subnet-suggest" class="btn btn--ghost" style="font-size:12px" title="이 스위치가 나르는 VLAN의 대역을 자동 제안">🪄 제안</button>
+        <div id="tn-color-row" style="display:none;margin-top:8px">
+          <label>색상 (반투명 배경)</label>
+          <input id="tn-color" type="color" value="#8b5cf6" style="width:60px;height:28px;padding:0;border:1px solid #cbd5e1">
+        </div>
+        <div id="tn-subnet-row">
+          <label style="margin-top:8px">대역 (자동 제안 + 직접 추가 — 대역 박스는 여기에 대역만 입력)</label>
+          <div id="tn-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0"></div>
+          <div style="display:flex;gap:6px">
+            <input id="tn-subnet-input" type="text" placeholder="10.0.30.0/24" style="flex:1;font-size:12px">
+            <button id="tn-subnet-add" class="btn btn--secondary" style="font-size:12px">+ 추가</button>
+            <button id="tn-subnet-suggest" class="btn btn--ghost" style="font-size:12px" title="이 스위치가 나르는 VLAN의 대역을 자동 제안">🪄 제안</button>
+          </div>
         </div>
       </div>
       <div class="modal__footer">
