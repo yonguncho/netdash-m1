@@ -290,6 +290,7 @@ def test_topology_editor_ui():
     assert "_tClip" in js and "_tSelId" in js  # Ctrl+C 복사 / Delete 삭제 (선택+클립보드)
     assert "_tBindRubberBand" in js and "_tSel" in js  # 드래그 영역 다중 선택
     assert "_tSelIds" in js                             # 다중 선택 대상(복사/삭제/이동)
+    assert "_tView" in js and "_tBindView" in js        # 줌/팬 뷰 유지(재렌더에도 안 튐)
     assert 'id="topo-palette"' in html
     assert 'id="modal-topo-node"' in html and 'id="tn-ip"' in html
     # 편집기 핵심 함수/동작

@@ -2282,6 +2282,7 @@ var _tEditId = null;                      // 편집 중 노드 id
 var _tSelId = null;                       // 마지막 클릭 노드(단일 선택)
 var _tSel = {};                           // 다중 선택 집합 {id:true} — 드래그 영역/Shift 클릭
 var _tClip = null;                        // 복사 버퍼(노드 스냅샷 배열)
+var _tView = null;                        // 줌/팬 뷰박스 {x,y,w,h} — 재렌더에도 유지
 var _tSeq = 1;
 
 // 현재 선택된 노드 id 목록(다중 우선, 없으면 단일)
@@ -2309,6 +2310,7 @@ var _TOPO_KIND = {
 
 function loadTopology() {
   _buildPalette();
+  _tView = null; _tSel = {}; _tSelId = null;   // 새로 불러올 땐 전체 화면 + 선택 초기화
   fetch("/api/topology/diagram").then(function (r) { return r.json(); }).then(function (d) {
     _tdiag = { nodes: d.nodes || [], edges: d.edges || [] };
     _tdiag.nodes.forEach(function (n) {
@@ -2362,8 +2364,10 @@ function _renderEditor() {
   var host = document.getElementById("topology-canvas");
   if (!host) return;
   var W = 1600, H = 1000;
+  if (!_tView) _tView = { x: 0, y: 0, w: W, h: H };
+  var vbStr = _tView.x + " " + _tView.y + " " + _tView.w + " " + _tView.h;   // 줌/팬 유지
   var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
-    " viewBox='0 0 " + W + " " + H + "' preserveAspectRatio='xMidYMid meet'" +
+    " viewBox='" + vbStr + "' preserveAspectRatio='xMidYMid meet'" +
     " style='display:block;background:#0f172a;cursor:grab'>"];
   // 존(그룹) 박스 — 가장 뒤(배경)에 반투명 색상 사각형 + 존 이름. 여러 아이콘을 감쌈.
   _tdiag.nodes.forEach(function (n) {
@@ -2466,8 +2470,8 @@ function _renderEditor() {
 function _tBindEditor(host, W, H) {
   var svgEl = host.querySelector("#topo-svg");
   if (!svgEl) return;
-  // 줌/팬 재사용(보기 전용에서도 이동/확대는 가능) + 선 포트 툴팁(호버 시 표시)
-  _topoWinClear(); _topoBindZoomPan(host, W, H); _topoBindTips(host);
+  // 편집기 전용 줌/팬(뷰 상태 _tView 유지 — 재렌더에도 안 튐) + 선 포트 툴팁
+  _topoWinClear(); _tBindView(host, W, H, svgEl); _topoBindTips(host);
   // 존 박스 리사이즈 손잡이(우하단 드래그 → w/h 변경)
   host.querySelectorAll(".tzone-resize").forEach(function (rz) {
     rz.addEventListener("mousedown", function (e) {
@@ -2540,8 +2544,7 @@ function _tBindEditor(host, W, H) {
       window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
     });
   });
-  // 영역 선택(러버밴드): 편집 모드에서 빈 캔버스 드래그 → 사각 영역 안 노드 다중 선택.
-  if (_tEditMode) _tBindRubberBand(host, W, H, svgEl);
+  // 러버밴드(영역 선택)는 _tBindView에서 편집 모드일 때 바인딩됨(중복 방지).
 }
 
 function _tBindRubberBand(host, W, H, svgEl) {
@@ -2582,6 +2585,43 @@ function _tBindRubberBand(host, W, H, svgEl) {
     }
     window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
   });
+}
+
+// 편집기 전용 줌/팬 — 뷰 상태(_tView)를 유지해 재렌더에도 화면이 안 튄다.
+function _tBindView(host, W, H, svgEl) {
+  var vb = _tView;                          // 같은 참조를 계속 갱신 → 다음 렌더에 반영
+  function apply() { svgEl.setAttribute("viewBox", vb.x + " " + vb.y + " " + vb.w + " " + vb.h); }
+  svgEl._vb = vb; svgEl._applyVB = apply;
+  svgEl._fit = function () { _tView = vb = { x: 0, y: 0, w: W, h: H }; svgEl._vb = vb; apply(); };
+  // 휠 줌(커서 기준)
+  svgEl.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var scale = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+    var rect = svgEl.getBoundingClientRect();
+    var mx = vb.x + (e.clientX - rect.left) / rect.width * vb.w;
+    var my = vb.y + (e.clientY - rect.top) / rect.height * vb.h;
+    var nw = Math.min(W * 4, Math.max(W / 12, vb.w * scale));
+    var nh = nw * (vb.h / vb.w);
+    vb.x = mx - (mx - vb.x) * (nw / vb.w);
+    vb.y = my - (my - vb.y) * (nh / vb.h);
+    vb.w = nw; vb.h = nh; apply();
+  }, { passive: false });
+  // 빈 캔버스 드래그: 뷰 모드=팬 / 편집 모드=영역 선택(러버밴드가 처리)
+  var pan = null;
+  svgEl.addEventListener("mousedown", function (e) {
+    if (window._tRubberActive || _tLinkFrom) return;
+    if (e.target !== svgEl) return;         // 노드/손잡이 위에서는 무시
+    if (_tEditMode) return;                 // 편집 모드 빈 드래그는 영역 선택
+    pan = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y }; svgEl.style.cursor = "grabbing";
+  });
+  _topoWinOn("mousemove", function (e) {
+    if (!pan) return;
+    var rect = svgEl.getBoundingClientRect();
+    vb.x = pan.vx - (e.clientX - pan.sx) / rect.width * vb.w;
+    vb.y = pan.vy - (e.clientY - pan.sy) / rect.height * vb.h; apply();
+  });
+  _topoWinOn("mouseup", function () { pan = null; if (svgEl) svgEl.style.cursor = "grab"; });
+  if (_tEditMode) _tBindRubberBand(host, W, H, svgEl);
 }
 
 function _tMakeEdge(a, b) {
@@ -4200,6 +4240,7 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
           reachable: n.reachable, status: n.status, subnets: n.subnets || [] };
       });
       _tdiag = { nodes: nodes, edges: [] };   // 링크는 편집 모드에서 직접 연결(포트 자동 인식)
+      _tView = null; _tSel = {}; _tSelId = null;   // 전체 화면으로 리셋
       _renderEditor();
       if (!nodes.length) alert("서버실 현황(위치 A09U27 지정)에 등록된 장비가 없습니다.");
     }).catch(function () { alert("서버실 현황 불러오기 오류"); });
