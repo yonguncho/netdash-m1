@@ -757,9 +757,11 @@ def resolve_link_ports(db_path, a_ip, b_ip):
         - Po(집합)로만 학습되면 members에 물리 멤버 목록(호출부가 선 개수만큼 배정).
         """
         if not switch_dev or switch_dev.get("kind") != "sw":
-            return {"port": None, "members": None}
+            return {"port": None, "members": None, "ports": []}
         sid = switch_dev["id"]
         best = None
+        phys = []          # 상대가 보이는 '물리' 포트 후보(선 여러 개 배정용, 점유 MAC 적은 순)
+        seen_phys = set()
         for tm in target_macs:
             for (msid, _n, port) in mac_map.get(tm, []):
                 if msid != sid:
@@ -770,15 +772,20 @@ def resolve_link_ports(db_path, a_ip, b_ip):
                 score = (1 if is_logical else 0, cnt)
                 if best is None or score < best[0]:
                     best = (score, port)
+                if not is_logical and pl not in seen_phys:
+                    seen_phys.add(pl)
+                    phys.append((cnt, port))
         if not best:
-            return {"port": None, "members": None}
+            return {"port": None, "members": None, "ports": []}
+        phys_ports = [p for _c, p in sorted(phys, key=lambda x: x[0])]
         port = best[1]
         pl = (port or "").lower()
         if pl.startswith(("po", "port-channel")):
             members = pc_map.get((sid, pl))
-            # Po로만 학습 → 물리 멤버 목록 반환(선 1개=멤버1, 선 2개=멤버2...)
-            return {"port": None, "members": list(members) if members else [port]}
-        return {"port": port, "members": None}
+            # Po로만 학습 → 물리 멤버 목록(선 1개=멤버1, 선 2개=멤버2...)
+            return {"port": None, "members": list(members) if members else [port],
+                    "ports": phys_ports}
+        return {"port": port, "members": None, "ports": phys_ports}
 
     def _fw_port(fw_dev, peer_ip):
         """방화벽 쪽 포트: 상대 IP를 포함하는 인터페이스(subnet) 이름을 반환."""
@@ -812,5 +819,7 @@ def resolve_link_ports(db_path, a_ip, b_ip):
     a_port = a_res["port"] or _fw_port(a, b_ip)
     b_port = b_res["port"] or _fw_port(b, a_ip)
     method = "mac" if (a_port or b_port or a_res["members"] or b_res["members"]) else "none"
-    return {"a_port": a_port, "a_members": a_res["members"],
-            "b_port": b_port, "b_members": b_res["members"], "method": method}
+    # a_cands/b_cands: 선을 여러 개 그을 때 각 선에 배정할 포트 후보(멤버 우선, 없으면 물리 목록)
+    return {"a_port": a_port, "a_members": a_res["members"], "a_ports": a_res["ports"],
+            "b_port": b_port, "b_members": b_res["members"], "b_ports": b_res["ports"],
+            "method": method}

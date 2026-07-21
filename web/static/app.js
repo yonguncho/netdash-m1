@@ -2374,28 +2374,31 @@ function _renderEditor() {
     }
     svg.push("</g>");
   });
-  // 연결선 — 포트 라벨은 평소 숨김, 선에 마우스 올리면 툴팁으로 표시.
-  // 같은 두 장비 사이 여러 선은 살짝 곡선으로 벌려 겹침 방지.
-  var pairSeen = {};
+  // 연결선 — 일직선. 같은 두 장비 사이 여러 선은 '나란히 평행'하게 벌려(각각 다른 물리 링크).
+  // 포트 라벨은 평소 숨김, 선에 마우스 올리면 그 선의 양쪽 포트를 툴팁으로 표시.
+  var pairTotal = {}, pairIdx = {};
+  _tdiag.edges.forEach(function (e) {
+    var pk = [e.a, e.b].sort().join("|"); pairTotal[pk] = (pairTotal[pk] || 0) + 1;
+  });
   _tdiag.edges.forEach(function (e) {
     var a = _tNode(e.a), b = _tNode(e.b);
     if (!a || !b) return;
     var pk = [e.a, e.b].sort().join("|");
-    var k = (pairSeen[pk] = (pairSeen[pk] || 0) + 1) - 1;   // 0,1,2.. 같은 쌍의 몇 번째 선
-    var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    var total = pairTotal[pk], k = (pairIdx[pk] = (pairIdx[pk] || 0) + 1) - 1;
     var dx = b.x - a.x, dy = b.y - a.y, len = Math.sqrt(dx * dx + dy * dy) || 1;
-    var off = (k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 22);  // 곡선 오프셋
-    var cx = mx + (-dy / len) * off, cy = my + (dx / len) * off;
-    var path = "M" + a.x + " " + a.y + " Q " + cx + " " + cy + " " + b.x + " " + b.y;
-    // 포트 툴팁 텍스트(양쪽 소속 명시)
+    var nx = -dy / len, ny = dx / len;                 // 수직 단위벡터
+    var spread = (total > 1 ? (k - (total - 1) / 2) * 16 : 0);   // 선을 나란히 벌림
+    var ax = a.x + nx * spread, ay = a.y + ny * spread;
+    var bx = b.x + nx * spread, by = b.y + ny * spread;
     var tipParts = [];
     if (e.a_port) tipParts.push((a.name || "A") + ": " + e.a_port);
     if (e.b_port) tipParts.push((b.name || "B") + ": " + e.b_port);
     var tip = tipParts.length ? tipParts.join("  ↔  ") : (e.note || "포트 미확인");
-    svg.push("<path d='" + path + "' fill='none' stroke='#22c55e' stroke-width='2'/>");
-    // 넓은 투명 히트 영역(가는 선도 쉽게 호버) + data-tip
-    svg.push("<path d='" + path + "' fill='none' stroke='transparent' stroke-width='14'" +
-      " data-tip=\"" + escHtml(tip) + "\" style='cursor:help'/>");
+    svg.push("<line x1='" + ax + "' y1='" + ay + "' x2='" + bx + "' y2='" + by +
+      "' stroke='#22c55e' stroke-width='2'/>");
+    // 넓은 투명 히트 영역(가는 선도 쉽게 호버) + data-tip(그 선의 포트)
+    svg.push("<line x1='" + ax + "' y1='" + ay + "' x2='" + bx + "' y2='" + by +
+      "' stroke='transparent' stroke-width='14' data-tip=\"" + escHtml(tip) + "\" style='cursor:help'/>");
   });
   // 노드(존 박스는 위에서 배경으로 이미 그림 → 제외)
   _tdiag.nodes.forEach(function (n) {
@@ -2533,14 +2536,16 @@ function _tMakeEdge(a, b) {
     fetch("/api/topology/link-ports", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ a_ip: na.ip, b_ip: nb.ip }) })
       .then(function (r) { return r.json(); }).then(function (res) {
-        // 물리 포트가 있으면 그 포트, Po면 멤버 목록에서 이 선 순번(idx)에 해당하는 물리 멤버
-        function pick(port, members) {
-          if (port) return port;
-          if (members && members.length) return members[idx] || members[members.length - 1];
-          return null;
+        // 각 선(idx)에 서로 다른 포트 배정: Po면 멤버, 아니면 관측 물리포트 목록,
+        // 그것도 하나뿐이면 단일 포트. → 두 선이면 두 포트로 각각 표시.
+        function pick(port, members, ports) {
+          var list = (members && members.length) ? members
+            : (ports && ports.length > 1) ? ports : null;
+          if (list) return list[idx] || list[list.length - 1];
+          return port || (ports && ports[0]) || null;
         }
-        edge.a_port = pick(res.a_port, res.a_members);
-        edge.b_port = pick(res.b_port, res.b_members);
+        edge.a_port = pick(res.a_port, res.a_members, res.a_ports);
+        edge.b_port = pick(res.b_port, res.b_members, res.b_ports);
         if (!edge.a_port && !edge.b_port) edge.note = "포트 미확인";
         _renderEditor();
       }).catch(function () {});

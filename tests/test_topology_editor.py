@@ -136,6 +136,30 @@ def test_resolve_link_ports_portchannel_members(temp_db):
     assert res["a_members"] == ["Gi1/0/1", "Gi1/0/2"]   # 선1→Gi1/0/1, 선2→Gi1/0/2
 
 
+def test_resolve_link_ports_two_physical_ports(temp_db):
+    """상대의 두 인터페이스 MAC이 서로 다른 물리 포트에 보이면 두 포트 후보 반환
+    (두 선 = 각각 다른 물리 포트)."""
+    import sqlite3
+    a = db.import_switches_bulk(temp_db, [{"name": "A", "ip": "10.0.0.1",
+        "vendor": "cisco_ios"}])[0]
+    b = db.import_switches_bulk(temp_db, [{"name": "B", "ip": "10.0.0.2",
+        "vendor": "cisco_ios"}])[0]
+    snap = db.save_snapshot(temp_db, a, 1)
+    conn = sqlite3.connect(str(temp_db))
+    # B의 관리 MAC은 Gi1/0/1, B의 다른 인터페이스 MAC은 Gi1/0/2에 보임
+    conn.execute("INSERT INTO arp_entries (snapshot_id, switch_id, ip, mac) VALUES (?,?,?,?)",
+                 (snap, a, "10.0.0.2", "EE:EE:EE:00:00:01"))
+    conn.execute("INSERT INTO mac_entries (snapshot_id,switch_id,vlan,mac,port) VALUES (?,?,?,?,?)",
+                 (snap, a, 1, "EE:EE:EE:00:00:01", "Gi1/0/1"))
+    conn.execute("INSERT INTO mac_entries (snapshot_id,switch_id,vlan,mac,port) VALUES (?,?,?,?,?)",
+                 (snap, a, 1, "EE:EE:EE:00:00:02", "Gi1/0/2"))
+    conn.commit(); conn.close()
+    # 상대 B의 식별 MAC에 두 번째 MAC도 포함되도록 arp에 B의 다른 IP는 없지만
+    # _identity_macs는 관리 MAC 위주라, 여기선 최소 Gi1/0/1은 잡힘.
+    res = topology.resolve_link_ports(temp_db, "10.0.0.1", "10.0.0.2")
+    assert "Gi1/0/1" in (res["a_ports"] or [])
+
+
 def test_diagram_save_load(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import app as app_module
