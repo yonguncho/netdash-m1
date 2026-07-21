@@ -2284,7 +2284,19 @@ var _tSel = {};                           // 다중 선택 집합 {id:true} — 
 var _tClip = null;                        // 복사 버퍼(노드 스냅샷 배열)
 var _tView = null;                        // 줌/팬 뷰박스 {x,y,w,h} — 재렌더에도 유지
 var _tLineStyle = null;                   // 선 그리기 도구 {style:'straight'|'elbow', dash:bool}
+var _tLoaded = false;                     // 구성도 최초 로드 완료(탭 재진입 시 유지)
+var _tSaveTimer = null;                   // 자동 저장 디바운스
 var _tSeq = 1;
+
+// 변경 후 자동 저장(디바운스 1.5s) — 탭 전환/새로고침에도 유지. 읽기 전용은 스킵.
+function _tAutoSave() {
+  if (!_tLoaded) return;
+  if (_tSaveTimer) clearTimeout(_tSaveTimer);
+  _tSaveTimer = setTimeout(function () {
+    fetch("/api/topology/diagram", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_tdiag) }).catch(function () {});
+  }, 1500);
+}
 
 // 현재 선택된 노드 id 목록(다중 우선, 없으면 단일)
 function _tSelIds() {
@@ -2339,15 +2351,18 @@ function _addLoadedNodes(list, replace) {
   return added;
 }
 
-function loadTopology() {
+function loadTopology(force) {
   _buildPalette();
   _loadTopoSubnets();
+  // 이미 불러온 뒤 탭을 다시 열면: 서버에서 다시 안 불러오고 편집 중이던 구성도 유지
+  if (_tLoaded && !force) { _renderEditor(); return; }
   _tView = null; _tSel = {}; _tSelId = null;   // 새로 불러올 땐 전체 화면 + 선택 초기화
   fetch("/api/topology/diagram").then(function (r) { return r.json(); }).then(function (d) {
     _tdiag = { nodes: d.nodes || [], edges: d.edges || [] };
     _tdiag.nodes.forEach(function (n) {
       var m = /(\d+)/.exec(n.id || ""); if (m && +m[1] >= _tSeq) _tSeq = +m[1] + 1;
     });
+    _tLoaded = true;
     _renderEditor();
   }).catch(function (e) {
     console.error("topology:", e);
@@ -2539,6 +2554,7 @@ function _renderEditor() {
   svg.push("</svg>");
   host.innerHTML = "<div id='topo-tip' style='position:fixed;display:none;background:#1e293b;color:#e2e8f0;padding:4px 8px;border-radius:4px;font-size:12px;z-index:99;pointer-events:none'></div>" + svg.join("");
   _tBindEditor(host, W, H);
+  _tAutoSave();   // 변경 반영 시 자동 저장(디바운스) — 탭 전환/새로고침에도 유지
 }
 
 function _tBindEditor(host, W, H) {
@@ -4306,7 +4322,10 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
 
 (function () {
   var b = document.getElementById("btn-topo-refresh");
-  if (b) b.addEventListener("click", loadTopology);
+  if (b) b.addEventListener("click", function () {
+    if (!confirm("저장된 구성도를 다시 불러올까요? (저장하지 않은 편집 내용은 사라집니다)")) return;
+    loadTopology(true);   // 강제 새로고침(서버 저장본으로)
+  });
   var fit = document.getElementById("btn-topo-fit");
   if (fit) fit.addEventListener("click", function () {
     var svgEl = document.querySelector("#topo-svg");
@@ -4577,6 +4596,7 @@ function loadCreds() {
 
 // ─── 서버 현황 (리눅스/윈도우) ───────────────────────────────────
 var _srvCollectId = null;
+var _srvEditId = null;   // 서버 수정 대상 id(null=신규 등록)
 
 function loadServers() {
   return fetch("/api/servers").then(function (r) { return r.json(); }).then(function (d) {
@@ -4622,7 +4642,8 @@ function renderServers() {
       "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(s.status || "new") + "</span>" +
         (s.status === "failed" && s.last_error ? "<div style='font-size:11px;color:#991b1b'>" + escHtml(s.last_error) + "</div>" : "") + "</td>" +
       "<td><button class='btn btn--primary' style='font-size:11px;padding:2px 8px' data-action='collect-server' data-id='" + s.id + "'>수집</button></td>" +
-      "<td><button class='btn btn--ghost' style='font-size:11px;padding:2px 8px' data-action='delete-server' data-id='" + s.id + "'>삭제</button></td>" +
+      "<td><button class='btn btn--secondary' style='font-size:11px;padding:2px 8px' data-action='edit-server' data-id='" + s.id + "'>수정</button> " +
+        "<button class='btn btn--ghost' style='font-size:11px;padding:2px 8px' data-action='delete-server' data-id='" + s.id + "'>삭제</button></td>" +
       "</tr>";
   }).join("");
 }
@@ -4630,9 +4651,13 @@ function renderServers() {
 (function () {
   var addBtn = document.getElementById("btn-server-add");
   if (addBtn) addBtn.addEventListener("click", function () {
+    _srvEditId = null;   // 신규 등록 모드
     ["srv-name", "srv-ip", "srv-location"].forEach(function (id) { document.getElementById(id).value = ""; });
     document.getElementById("srv-os").value = "auto";
     document.getElementById("srv-isvm").checked = false;
+    var mh = document.querySelector("#modal-add-server .modal__header span");
+    if (mh) mh.textContent = "서버 등록";
+    var sb = document.getElementById("btn-srv-save"); if (sb) sb.textContent = "등록";
     openModal("modal-add-server");
   });
   var saveBtn = document.getElementById("btn-srv-save");
@@ -4645,13 +4670,15 @@ function renderServers() {
       is_vm: document.getElementById("srv-isvm").checked,
     };
     if (!body.name || !body.ip) { alert("이름과 IP는 필수입니다."); return; }
-    fetch("/api/servers", {
-      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    var editing = _srvEditId != null;
+    var url = editing ? ("/api/servers/" + _srvEditId) : "/api/servers";
+    fetch(url, {
+      method: editing ? "PUT" : "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
     }).then(function (r) { return r.json().then(function (j) { return {s: r.status, j: j}; }); })
       .then(function (res) {
-        if (res.s === 201) { closeModal("modal-add-server"); loadServers(); }
-        else alert(res.j.error || "등록 실패");
-      }).catch(function (e) { console.error(e); alert("등록 오류"); });
+        if (res.j && res.j.ok || res.s === 201) { _srvEditId = null; closeModal("modal-add-server"); loadServers(); }
+        else alert((res.j && res.j.error) || (editing ? "수정 실패" : "등록 실패"));
+      }).catch(function (e) { console.error(e); alert("저장 오류"); });
   });
 
   var searchEl = document.getElementById("server-search");
@@ -4695,6 +4722,19 @@ function renderServers() {
       document.getElementById("srv-password").value = "";
       document.getElementById("srv-persist").checked = false;
       openModal("modal-server-collect");
+    } else if (action === "edit-server") {
+      var sv = _servers.find(function (x) { return x.id === id; });
+      if (!sv) return;
+      _srvEditId = id;
+      document.getElementById("srv-name").value = sv.name || "";
+      document.getElementById("srv-ip").value = sv.ip || "";
+      document.getElementById("srv-os").value = (sv.os_type === "windows" || sv.os_type === "linux") ? sv.os_type : "auto";
+      document.getElementById("srv-location").value = sv.location || "";
+      document.getElementById("srv-isvm").checked = !!sv.is_vm;
+      var mh = document.querySelector("#modal-add-server .modal__header span");
+      if (mh) mh.textContent = "서버 수정";
+      var sb = document.getElementById("btn-srv-save"); if (sb) sb.textContent = "수정";
+      openModal("modal-add-server");
     } else if (action === "delete-server") {
       if (!confirm("이 서버를 삭제할까요?")) return;
       fetch("/api/servers/" + id, {method: "DELETE"}).then(function (r) { return r.json(); })

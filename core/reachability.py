@@ -126,6 +126,13 @@ def _loop(db_path):
                 pass
             if enabled:
                 _sweep(db_path)
+                # 설비 오프라인 오탐 주기적 해소: MAC 테이블에 살아있으면 online 복원
+                # (스캔 없이도 관제의 '설비 연결 실패'가 스스로 정리됨)
+                try:
+                    from . import facility
+                    facility.reconcile_online_by_mac(db_path)
+                except Exception:
+                    pass
         except Exception as e:
             utils.log_event("error", "reachability_loop_error", error=str(e))
         for _ in range(interval):

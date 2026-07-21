@@ -60,6 +60,24 @@ def test_mac_alive_keeps_online_when_arp_missing(temp_db, monkeypatch):
     assert not offs
 
 
+def test_reconcile_online_by_mac(temp_db, monkeypatch):
+    """오프라인 설비의 MAC이 스위치 MAC 테이블에 살아있으면 주기 재조정에서 online 복원."""
+    from core import facility
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.8.0.0/24", "ip": "10.8.0.9", "mac": "CC:DD:EE:00:00:09",
+         "switch_name": "SW", "port": "Gi1/0/9", "direct": 1, "online": 0},
+        {"subnet": "10.8.0.0/24", "ip": "10.8.0.10", "mac": "CC:DD:EE:00:00:10",
+         "switch_name": "SW", "port": "Gi1/0/10", "direct": 1, "online": 0}])
+    # 9번 MAC만 스위치 MAC 테이블에 살아있음
+    monkeypatch.setattr(db, "get_mac_to_switchport",
+                        lambda dbp: {"cc:dd:ee:00:00:09": [(1, "SW", "Gi1/0/9")]})
+    n = facility.reconcile_online_by_mac(temp_db)
+    assert n == 1
+    hosts = {h["ip"]: h for h in db.get_facility_hosts(temp_db)}
+    assert hosts["10.8.0.9"]["online"] == 1     # MAC 살아있음 → 복원
+    assert hosts["10.8.0.10"]["online"] == 0    # MAC 없음 → 유지
+
+
 def test_mac_gone_marks_offline(temp_db, monkeypatch):
     """MAC 테이블에도 없고 ARP에도 없으면 오프라인(정상 감지 유지)."""
     from core import facility

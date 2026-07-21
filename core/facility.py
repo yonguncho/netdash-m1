@@ -715,6 +715,54 @@ def _apply_scan(db_path, subnet, by_ip):
     return len(merged), new_cnt, off_cnt
 
 
+def reconcile_online_by_mac(db_path):
+    """오프라인 설비 중 그 MAC이 스위치 MAC 테이블(최신 스냅샷)에 살아 있으면 online 복원.
+
+    설비 online/offline은 대역 스캔 때만 갱신돼, 스캔을 안 하면 '연결 실패'가 계속 남는다.
+    도달성 감시(60초 주기)에서 이 함수를 호출하면, ping/ARP 없이도 스위치 MAC 테이블만
+    대조해 '실제로 포트에 살아있는' 설비의 오프라인 오탐을 주기적으로 해소한다.
+    스위치 재수집으로 MAC 테이블이 갱신될수록 정확해진다. 반환: 복원한 설비 수.
+    """
+    try:
+        mac_alive = set(db.get_mac_to_switchport(db_path).keys())
+    except Exception:
+        return 0
+    if not mac_alive:
+        return 0
+    restored = 0
+    try:
+        hosts = db.get_facility_hosts(db_path)
+    except Exception:
+        return 0
+    changed_by_subnet = {}
+    for h in hosts:
+        if h.get("online"):
+            continue
+        mac = (h.get("mac") or "").lower()
+        if mac and mac in mac_alive:
+            changed_by_subnet.setdefault(h.get("subnet"), []).append(h)
+    for subnet, items in changed_by_subnet.items():
+        # 해당 대역 전체를 다시 저장하되 대상 호스트만 online=1로
+        try:
+            allh = [dict(x) for x in hosts if x.get("subnet") == subnet]
+            ids = {id(x): x for x in items}
+            for x in allh:
+                if any(x.get("ip") == it.get("ip") for it in items):
+                    x["online"] = 1
+            db.clear_facility_subnet(db_path, subnet)
+            db.save_facility_hosts(db_path, allh)
+            for it in items:
+                restored += 1
+                db.save_device_event(db_path, "device_online", "info", subnet=subnet,
+                                     ip=it.get("ip"), mac=it.get("mac"),
+                                     message="설비 복구(MAC 테이블 확인): " + (it.get("ip") or ""))
+        except Exception as e:
+            utils.log_event("warning", "facility_reconcile_skip", subnet=subnet, error=str(e))
+    if restored:
+        utils.log_event("info", "facility_reconciled_online", restored=restored)
+    return restored
+
+
 _EXPORT_COLS = ["대역", "IP", "MAC", "연결 스위치", "포트", "포트 설명", "직접연결", "그 외 관측", "상태"]
 
 
