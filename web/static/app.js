@@ -2349,19 +2349,28 @@ function _renderEditor() {
   var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
     " viewBox='0 0 " + W + " " + H + "' preserveAspectRatio='xMidYMid meet'" +
     " style='display:block;background:#0f172a;cursor:grab'>"];
-  // 연결선 — 포트 라벨을 각 끝점 소속으로 나눠 표시(스위치 포트는 스위치 쪽, 방화벽 포트는 방화벽 쪽)
+  // 연결선 — 포트 라벨은 평소 숨김, 선에 마우스 올리면 툴팁으로 표시.
+  // 같은 두 장비 사이 여러 선은 살짝 곡선으로 벌려 겹침 방지.
+  var pairSeen = {};
   _tdiag.edges.forEach(function (e) {
     var a = _tNode(e.a), b = _tNode(e.b);
     if (!a || !b) return;
-    svg.push("<line x1='" + a.x + "' y1='" + a.y + "' x2='" + b.x + "' y2='" + b.y +
-      "' stroke='#22c55e' stroke-width='2'/>");
+    var pk = [e.a, e.b].sort().join("|");
+    var k = (pairSeen[pk] = (pairSeen[pk] || 0) + 1) - 1;   // 0,1,2.. 같은 쌍의 몇 번째 선
+    var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
     var dx = b.x - a.x, dy = b.y - a.y, len = Math.sqrt(dx * dx + dy * dy) || 1;
-    if (e.a_port) svg.push("<text x='" + (a.x + dx / len * 44) + "' y='" + (a.y + dy / len * 44 - 4) +
-      "' fill='#93c5fd' font-size='10' text-anchor='middle'>" + escHtml(e.a_port) + "</text>");
-    if (e.b_port) svg.push("<text x='" + (b.x - dx / len * 44) + "' y='" + (b.y - dy / len * 44 - 4) +
-      "' fill='#93c5fd' font-size='10' text-anchor='middle'>" + escHtml(e.b_port) + "</text>");
-    if (!e.a_port && !e.b_port && e.note) svg.push("<text x='" + ((a.x + b.x) / 2) + "' y='" + ((a.y + b.y) / 2 - 4) +
-      "' fill='#64748b' font-size='10' text-anchor='middle'>" + escHtml(e.note) + "</text>");
+    var off = (k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 22);  // 곡선 오프셋
+    var cx = mx + (-dy / len) * off, cy = my + (dx / len) * off;
+    var path = "M" + a.x + " " + a.y + " Q " + cx + " " + cy + " " + b.x + " " + b.y;
+    // 포트 툴팁 텍스트(양쪽 소속 명시)
+    var tipParts = [];
+    if (e.a_port) tipParts.push((a.name || "A") + ": " + e.a_port);
+    if (e.b_port) tipParts.push((b.name || "B") + ": " + e.b_port);
+    var tip = tipParts.length ? tipParts.join("  ↔  ") : (e.note || "포트 미확인");
+    svg.push("<path d='" + path + "' fill='none' stroke='#22c55e' stroke-width='2'/>");
+    // 넓은 투명 히트 영역(가는 선도 쉽게 호버) + data-tip
+    svg.push("<path d='" + path + "' fill='none' stroke='transparent' stroke-width='14'" +
+      " data-tip=\"" + escHtml(tip) + "\" style='cursor:help'/>");
   });
   // 노드
   _tdiag.nodes.forEach(function (n) {
@@ -2404,8 +2413,8 @@ function _renderEditor() {
 function _tBindEditor(host, W, H) {
   var svgEl = host.querySelector("#topo-svg");
   if (!svgEl) return;
-  // 줌/팬 재사용(보기 전용에서도 이동/확대는 가능)
-  _topoWinClear(); _topoBindZoomPan(host, W, H);
+  // 줌/팬 재사용(보기 전용에서도 이동/확대는 가능) + 선 포트 툴팁(호버 시 표시)
+  _topoWinClear(); _topoBindZoomPan(host, W, H); _topoBindTips(host);
   // 연결 손잡이(🔗): 시작 노드 지정 → 다음 노드 클릭으로 완성
   host.querySelectorAll(".tlink-handle").forEach(function (h) {
     h.addEventListener("mousedown", function (e) { e.stopPropagation(); });
@@ -2450,18 +2459,28 @@ function _tBindEditor(host, W, H) {
 }
 
 function _tMakeEdge(a, b) {
-  if (_tdiag.edges.some(function (e) {
-    return (e.a === a && e.b === b) || (e.a === b && e.b === a); })) { _renderEditor(); return; }
+  // 같은 두 장비 사이 '두 번째 선'도 허용(물리 링크가 2개인 경우). 3개 이상은 방지.
+  var between = _tdiag.edges.filter(function (e) {
+    return (e.a === a && e.b === b) || (e.a === b && e.b === a); });
+  if (between.length >= 4) { _renderEditor(); return; }
+  var idx = between.length;              // 0=첫 선, 1=두 번째 선 → 멤버 포트 배정 인덱스
   var edge = { a: a, b: b, a_port: null, b_port: null };
   _tdiag.edges.push(edge); _renderEditor();
-  // 포트 자동 인식(양쪽 IP 있을 때)
+  // 포트 자동 인식(양쪽 IP 있을 때). 선의 방향(a,b)이 응답의 a/b와 다를 수 있어 IP로 매칭.
   var na = _tNode(a), nb = _tNode(b);
   if (na && nb && na.ip && nb.ip) {
     fetch("/api/topology/link-ports", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ a_ip: na.ip, b_ip: nb.ip }) })
       .then(function (r) { return r.json(); }).then(function (res) {
-        edge.a_port = res.a_port; edge.b_port = res.b_port;
-        if (!res.a_port && !res.b_port) edge.note = "포트 미확인";
+        // 물리 포트가 있으면 그 포트, Po면 멤버 목록에서 이 선 순번(idx)에 해당하는 물리 멤버
+        function pick(port, members) {
+          if (port) return port;
+          if (members && members.length) return members[idx] || members[members.length - 1];
+          return null;
+        }
+        edge.a_port = pick(res.a_port, res.a_members);
+        edge.b_port = pick(res.b_port, res.b_members);
+        if (!edge.a_port && !edge.b_port) edge.note = "포트 미확인";
         _renderEditor();
       }).catch(function () {});
   }

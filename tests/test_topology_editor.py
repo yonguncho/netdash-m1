@@ -109,8 +109,31 @@ def test_resolve_link_ports_firewall_side(temp_db):
     conn.commit(); conn.close()
     # a=스위치, b=방화벽
     res = topology.resolve_link_ports(temp_db, "10.0.0.1", "10.0.0.254")
-    assert res["a_port"] == "Gi1/0/1"      # 스위치 쪽 = 물리 포트
+    assert res["a_port"] == "Gi1/0/1"      # 스위치 쪽 = 물리 포트(Po 아님)
+    assert res["a_members"] is None        # 물리 직결 → 멤버 목록 없음
     assert res["b_port"] == "eth1/1"       # 방화벽 쪽 = 인터페이스(상대 IP 포함 세그먼트)
+
+
+def test_resolve_link_ports_portchannel_members(temp_db):
+    """Po로만 학습되면 물리 멤버 목록 반환(선 개수만큼 각 멤버 배정용)."""
+    import sqlite3
+    a = db.import_switches_bulk(temp_db, [{"name": "A", "ip": "10.0.0.1",
+        "vendor": "cisco_ios"}])[0]
+    b = db.import_switches_bulk(temp_db, [{"name": "B", "ip": "10.0.0.2",
+        "vendor": "cisco_ios"}])[0]
+    snap = db.save_snapshot(temp_db, a, 1)
+    conn = sqlite3.connect(str(temp_db))
+    conn.execute("INSERT INTO arp_entries (snapshot_id, switch_id, ip, mac) VALUES (?,?,?,?)",
+                 (snap, a, "10.0.0.2", "DD:DD:DD:DD:DD:DD"))
+    # B가 A의 Po1로만 학습(물리 포트 아님)
+    conn.execute("INSERT INTO mac_entries (snapshot_id, switch_id, vlan, mac, port) "
+                 "VALUES (?,?,?,?,?)", (snap, a, 1, "DD:DD:DD:DD:DD:DD", "Po1"))
+    conn.execute("INSERT INTO port_channels (snapshot_id, switch_id, port_channel, members) "
+                 "VALUES (?,?,?,?)", (snap, a, "Po1", "Gi1/0/1,Gi1/0/2"))
+    conn.commit(); conn.close()
+    res = topology.resolve_link_ports(temp_db, "10.0.0.1", "10.0.0.2")
+    assert res["a_port"] is None
+    assert res["a_members"] == ["Gi1/0/1", "Gi1/0/2"]   # 선1→Gi1/0/1, 선2→Gi1/0/2
 
 
 def test_diagram_save_load(tmp_path, monkeypatch):

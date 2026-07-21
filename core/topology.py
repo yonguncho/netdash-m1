@@ -750,9 +750,14 @@ def resolve_link_ports(db_path, a_ip, b_ip):
     pc_map = db.get_port_channel_members(db_path)
 
     def _port_on(switch_dev, target_macs):
-        """switch_dev(스위치) 위에서 target_macs가 보이는 물리 포트(가장 구체적)."""
+        """switch_dev(스위치) 위에서 target_macs가 보이는 포트.
+
+        반환: {"port": 물리포트|None, "members": [Po 물리멤버]|None}.
+        - 물리 포트로 학습되면 그 포트(members=None).
+        - Po(집합)로만 학습되면 members에 물리 멤버 목록(호출부가 선 개수만큼 배정).
+        """
         if not switch_dev or switch_dev.get("kind") != "sw":
-            return None
+            return {"port": None, "members": None}
         sid = switch_dev["id"]
         best = None
         for tm in target_macs:
@@ -766,15 +771,14 @@ def resolve_link_ports(db_path, a_ip, b_ip):
                 if best is None or score < best[0]:
                     best = (score, port)
         if not best:
-            return None
+            return {"port": None, "members": None}
         port = best[1]
-        # Po면 물리 멤버로 치환
         pl = (port or "").lower()
         if pl.startswith(("po", "port-channel")):
             members = pc_map.get((sid, pl))
-            if members:
-                port = "%s (%s)" % (", ".join(members), port)
-        return port
+            # Po로만 학습 → 물리 멤버 목록 반환(선 1개=멤버1, 선 2개=멤버2...)
+            return {"port": None, "members": list(members) if members else [port]}
+        return {"port": port, "members": None}
 
     def _fw_port(fw_dev, peer_ip):
         """방화벽 쪽 포트: 상대 IP를 포함하는 인터페이스(subnet) 이름을 반환."""
@@ -803,7 +807,10 @@ def resolve_link_ports(db_path, a_ip, b_ip):
         return None
 
     # 각 끝점의 포트를 그 끝점 소속으로 정확히 배정(스위치=MAC 관측 포트, 방화벽=인터페이스)
-    a_port = _port_on(a, b_macs) or _fw_port(a, b_ip)
-    b_port = _port_on(b, a_macs) or _fw_port(b, a_ip)
-    method = "mac" if (a_port or b_port) else "none"
-    return {"a_port": a_port, "b_port": b_port, "method": method}
+    a_res = _port_on(a, b_macs)
+    b_res = _port_on(b, a_macs)
+    a_port = a_res["port"] or _fw_port(a, b_ip)
+    b_port = b_res["port"] or _fw_port(b, a_ip)
+    method = "mac" if (a_port or b_port or a_res["members"] or b_res["members"]) else "none"
+    return {"a_port": a_port, "a_members": a_res["members"],
+            "b_port": b_port, "b_members": b_res["members"], "method": method}
