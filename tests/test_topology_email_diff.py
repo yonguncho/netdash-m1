@@ -295,6 +295,10 @@ def test_topology_editor_ui():
     assert "/api/topology/subnet-suggest" in js  # 대역 자동 제안
     assert "/api/topology/diagram" in js     # 저장/로드
     assert "_renderChips" in js              # 대역 칩(자동+수동) 편집
+    # 장비별 전용 아이콘(인터넷/AP/PC 포함) + 팔레트 종류
+    assert '"AP"' in js and '"PC"' in js and '"인터넷"' in js  # _deviceSymbol 분기
+    assert "ap:" in js and "pc:" in js       # _TOPO_KIND에 AP/PC 종류
+    assert 'value="ap"' in html and 'value="pc"' in html  # 편집 모달 종류
     # 화면 맞춤 유지
     assert "svgEl._fit" in js and 'id="btn-topo-fit"' in html
 

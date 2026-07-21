@@ -2281,15 +2281,18 @@ var _tLinkFrom = null;                    // 연결 첫 노드
 var _tEditId = null;                      // 편집 중 노드 id
 var _tSeq = 1;
 
+// 각 장비 종류 → 전용 SVG 심볼(_deviceSymbol) + 색 + 팔레트 라벨
 var _TOPO_KIND = {
-  internet: { sym: null, color: "#0ea5e9", label: "🌐" },
-  internet_fw: { sym: "방화벽", color: "#ef4444" },
-  firewall: { sym: "방화벽", color: "#ef4444" },
-  backbone: { sym: "백본", color: "#a855f7" },
-  l3: { sym: "L3", color: "#8b5cf6" },
-  l4: { sym: "L4", color: "#f59e0b" },
-  l2: { sym: "L2", color: "#14b8a6" },
-  server: { sym: null, color: "#3b82f6", label: "🖥" },
+  internet: { sym: "인터넷", color: "#0ea5e9", pal: "인터넷" },
+  internet_fw: { sym: "방화벽", color: "#ef4444", pal: "인터넷 방화벽" },
+  firewall: { sym: "방화벽", color: "#ef4444", pal: "방화벽" },
+  backbone: { sym: "백본", color: "#a855f7", pal: "백본" },
+  l3: { sym: "L3", color: "#8b5cf6", pal: "L3 스위치" },
+  l4: { sym: "L4", color: "#f59e0b", pal: "L4 스위치" },
+  l2: { sym: "L2", color: "#14b8a6", pal: "L2 스위치" },
+  ap: { sym: "AP", color: "#22c55e", pal: "AP (무선)" },
+  server: { sym: "서버", color: "#3b82f6", pal: "서버" },
+  pc: { sym: "PC", color: "#94a3b8", pal: "PC" },
 };
 
 function loadTopology() {
@@ -2311,21 +2314,25 @@ function _buildPalette() {
   var pal = document.getElementById("topo-palette");
   if (!pal || pal.dataset.built) return;
   pal.dataset.built = "1";
-  var items = [["internet", "🌐 인터넷"], ["internet_fw", "🔥 인터넷FW"], ["firewall", "🔥 방화벽"],
-    ["backbone", "⬛ 백본"], ["l3", "🟪 L3"], ["l4", "🟧 L4"], ["l2", "⬜ L2"], ["server", "🖥 서버"]];
-  items.forEach(function (it) {
+  // 실제 장비 아이콘(_deviceSymbol) 미리보기 + 라벨
+  var order = ["internet", "internet_fw", "firewall", "backbone", "l3", "l4", "l2", "ap", "server", "pc"];
+  order.forEach(function (kind) {
+    var meta = _TOPO_KIND[kind];
     var b = document.createElement("button");
     b.className = "btn btn--secondary";
-    b.style.cssText = "display:block;width:100%;font-size:12px;margin-bottom:5px;text-align:left";
-    b.textContent = it[1];
-    b.addEventListener("click", function () { _addNode(it[0]); });
+    b.style.cssText = "display:flex;align-items:center;gap:6px;width:100%;font-size:11px;margin-bottom:5px;text-align:left;padding:4px 6px";
+    // 34x34 아이콘을 22px로 축소 표시
+    b.innerHTML = "<svg width='22' height='22' viewBox='0 0 34 34' style='flex-shrink:0'>" +
+      _deviceSymbol(meta.sym, 0, 0, meta.color) + "</svg><span>" + escHtml(meta.pal) + "</span>";
+    b.addEventListener("click", function () { _addNode(kind); });
     pal.appendChild(b);
   });
 }
 
 function _addNode(kind) {
   var id = "n" + (_tSeq++);
-  _tdiag.nodes.push({ id: id, kind: kind, ip: "", name: _TOPO_KIND[kind] ? kind : kind,
+  var meta = _TOPO_KIND[kind] || _TOPO_KIND.l2;
+  _tdiag.nodes.push({ id: id, kind: kind, ip: "", name: meta.pal || kind,
     x: 260 + (_tdiag.nodes.length % 5) * 40, y: 120 + (_tdiag.nodes.length % 4) * 40, subnets: [] });
   _renderEditor();
   _openNodeModal(id);
@@ -2357,10 +2364,7 @@ function _renderEditor() {
     var hl = (_tLinkFrom === n.id) ? "<circle cx='" + n.x + "' cy='" + n.y + "' r='26' fill='none' stroke='#38bdf8' stroke-width='2'/>" : "";
     svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tLinkMode ? "pointer" : "move") + "'>");
     svg.push(hl);
-    if (meta.sym) svg.push(_deviceSymbol(meta.sym, n.x - 17, n.y - 17, color));
-    else svg.push("<circle cx='" + n.x + "' cy='" + n.y + "' r='16' fill='" + color +
-      "' fill-opacity='0.18' stroke='" + color + "' stroke-width='1.8'/>" +
-      "<text x='" + n.x + "' y='" + (n.y + 5) + "' font-size='14' text-anchor='middle'>" + (meta.label || "") + "</text>");
+    svg.push(_deviceSymbol(meta.sym, n.x - 17, n.y - 17, color));   // 종류별 전용 아이콘
     svg.push("<text x='" + n.x + "' y='" + (n.y + 32) + "' fill='#e2e8f0' font-size='12' text-anchor='middle'>" +
       escHtml(n.name || "") + "</text>");
     if (n.ip) svg.push("<text x='" + n.x + "' y='" + (n.y + 45) + "' fill='#64748b' font-size='10' text-anchor='middle'>" + escHtml(n.ip) + "</text>");
@@ -2489,6 +2493,8 @@ function _renderChips() {
         if (d.kind === "fw") ks.value = "firewall";
         else if (d.kind === "srv") ks.value = "server";
         else if (dt.indexOf("backbone") >= 0 || dt.indexOf("core") >= 0) ks.value = "backbone";
+        else if (dt === "ap" || dt.indexOf("access point") >= 0) ks.value = "ap";
+        else if (dt === "pc" || dt.indexOf("tablet") >= 0) ks.value = "pc";
         else if (d.l3_class === "L3" || dt.indexOf("l3") >= 0) ks.value = "l3";
         else if (dt.indexOf("l4") >= 0) ks.value = "l4";
         else ks.value = "l2";
@@ -2741,6 +2747,19 @@ function _deviceSymbol(label, x, y, color) {
       g += "<rect x='10' y='" + (6 + i * 8) + "' width='14' height='5' rx='1' fill='none' stroke='" + color + "' stroke-width='1.2'/>";
       g += "<circle cx='12' cy='" + (8.5 + i * 8) + "' r='1' fill='" + color + "'/>";
     }
+  } else if (label === "인터넷") {
+    // 클라우드(인터넷)
+    g += "<path d='M9 24 a7 7 0 0 1 0 -14 a9 9 0 0 1 17 2 a5 5 0 0 1 -1 12 z" + f + "/>";
+  } else if (label === "AP") {
+    // 무선 AP — 본체 + 전파(호)
+    g += "<rect x='9' y='18' width='16' height='10' rx='2" + f + "/>";
+    g += "<circle cx='17' cy='23' r='1.6' fill='" + color + "'/>";
+    g += "<path d='M11 12 a8 8 0 0 1 12 0 M13.5 15 a4.5 4.5 0 0 1 7 0' stroke='" + color + "' stroke-width='1.5' fill='none'/>";
+  } else if (label === "PC") {
+    // 데스크톱 — 모니터 + 받침
+    g += "<rect x='5' y='6' width='24' height='16' rx='2" + f + "/>";
+    g += "<rect x='8' y='9' width='18' height='10' rx='1' fill='none' stroke='" + color + "' stroke-width='1' stroke-opacity='0.6'/>";
+    g += "<path d='M14 22 v4 M20 22 v4 M11 30 h12' stroke='" + color + "' stroke-width='1.6' fill='none'/>";
   } else {
     // L2 스위치 — 납작 입체 박스 + 양방향 화살표(⇄) + 포트
     g += "<path d='M3 13 l14 -6 l14 6 l-14 6 z" + f + "/>";
