@@ -67,6 +67,52 @@ def test_resolve_link_ports(temp_db):
     assert res["method"] == "mac"
 
 
+def test_serverroom_devices_prefilled(temp_db):
+    """'서버실 현황 불러오기': 등록 장비를 정보 채운 노드로 반환(L2 포함, VM 제외)."""
+    l3 = db.import_switches_bulk(temp_db, [{"name": "CORE", "ip": "10.0.0.1",
+        "vendor": "cisco_ios", "location": "A01U40"}])[0]
+    db.save_config_backup(temp_db, l3, _L3_CFG)
+    db.import_switches_bulk(temp_db, [{"name": "ACC", "ip": "10.0.0.2",
+        "vendor": "cisco_ios", "location": "A01U10"}])       # L2, config 없음
+    db.import_switches_bulk(temp_db, [{"name": "REMOTE", "ip": "10.0.0.3",
+        "vendor": "cisco_ios", "location": "3층"}])          # 서버실 아님
+    db.save_firewall(temp_db, "FW", "paloalto", "10.0.0.254", location="A01U42")
+    db.save_server(temp_db, "PHY", "10.0.0.20", location="A01U5", is_vm=0)
+    db.save_server(temp_db, "VM", "10.0.0.21", location="A01U6", is_vm=1)
+
+    out = topology.serverroom_devices(temp_db)
+    by = {n["name"]: n for n in out["nodes"]}
+    assert by["CORE"]["kind"] == "l3"          # config L3 판정
+    assert {s["cidr"] for s in by["CORE"]["subnets"]} >= {"10.0.10.0/24"}
+    assert by["ACC"]["kind"] == "l2"           # L2도 포함(사용자가 배치)
+    assert by["FW"]["kind"] == "firewall"
+    assert by["PHY"]["kind"] == "server"
+    assert "REMOTE" not in by                   # 서버실 밖 제외
+    assert "VM" not in by                       # VM 제외
+
+
+def test_resolve_link_ports_firewall_side(temp_db):
+    """방화벽↔스위치 연결: 스위치 포트는 스위치 쪽, 방화벽 포트는 방화벽 인터페이스."""
+    import sqlite3
+    sw = db.import_switches_bulk(temp_db, [{"name": "SW", "ip": "10.0.0.1",
+        "vendor": "cisco_ios"}])[0]
+    fw = db.save_firewall(temp_db, "FW", "paloalto", "10.0.0.254")
+    db.save_firewall_interfaces(temp_db, fw, [
+        {"name": "eth1/1", "ip": "10.0.0.254", "mask": "24"}])
+    snap = db.save_snapshot(temp_db, sw, 1)
+    conn = sqlite3.connect(str(temp_db))
+    # 방화벽 IP의 MAC이 SW의 Gi1/0/1에 보임
+    conn.execute("INSERT INTO arp_entries (snapshot_id, switch_id, ip, mac) VALUES (?,?,?,?)",
+                 (snap, sw, "10.0.0.254", "CC:CC:CC:CC:CC:CC"))
+    conn.execute("INSERT INTO mac_entries (snapshot_id, switch_id, vlan, mac, port) "
+                 "VALUES (?,?,?,?,?)", (snap, sw, 1, "CC:CC:CC:CC:CC:CC", "Gi1/0/1"))
+    conn.commit(); conn.close()
+    # a=스위치, b=방화벽
+    res = topology.resolve_link_ports(temp_db, "10.0.0.1", "10.0.0.254")
+    assert res["a_port"] == "Gi1/0/1"      # 스위치 쪽 = 물리 포트
+    assert res["b_port"] == "eth1/1"       # 방화벽 쪽 = 인터페이스(상대 IP 포함 세그먼트)
+
+
 def test_diagram_save_load(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import app as app_module

@@ -2276,15 +2276,14 @@ function _isCoreDevice(n) {
 // ═══ 하이브리드 토폴로지 편집기 (v4.4) ═══════════════════════════
 // 사람이 배치(팔레트 드래그·연결) + 툴이 정보 자동 채움(IP→hostname, 선→포트).
 var _tdiag = { nodes: [], edges: [] };   // {nodes:[{id,kind,ip,name,x,y,subnets,...}], edges}
-var _tLinkMode = false;                   // 연결 모드
-var _tLinkFrom = null;                    // 연결 첫 노드
+var _tEditMode = false;                   // 편집 모드(끄면 보기 전용 — 실수 클릭 방지)
+var _tLinkFrom = null;                    // 연결 시작 노드(🔗 손잡이 클릭)
 var _tEditId = null;                      // 편집 중 노드 id
 var _tSeq = 1;
 
 // 각 장비 종류 → 전용 SVG 심볼(_deviceSymbol) + 색 + 팔레트 라벨
 var _TOPO_KIND = {
-  internet: { sym: "인터넷", color: "#0ea5e9", pal: "인터넷" },
-  internet_fw: { sym: "방화벽", color: "#ef4444", pal: "인터넷 방화벽" },
+  internet: { sym: "인터넷", color: "#0ea5e9", pal: "인터넷", noinfo: true },
   firewall: { sym: "방화벽", color: "#ef4444", pal: "방화벽" },
   backbone: { sym: "백본", color: "#a855f7", pal: "백본" },
   l3: { sym: "L3", color: "#8b5cf6", pal: "L3 스위치" },
@@ -2315,7 +2314,7 @@ function _buildPalette() {
   if (!pal || pal.dataset.built) return;
   pal.dataset.built = "1";
   // 실제 장비 아이콘(_deviceSymbol) 미리보기 + 라벨
-  var order = ["internet", "internet_fw", "firewall", "backbone", "l3", "l4", "l2", "ap", "server", "pc"];
+  var order = ["internet", "firewall", "backbone", "l3", "l4", "l2", "ap", "server", "pc"];
   order.forEach(function (kind) {
     var meta = _TOPO_KIND[kind];
     var b = document.createElement("button");
@@ -2330,12 +2329,13 @@ function _buildPalette() {
 }
 
 function _addNode(kind) {
+  if (!_tEditMode) { alert("먼저 '✏️ 편집 모드'를 켜세요."); return; }
   var id = "n" + (_tSeq++);
   var meta = _TOPO_KIND[kind] || _TOPO_KIND.l2;
-  _tdiag.nodes.push({ id: id, kind: kind, ip: "", name: meta.pal || kind,
+  _tdiag.nodes.push({ id: id, kind: kind, ip: "", name: kind === "internet" ? "Internet" : (meta.pal || kind),
     x: 260 + (_tdiag.nodes.length % 5) * 40, y: 120 + (_tdiag.nodes.length % 4) * 40, subnets: [] });
   _renderEditor();
-  _openNodeModal(id);
+  if (!meta.noinfo) _openNodeModal(id);   // 인터넷은 정보 입력 불필요 → 모달 안 열음
 }
 
 function _tNode(id) { return _tdiag.nodes.find(function (n) { return n.id === id; }); }
@@ -2346,25 +2346,35 @@ function _renderEditor() {
   var W = 1600, H = 1000;
   var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
     " viewBox='0 0 " + W + " " + H + "' preserveAspectRatio='xMidYMid meet'" +
-    " style='display:block;background:#0f172a;cursor:" + (_tLinkMode ? "crosshair" : "grab") + "'>"];
-  // 연결선
+    " style='display:block;background:#0f172a;cursor:grab'>"];
+  // 연결선 — 포트 라벨을 각 끝점 소속으로 나눠 표시(스위치 포트는 스위치 쪽, 방화벽 포트는 방화벽 쪽)
   _tdiag.edges.forEach(function (e) {
     var a = _tNode(e.a), b = _tNode(e.b);
     if (!a || !b) return;
-    var port = [e.a_port, e.b_port].filter(Boolean).join(" ↔ ");
     svg.push("<line x1='" + a.x + "' y1='" + a.y + "' x2='" + b.x + "' y2='" + b.y +
       "' stroke='#22c55e' stroke-width='2'/>");
-    if (port) svg.push("<text x='" + ((a.x + b.x) / 2) + "' y='" + ((a.y + b.y) / 2 - 4) +
-      "' fill='#94a3b8' font-size='11' text-anchor='middle'>" + escHtml(port) + "</text>");
+    var dx = b.x - a.x, dy = b.y - a.y, len = Math.sqrt(dx * dx + dy * dy) || 1;
+    if (e.a_port) svg.push("<text x='" + (a.x + dx / len * 44) + "' y='" + (a.y + dy / len * 44 - 4) +
+      "' fill='#93c5fd' font-size='10' text-anchor='middle'>" + escHtml(e.a_port) + "</text>");
+    if (e.b_port) svg.push("<text x='" + (b.x - dx / len * 44) + "' y='" + (b.y - dy / len * 44 - 4) +
+      "' fill='#93c5fd' font-size='10' text-anchor='middle'>" + escHtml(e.b_port) + "</text>");
+    if (!e.a_port && !e.b_port && e.note) svg.push("<text x='" + ((a.x + b.x) / 2) + "' y='" + ((a.y + b.y) / 2 - 4) +
+      "' fill='#64748b' font-size='10' text-anchor='middle'>" + escHtml(e.note) + "</text>");
   });
   // 노드
   _tdiag.nodes.forEach(function (n) {
     var meta = _TOPO_KIND[n.kind] || _TOPO_KIND.l2;
     var color = (n.reachable === false || n.status === "failed") ? "#ef4444" : meta.color;
     var hl = (_tLinkFrom === n.id) ? "<circle cx='" + n.x + "' cy='" + n.y + "' r='26' fill='none' stroke='#38bdf8' stroke-width='2'/>" : "";
-    svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tLinkMode ? "pointer" : "move") + "'>");
+    svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tEditMode ? "move" : "default") + "'>");
     svg.push(hl);
     svg.push(_deviceSymbol(meta.sym, n.x - 17, n.y - 17, color));   // 종류별 전용 아이콘
+    // 편집 모드: 연결 손잡이(🔗) — 누른 뒤 상대 장비 클릭 시 선 연결
+    if (_tEditMode) {
+      svg.push("<g class='tlink-handle' data-id='" + escHtml(n.id) + "' style='cursor:crosshair'>" +
+        "<circle cx='" + (n.x + 16) + "' cy='" + (n.y - 16) + "' r='8' fill='#0f172a' stroke='#38bdf8' stroke-width='1.5'/>" +
+        "<text x='" + (n.x + 16) + "' y='" + (n.y - 12) + "' font-size='9' text-anchor='middle'>🔗</text></g>");
+    }
     svg.push("<text x='" + n.x + "' y='" + (n.y + 32) + "' fill='#e2e8f0' font-size='12' text-anchor='middle'>" +
       escHtml(n.name || "") + "</text>");
     if (n.ip) svg.push("<text x='" + n.x + "' y='" + (n.y + 45) + "' fill='#64748b' font-size='10' text-anchor='middle'>" + escHtml(n.ip) + "</text>");
@@ -2391,21 +2401,30 @@ function _renderEditor() {
 function _tBindEditor(host, W, H) {
   var svgEl = host.querySelector("#topo-svg");
   if (!svgEl) return;
-  // 줌/팬 재사용
+  // 줌/팬 재사용(보기 전용에서도 이동/확대는 가능)
   _topoWinClear(); _topoBindZoomPan(host, W, H);
+  // 연결 손잡이(🔗): 시작 노드 지정 → 다음 노드 클릭으로 완성
+  host.querySelectorAll(".tlink-handle").forEach(function (h) {
+    h.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    h.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var id = h.getAttribute("data-id");
+      _tLinkFrom = (_tLinkFrom === id) ? null : id;   // 다시 누르면 취소
+      _renderEditor();
+    });
+  });
   host.querySelectorAll(".tnode").forEach(function (g) {
     var id = g.getAttribute("data-id");
-    // 연결 모드: 클릭으로 두 노드 선택
+    // 연결 대기 중이면: 노드 클릭 = 연결 완성
     g.addEventListener("click", function (e) {
-      if (!_tLinkMode) return;
+      if (!_tEditMode || !_tLinkFrom) return;
       e.stopPropagation();
-      if (!_tLinkFrom) { _tLinkFrom = id; _renderEditor(); return; }
-      if (_tLinkFrom === id) { _tLinkFrom = null; _renderEditor(); return; }
-      _tMakeEdge(_tLinkFrom, id); _tLinkFrom = null;
+      if (_tLinkFrom !== id) _tMakeEdge(_tLinkFrom, id);
+      _tLinkFrom = null; _renderEditor();
     });
-    // 드래그(배치)
+    // 드래그 이동 / 클릭 편집 — 편집 모드에서만
     g.addEventListener("mousedown", function (e) {
-      if (_tLinkMode) return;
+      if (!_tEditMode || _tLinkFrom) return;   // 보기 전용이거나 연결 대기 중이면 무시
       e.stopPropagation();
       var n = _tNode(id); if (!n) return;
       var vb = svgEl._vb || { w: W, h: H };
@@ -2419,7 +2438,7 @@ function _tBindEditor(host, W, H) {
       }
       function mu() {
         window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
-        if (!moved) _openNodeModal(id);   // 클릭(이동 없음) = 편집 열기
+        if (!moved) _openNodeModal(id);   // 이동 없이 클릭 = 편집 모달
       }
       window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
     });
@@ -2723,17 +2742,19 @@ function _deviceSymbol(label, x, y, color) {
     g += "<line x1='12' y1='20' x2='12' y2='28' stroke='" + color + "' stroke-width='1.4'/>";
     g += "<line x1='22' y1='20' x2='22' y2='28' stroke='" + color + "' stroke-width='1.4'/>";
   } else if (label === "백본") {
-    // 라우터(원통) — 상단 타원 + 몸통 + 사방 화살표(Cisco 라우터 관용 아이콘)
-    g += "<path d='M4 12 a13 4 0 0 0 26 0 v10 a13 4 0 0 1 -26 0 z" + f + "/>";
-    g += "<ellipse cx='17' cy='12' rx='13' ry='4" + f + "/>";
-    g += "<path d='M10 17 h14 M17 13 v10' stroke='" + color + "' stroke-width='1.5' fill='none'/>";
-    g += "<path d='M24 17 l-3 -2 M24 17 l-3 2 M10 17 l3 -2 M10 17 l3 2' stroke='" + color + "' stroke-width='1.4' fill='none'/>";
+    // Cisco 라우터 표준 — 원형 퍽 + 사방 화살표(상하좌우 in/out)
+    g += "<circle cx='17' cy='17' r='13" + f + "/>";
+    g += "<path d='M17 7 v20 M7 17 h20' stroke='" + color + "' stroke-width='1.4' fill='none'/>";
+    // 화살촉(위·아래·좌·우) — 라우팅(사방 전달) 표현
+    g += "<path d='M17 7 l-3 4 M17 7 l3 4 M17 27 l-3 -4 M17 27 l3 -4" +
+      " M7 17 l4 -3 M7 17 l4 3 M27 17 l-4 -3 M27 17 l-4 3' stroke='" + color + "' stroke-width='1.4' fill='none'/>";
   } else if (label === "L3") {
-    // L3 스위치 — 입체 박스 + 사방 화살표(멀티레이어 스위치)
-    g += "<path d='M4 12 l13 -6 l13 6 l-13 6 z" + f + "/>";
-    g += "<path d='M4 12 v10 l13 6 v-10 z' fill='" + color + "' fill-opacity='0.1' stroke='" + color + "' stroke-width='1.6'/>";
-    g += "<path d='M30 12 v10 l-13 6 v-10 z' fill='" + color + "' fill-opacity='0.22' stroke='" + color + "' stroke-width='1.6'/>";
-    g += "<path d='M17 3 v6 M11 12 h12 M17 3 l-2 3 M17 3 l2 3' stroke='#e2e8f0' stroke-width='1.4' fill='none'/>";
+    // Cisco L3 스위치 — 둥근 퍽(사각) + 상하 화살표(라우팅) + 좌우 화살표(스위칭)
+    g += "<rect x='3' y='9' width='28' height='16' rx='3" + f + "/>";
+    g += "<path d='M17 5 v6 M17 29 v-6 M17 5 l-2.5 3 M17 5 l2.5 3 M17 29 l-2.5 -3 M17 29 l2.5 -3'" +
+      " stroke='" + color + "' stroke-width='1.4' fill='none'/>";
+    g += "<path d='M9 14 h16 M9 20 h16 M9 14 l3 -2 M9 14 l3 2 M25 20 l-3 -2 M25 20 l-3 2'" +
+      " stroke='#e2e8f0' stroke-width='1.2' fill='none'/>";
   } else if (label === "L4") {
     // L4 로드밸런서 — 박스 + 분기 화살표
     g += "<path d='M4 12 l13 -6 l13 6 l-13 6 z" + f + "/>";
@@ -2761,11 +2782,11 @@ function _deviceSymbol(label, x, y, color) {
     g += "<rect x='8' y='9' width='18' height='10' rx='1' fill='none' stroke='" + color + "' stroke-width='1' stroke-opacity='0.6'/>";
     g += "<path d='M14 22 v4 M20 22 v4 M11 30 h12' stroke='" + color + "' stroke-width='1.6' fill='none'/>";
   } else {
-    // L2 스위치 — 납작 입체 박스 + 양방향 화살표(⇄) + 포트
-    g += "<path d='M3 13 l14 -6 l14 6 l-14 6 z" + f + "/>";
-    g += "<path d='M3 13 v7 l14 6 v-7 z' fill='" + color + "' fill-opacity='0.1' stroke='" + color + "' stroke-width='1.6'/>";
-    g += "<path d='M31 13 v7 l-14 6 v-7 z' fill='" + color + "' fill-opacity='0.22' stroke='" + color + "' stroke-width='1.6'/>";
-    g += "<path d='M11 12 h12 M11 12 l2 -2 M11 12 l2 2 M23 15 l-2 -2 M23 15 l-2 2 M11 15 h12' stroke='#e2e8f0' stroke-width='1.2' fill='none'/>";
+    // Cisco L2 스위치 표준 — 둥근 퍽(사각) + 4개 양방향 화살표(스위칭)
+    g += "<rect x='3' y='10' width='28' height='14' rx='3" + f + "/>";
+    g += "<path d='M8 14 h18 M8 20 h18' stroke='#e2e8f0' stroke-width='1.2' fill='none'/>";
+    g += "<path d='M8 14 l3 -2 M8 14 l3 2 M26 14 l-3 -2 M26 14 l-3 2" +
+      " M8 20 l3 -2 M8 20 l3 2 M26 20 l-3 -2 M26 20 l-3 2' stroke='#e2e8f0' stroke-width='1.2' fill='none'/>";
   }
   return g + "</g>";
 }
@@ -3967,13 +3988,13 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
     var svgEl = document.querySelector("#topo-svg");
     if (svgEl && svgEl._fit) svgEl._fit();
   });
-  // 연결 모드 토글
-  var link = document.getElementById("btn-topo-link");
-  if (link) link.addEventListener("click", function () {
-    _tLinkMode = !_tLinkMode; _tLinkFrom = null;
-    link.className = "btn " + (_tLinkMode ? "btn--primary" : "btn--secondary");
-    link.style.fontSize = "12px";
-    link.textContent = _tLinkMode ? "🔗 연결 모드 (켜짐 — 두 장비 클릭)" : "🔗 연결 모드";
+  // 편집 모드 토글(끄면 보기 전용 — 실수 클릭 방지)
+  var edit = document.getElementById("btn-topo-edit");
+  if (edit) edit.addEventListener("click", function () {
+    _tEditMode = !_tEditMode; _tLinkFrom = null;
+    edit.className = "btn " + (_tEditMode ? "btn--primary" : "btn--secondary");
+    edit.style.fontSize = "12px";
+    edit.textContent = _tEditMode ? "✏️ 편집 모드 (켜짐)" : "✏️ 편집 모드";
     _renderEditor();
   });
   // 저장
@@ -3985,29 +4006,25 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
         else alert(res.error || "저장 실패");
       }).catch(function () { alert("저장 오류"); });
   });
-  // 자동 초안 불러오기 — 서버실 트리를 편집기 노드/엣지로 변환해 캔버스에 배치
+  // 서버실 현황 불러오기 — 등록 장비를 정보 채운 아이콘으로 나열(종류별 행 배치)
   var draft = document.getElementById("btn-topo-draft");
   if (draft) draft.addEventListener("click", function () {
-    if (_tdiag.nodes.length && !confirm("현재 구성도를 자동 초안으로 덮어쓸까요? (저장 전이면 사라집니다)")) return;
-    fetch("/api/topology/draft").then(function (r) { return r.json(); }).then(function (d) {
-      var idmap = {}, nodes = [], TIER_Y = { 1: 120, 2: 300, 3: 500 };
-      var perTier = {};
-      (d.nodes || []).forEach(function (n) {
-        var role = n.role || "l3";
-        var tier = n.tier || 3;
-        perTier[tier] = (perTier[tier] || 0) + 1;
-        var nid = "n" + (_tSeq++); idmap[n.id] = nid;
-        nodes.push({ id: nid, kind: role, ip: n.ip || "", name: n.name || "",
-          x: 200 + perTier[tier] * 200, y: TIER_Y[tier] || 500,
-          reachable: n.reachable, status: n.status,
-          subnets: (n.subnets_vlan || []).map(function (s) {
-            return { vlan: s.vlan, cidr: s.cidr, source: "auto" }; }) });
+    if (_tdiag.nodes.length && !confirm("현재 구성도를 서버실 장비로 다시 채울까요? (저장 전이면 사라집니다)")) return;
+    fetch("/api/topology/serverroom").then(function (r) { return r.json(); }).then(function (d) {
+      // 종류별 행(y) + 순서(x)로 정렬 배치 → 사용자가 골라서 이동
+      var ROW = { internet: 0, firewall: 1, backbone: 2, l4: 3, l3: 4, l2: 5, ap: 6, server: 7, pc: 7 };
+      var cnt = {};
+      var nodes = (d.nodes || []).map(function (n) {
+        var kind = _TOPO_KIND[n.kind] ? n.kind : "l2";
+        var row = ROW[kind] || 5; cnt[row] = (cnt[row] || 0) + 1;
+        return { id: "n" + (_tSeq++), kind: kind, ip: n.ip || "", name: n.name || "",
+          x: 120 + cnt[row] * 175, y: 90 + row * 150,
+          reachable: n.reachable, status: n.status, subnets: n.subnets || [] };
       });
-      var edges = (d.links || []).filter(function (l) { return idmap[l.a] && idmap[l.b]; })
-        .map(function (l) { return { a: idmap[l.a], b: idmap[l.b], a_port: l.a_port, b_port: l.b_port }; });
-      _tdiag = { nodes: nodes, edges: edges };
+      _tdiag = { nodes: nodes, edges: [] };   // 링크는 편집 모드에서 직접 연결(포트 자동 인식)
       _renderEditor();
-    }).catch(function () { alert("초안 불러오기 오류"); });
+      if (!nodes.length) alert("서버실 현황(위치 A09U27 지정)에 등록된 장비가 없습니다.");
+    }).catch(function () { alert("서버실 현황 불러오기 오류"); });
   });
 })();
 

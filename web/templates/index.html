@@ -74,7 +74,6 @@
         <label>구분</label>
         <select id="tn-kind">
           <option value="internet">인터넷</option>
-          <option value="internet_fw">인터넷 방화벽</option>
           <option value="firewall">방화벽</option>
           <option value="backbone">백본</option>
           <option value="l3">L3 스위치</option>
@@ -443,8 +442,8 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">네트워크 구성도 (편집기)</span>
         <div class="pane-toolbar__actions">
-          <button id="btn-topo-draft" class="btn btn--secondary" style="font-size:12px" title="수집 데이터로 자동 초안을 캔버스에 깝니다(이후 자유 편집)">🪄 자동 초안 불러오기</button>
-          <button id="btn-topo-link" class="btn btn--secondary" style="font-size:12px" title="연결 모드: 켠 뒤 장비 두 개를 차례로 클릭하면 선이 그어지고 포트를 자동 인식">🔗 연결 모드</button>
+          <button id="btn-topo-edit" class="btn btn--secondary" style="font-size:12px" title="편집 모드: 켜면 아이콘 추가·이동·연결 가능. 끄면 보기 전용(실수 클릭 방지). 연결은 노드의 🔗 손잡이를 누른 뒤 상대 장비를 클릭">✏️ 편집 모드</button>
+          <button id="btn-topo-draft" class="btn btn--secondary" style="font-size:12px" title="서버실 현황에 등록된 장비를 아이콘·정보가 채워진 상태로 캔버스에 불러옵니다(배치만 하면 됨)">🏢 서버실 현황 불러오기</button>
           <button id="btn-topo-fit" class="btn btn--secondary" style="font-size:12px" title="전체가 보이도록 화면에 맞춤">⤢ 화면 맞춤</button>
           <button id="btn-pptx-report" class="btn btn--secondary" style="font-size:12px" title="네트워크 구성도를 PPTX로 자동 생성(고객 전달용)">📊 구성도 PPTX</button>
           <button id="btn-topo-save" class="btn btn--primary" style="font-size:12px" title="배치·연결·대역을 저장(재시작·다른 PC에서도 유지)">💾 저장</button>

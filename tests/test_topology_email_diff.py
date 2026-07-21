@@ -283,8 +283,10 @@ def test_topology_editor_ui():
     html = HTML.read_text(encoding="utf-8")
     assert 'id="tab-topology"' in html
     # 편집기 툴바 + 팔레트 + 노드 편집 모달
-    assert 'id="btn-topo-draft"' in html and 'id="btn-topo-link"' in html
+    assert 'id="btn-topo-draft"' in html and 'id="btn-topo-edit"' in html
     assert 'id="btn-topo-save"' in html
+    assert "_tEditMode" in js                # 편집 모드(끄면 보기 전용)
+    assert "tlink-handle" in js              # 🔗 손잡이로 연결 시작
     assert 'id="topo-palette"' in html
     assert 'id="modal-topo-node"' in html and 'id="tn-ip"' in html
     # 편집기 핵심 함수/동작
@@ -294,6 +296,7 @@ def test_topology_editor_ui():
     assert "/api/topology/lookup" in js      # IP → 장비 정보 자동 채움
     assert "/api/topology/subnet-suggest" in js  # 대역 자동 제안
     assert "/api/topology/diagram" in js     # 저장/로드
+    assert "/api/topology/serverroom" in js  # 서버실 현황 불러오기(정보 채운 노드)
     assert "_renderChips" in js              # 대역 칩(자동+수동) 편집
     # 장비별 전용 아이콘(인터넷/AP/PC 포함) + 팔레트 종류
     assert '"AP"' in js and '"PC"' in js and '"인터넷"' in js  # _deviceSymbol 분기

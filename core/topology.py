@@ -553,6 +553,69 @@ def build_serverroom_tree(db_path):
 
 
 # ─── 하이브리드 토폴로지 편집기 백엔드 (v4.4) ───────────────────────
+def serverroom_devices(db_path):
+    """서버실(위치 A09U27) 등록 장비 전체를 편집기 노드로 반환 — 정보 채운 상태.
+
+    사용자가 팔레트로 하나씩 만들 필요 없이, 등록된 서버실 장비(방화벽·모든
+    스위치·물리 서버)를 아이콘+정보(IP/이름/구분/대역)로 나열해 배치만 하면 됨.
+    링크는 넣지 않음(사용자가 편집 모드에서 직접 연결 → 포트 자동 인식).
+    구분: 스위치는 config로 backbone/l3/l2 자동 판정, device_type 우선.
+    Returns: {"nodes": [{ref, kind, ip, name, subnets, reachable, status}]}
+    """
+    from . import serverroom, reachability
+    nodes = []
+    try:
+        reach = reachability.get_state()
+    except Exception:
+        reach = {}
+    try:
+        fw_reach = reachability.get_fw_state()
+    except Exception:
+        fw_reach = {}
+    switches = db.get_switches(db_path)
+    cfgs = _latest_configs(db_path, [s["id"] for s in switches])
+    for s in switches:
+        if not serverroom.parse_rack(s.get("location")):
+            continue
+        cfg = cfgs.get(s["id"], "")
+        cls = classify_l3(cfg)
+        dt = (s.get("device_type") or "").lower()
+        if "backbone" in dt or "core" in dt:
+            kind = "backbone"
+        elif "l4" in dt:
+            kind = "l4"
+        elif "ap" == dt:
+            kind = "ap"
+        elif cls == "L3" or "l3" in dt:
+            kind = "l3"
+        else:
+            kind = "l2"
+        subs = [{"vlan": x["vlan"], "cidr": x["cidr"], "source": "auto"}
+                for x in parse_svi_subnets(cfg)]
+        nodes.append({"ref": "sw%d" % s["id"], "kind": kind, "ip": s.get("ip"),
+                      "name": s.get("name") or s.get("hostname"), "subnets": subs,
+                      "reachable": reach.get(s["id"]), "status": s.get("status")})
+    try:
+        for f in db.list_firewalls(db_path):
+            if not serverroom.parse_rack(f.get("location")):
+                continue
+            nodes.append({"ref": "fw%d" % f["id"], "kind": "firewall",
+                          "ip": f.get("host"), "name": f.get("name"), "subnets": [],
+                          "reachable": fw_reach.get(f["id"]), "status": f.get("status")})
+    except Exception:
+        pass
+    try:
+        for sv in db.list_servers(db_path):
+            if sv.get("is_vm") or not serverroom.parse_rack(sv.get("location")):
+                continue                       # 물리 서버만(VM 제외)
+            nodes.append({"ref": "srv%d" % sv["id"], "kind": "server",
+                          "ip": sv.get("ip"), "name": sv.get("name"), "subnets": [],
+                          "status": sv.get("status")})
+    except Exception:
+        pass
+    return {"nodes": nodes}
+
+
 def lookup_device(db_path, ip):
     """IP로 등록 장비 조회 — 편집기에서 IP 입력 시 hostname/모델 자동 채움용.
 
@@ -618,6 +681,28 @@ def subnet_suggest(db_path, ip):
         if cidr and cidr not in seen:
             seen.add(cidr)
             out.append({"vlan": vid, "cidr": cidr, "source": "vlan"})
+    # ③ ARP 관측 대역 — 이 스위치 최신 스냅샷 ARP의 IP들이 속한 /24 집계
+    #    (VLAN/SVI로 못 잡는 L2도 실제 관측 대역을 제안). 상위 L3 대역과 중복은 제외.
+    try:
+        with db.get_db(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT ip FROM arp_entries WHERE switch_id=? "
+                        "AND snapshot_id=(SELECT MAX(id) FROM snapshots WHERE switch_id=?)",
+                        (sid, sid))
+            import ipaddress as _ip
+            obs = {}
+            for r in cur.fetchall():
+                try:
+                    net = str(_ip.IPv4Network(r["ip"] + "/24", strict=False))
+                except (ValueError, _ip.AddressValueError):
+                    continue
+                obs[net] = obs.get(net, 0) + 1
+            for net, _cnt in sorted(obs.items(), key=lambda x: -x[1]):
+                if net not in seen and not net.startswith(("127.", "169.254.")):
+                    seen.add(net)
+                    out.append({"vlan": None, "cidr": net, "source": "arp"})
+    except Exception:
+        pass
     return out
 
 
@@ -691,7 +776,34 @@ def resolve_link_ports(db_path, a_ip, b_ip):
                 port = "%s (%s)" % (", ".join(members), port)
         return port
 
-    a_port = _port_on(a, b_macs)
-    b_port = _port_on(b, a_macs)
+    def _fw_port(fw_dev, peer_ip):
+        """방화벽 쪽 포트: 상대 IP를 포함하는 인터페이스(subnet) 이름을 반환."""
+        if not fw_dev or fw_dev.get("kind") != "fw":
+            return None
+        try:
+            peer = ipaddress.IPv4Address(peer_ip)
+        except (ipaddress.AddressValueError, ValueError):
+            peer = None
+        try:
+            ifaces = db.get_firewall_interfaces(db_path, fw_dev["id"])
+        except Exception:
+            ifaces = []
+        # ① 상대 IP를 포함하는 인터페이스(직결 세그먼트) 우선
+        if peer is not None:
+            for it in ifaces:
+                ipv, mask = it.get("ip"), it.get("mask")
+                if not ipv or not mask:
+                    continue
+                try:
+                    net = ipaddress.IPv4Network("%s/%s" % (ipv, mask), strict=False)
+                    if peer in net:
+                        return it.get("name") or it.get("iface")
+                except (ipaddress.AddressValueError, ValueError):
+                    continue
+        return None
+
+    # 각 끝점의 포트를 그 끝점 소속으로 정확히 배정(스위치=MAC 관측 포트, 방화벽=인터페이스)
+    a_port = _port_on(a, b_macs) or _fw_port(a, b_ip)
+    b_port = _port_on(b, a_macs) or _fw_port(b, a_ip)
     method = "mac" if (a_port or b_port) else "none"
     return {"a_port": a_port, "b_port": b_port, "method": method}

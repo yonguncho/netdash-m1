@@ -1435,15 +1435,15 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "topo_linkports_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"a_port": None, "b_port": None, "method": "none"})
 
-    @app.route("/api/topology/draft", methods=["GET"])
-    def topology_draft():
-        """자동 초안 — 서버실 트리를 편집기 초안(배치 없음)으로 반환."""
+    @app.route("/api/topology/serverroom", methods=["GET"])
+    def topology_serverroom():
+        """서버실 등록 장비를 정보 채운 노드로 반환(편집기 '서버실 현황 불러오기')."""
         try:
             from core import topology
-            return jsonify(topology.build_serverroom_tree(db_path))
+            return jsonify(topology.serverroom_devices(db_path))
         except Exception as e:
-            log_event("error", "topo_draft_error", error=collector._sanitize_error_msg(str(e)))
-            return jsonify({"nodes": [], "links": [], "roots": []})
+            log_event("error", "topo_serverroom_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"nodes": []})
 
     @app.route("/api/configs/diff", methods=["GET"])
     def config_diff():
