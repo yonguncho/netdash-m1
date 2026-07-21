@@ -4321,10 +4321,14 @@ function _topoWinClear() {
 function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
 
 (function () {
-  var b = document.getElementById("btn-topo-refresh");
+  var b = document.getElementById("btn-topo-clear");
   if (b) b.addEventListener("click", function () {
-    if (!confirm("저장된 구성도를 다시 불러올까요? (저장하지 않은 편집 내용은 사라집니다)")) return;
-    loadTopology(true);   // 강제 새로고침(서버 저장본으로)
+    if (!_tdiag.nodes.length && !_tdiag.edges.length) return;
+    if (!confirm("캔버스를 모두 비울까요? (모든 아이콘·선 삭제 — 처음부터 다시 그립니다)")) return;
+    _tdiag = { nodes: [], edges: [] };
+    _tSel = {}; _tSelId = null; _tLinkFrom = null; _tLineStyle = null; _tHighlightLineBtn();
+    _tView = null;                 // 전체 화면으로
+    _renderEditor();               // 자동 저장으로 빈 구성도 반영
   });
   var fit = document.getElementById("btn-topo-fit");
   if (fit) fit.addEventListener("click", function () {
