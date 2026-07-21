@@ -91,6 +91,22 @@ def test_serverroom_devices_prefilled(temp_db):
     assert "VM" not in by                       # VM 제외
 
 
+def test_list_subnets_and_switches_in_subnet(temp_db):
+    """대역 목록 + 대역별 스위치(관리 IP 포함) 노드 반환."""
+    l3 = db.import_switches_bulk(temp_db, [{"name": "CORE", "ip": "10.0.10.5",
+        "vendor": "cisco_ios"}])[0]
+    db.save_config_backup(temp_db, l3, _L3_CFG)   # SVI 10.0.10.0/24, 10.0.20.0/24
+    db.import_switches_bulk(temp_db, [{"name": "OTHER", "ip": "192.168.9.1",
+        "vendor": "cisco_ios"}])
+    subs = topology.list_subnets(temp_db)
+    assert "10.0.10.0/24" in subs and "10.0.20.0/24" in subs
+    # 10.0.10.0/24 대역 → 관리 IP 10.0.10.5인 CORE만
+    out = topology.switches_in_subnet(temp_db, "10.0.10.0/24")
+    names = [n["name"] for n in out["nodes"]]
+    assert "CORE" in names and "OTHER" not in names
+    assert out["nodes"][0]["kind"] == "l3"       # config L3 판정
+
+
 def test_resolve_link_ports_firewall_side(temp_db):
     """방화벽↔스위치 연결: 스위치 포트는 스위치 쪽, 방화벽 포트는 방화벽 인터페이스."""
     import sqlite3

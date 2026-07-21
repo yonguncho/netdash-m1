@@ -578,18 +578,7 @@ def serverroom_devices(db_path):
         if not serverroom.parse_rack(s.get("location")):
             continue
         cfg = cfgs.get(s["id"], "")
-        cls = classify_l3(cfg)
-        dt = (s.get("device_type") or "").lower()
-        if "backbone" in dt or "core" in dt:
-            kind = "backbone"
-        elif "l4" in dt:
-            kind = "l4"
-        elif "ap" == dt:
-            kind = "ap"
-        elif cls == "L3" or "l3" in dt:
-            kind = "l3"
-        else:
-            kind = "l2"
+        kind = _switch_kind(cfg, s.get("device_type"))
         subs = [{"vlan": x["vlan"], "cidr": x["cidr"], "source": "auto"}
                 for x in parse_svi_subnets(cfg)]
         nodes.append({"ref": "sw%d" % s["id"], "kind": kind, "ip": s.get("ip"),
@@ -613,6 +602,76 @@ def serverroom_devices(db_path):
                           "status": sv.get("status")})
     except Exception:
         pass
+    return {"nodes": nodes}
+
+
+def _switch_kind(cfg, device_type):
+    """스위치의 편집기 종류(backbone/l4/ap/l3/l2) 결정 — config L3 판정 + device_type."""
+    cls = classify_l3(cfg)
+    dt = (device_type or "").lower()
+    if "backbone" in dt or "core" in dt:
+        return "backbone"
+    if "l4" in dt:
+        return "l4"
+    if dt == "ap":
+        return "ap"
+    if cls == "L3" or "l3" in dt:
+        return "l3"
+    return "l2"
+
+
+def _sort_subnet_key(cidr):
+    try:
+        return int(ipaddress.IPv4Network(cidr, strict=False).network_address)
+    except (ipaddress.AddressValueError, ValueError):
+        return 0
+
+
+def list_subnets(db_path):
+    """구성도 대역 드롭다운용 — 스위치 SVI 대역 + 설비 대역 합집합(정렬)."""
+    subs = set()
+    switches = db.get_switches(db_path)
+    for cfg in _latest_configs(db_path, [s["id"] for s in switches]).values():
+        for s in parse_svi_subnets(cfg):
+            subs.add(s["cidr"])
+    try:
+        for h in db.get_facility_hosts(db_path):
+            if h.get("subnet"):
+                subs.add(h["subnet"])
+    except Exception:
+        pass
+    return sorted(subs, key=_sort_subnet_key)
+
+
+def switches_in_subnet(db_path, subnet):
+    """선택한 대역에 관리 IP가 속한 스위치(TPS 등)를 편집기 노드로 반환.
+
+    '스위치 현황 불러오기'용 — 대역별로 그 대역의 스위치를 캔버스에 가져온다.
+    """
+    from . import reachability
+    try:
+        net = ipaddress.IPv4Network(subnet, strict=False)
+    except (ipaddress.AddressValueError, ValueError):
+        return {"nodes": []}
+    try:
+        reach = reachability.get_state()
+    except Exception:
+        reach = {}
+    switches = db.get_switches(db_path)
+    cfgs = _latest_configs(db_path, [s["id"] for s in switches])
+    nodes = []
+    for s in switches:
+        try:
+            if ipaddress.IPv4Address(s.get("ip") or "0.0.0.0") not in net:
+                continue
+        except (ipaddress.AddressValueError, ValueError):
+            continue
+        cfg = cfgs.get(s["id"], "")
+        subs = [{"vlan": x["vlan"], "cidr": x["cidr"], "source": "auto"}
+                for x in parse_svi_subnets(cfg)]
+        nodes.append({"ref": "sw%d" % s["id"], "kind": _switch_kind(cfg, s.get("device_type")),
+                      "ip": s.get("ip"), "name": s.get("name") or s.get("hostname"),
+                      "subnets": subs, "reachable": reach.get(s["id"]), "status": s.get("status")})
     return {"nodes": nodes}
 
 

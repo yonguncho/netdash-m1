@@ -306,6 +306,8 @@ def test_topology_editor_ui():
     assert "/api/topology/subnet-suggest" in js  # 대역 자동 제안
     assert "/api/topology/diagram" in js     # 저장/로드
     assert "/api/topology/serverroom" in js  # 서버실 현황 불러오기(정보 채운 노드)
+    assert "/api/topology/switches" in js and 'id="btn-topo-switches"' in html  # 대역별 스위치 불러오기
+    assert 'id="topo-subnet"' in html        # 대역 드롭다운
     assert "_renderChips" in js              # 대역 칩(자동+수동) 편집
     # 장비별 전용 아이콘(인터넷/AP/PC 포함) + 팔레트 종류
     assert '"AP"' in js and '"PC"' in js and '"인터넷"' in js  # _deviceSymbol 분기

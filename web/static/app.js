@@ -2309,8 +2309,39 @@ var _TOPO_KIND = {
   zone: { sym: null, color: "#8b5cf6", pal: "존(그룹) 박스", zone: true },  // 여러 아이콘 묶는 반투명 배경
 };
 
+function _loadTopoSubnets() {
+  var sel = document.getElementById("topo-subnet");
+  if (!sel) return;
+  fetch("/api/topology/subnets").then(function (r) { return r.json(); }).then(function (d) {
+    var cur = sel.value;
+    sel.innerHTML = "<option value=''>대역 선택…</option>" +
+      (d.subnets || []).map(function (s) { return "<option>" + escHtml(s) + "</option>"; }).join("");
+    if (cur) sel.value = cur;
+  }).catch(function () {});
+}
+
+// 백엔드 노드(ref/kind/ip/name/subnets)를 편집기 노드로 변환(중복 IP는 건너뜀). 종류별 행 배치.
+function _addLoadedNodes(list, replace) {
+  var ROW = { internet: 0, firewall: 1, backbone: 2, l4: 3, l3: 4, l2: 5, ap: 6, server: 7, pc: 7, facility: 8 };
+  if (replace) _tdiag = { nodes: [], edges: [] };
+  var haveIp = {}; _tdiag.nodes.forEach(function (n) { if (n.ip) haveIp[n.ip] = true; });
+  var cnt = {}; var baseY = replace ? 0 : 0;
+  var added = 0;
+  (list || []).forEach(function (n) {
+    if (n.ip && haveIp[n.ip]) return;                  // 이미 있는 장비는 스킵
+    var kind = _TOPO_KIND[n.kind] ? n.kind : "l2";
+    var row = ROW[kind] || 5; cnt[row] = (cnt[row] || 0) + 1;
+    _tdiag.nodes.push({ id: "n" + (_tSeq++), kind: kind, ip: n.ip || "", name: n.name || "",
+      x: 120 + cnt[row] * 175, y: 90 + row * 150 + baseY,
+      reachable: n.reachable, status: n.status, subnets: n.subnets || [] });
+    if (n.ip) haveIp[n.ip] = true; added++;
+  });
+  return added;
+}
+
 function loadTopology() {
   _buildPalette();
+  _loadTopoSubnets();
   _tView = null; _tSel = {}; _tSelId = null;   // 새로 불러올 땐 전체 화면 + 선택 초기화
   fetch("/api/topology/diagram").then(function (r) { return r.json(); }).then(function (d) {
     _tdiag = { nodes: d.nodes || [], edges: d.edges || [] };
@@ -2566,8 +2597,10 @@ function _tBindEditor(host, W, H) {
     g.addEventListener("mousedown", function (e) {
       if (_tLinkFrom || _tLineStyle) return;   // 연결/선 도구 중이면 클릭으로 연결
       e.stopPropagation();
-      if (e.shiftKey) { if (_tSel[id]) delete _tSel[id]; else _tSel[id] = true; _tSelId = id; _renderEditor(); }
-      else if (!_tSel[id]) { _tSel = {}; _tSelId = id; _renderEditor(); }
+      // 선택 갱신(재렌더는 mousedown 중엔 하지 않음 — 상호작용 흔들림 방지, mouseup에서 반영)
+      var selChanged = false;
+      if (e.shiftKey) { if (_tSel[id]) delete _tSel[id]; else _tSel[id] = true; _tSelId = id; selChanged = true; }
+      else if (!_tSel[id]) { _tSel = {}; _tSelId = id; selChanged = true; }
       var moveIds = (_tSel[id] && Object.keys(_tSel).length) ? Object.keys(_tSel) : [id];
       var moveNodes = moveIds.map(_tNode).filter(Boolean);
       var moveGs = {};
@@ -2610,6 +2643,7 @@ function _tBindEditor(host, W, H) {
         window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
         guide("tg-v", 0, 0, 0, 0, false); guide("tg-h", 0, 0, 0, 0, false);
         if (moved) { moveNodes.forEach(function (nn) { nn.x += dx; nn.y += dy; }); _renderEditor(); }
+        else if (selChanged) _renderEditor();   // 이동 없이 클릭(선택만) → 선택 표시 갱신
       }
       window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
     });
@@ -4318,6 +4352,20 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
     }).catch(function () { alert("서버실 현황 불러오기 오류"); });
   });
 
+  // 스위치 현황 불러오기 — 선택한 대역의 스위치를 캔버스에 추가(기존 유지)
+  var swBtn = document.getElementById("btn-topo-switches");
+  if (swBtn) swBtn.addEventListener("click", function () {
+    var sel = document.getElementById("topo-subnet");
+    var subnet = sel ? sel.value : "";
+    if (!subnet) { alert("먼저 네트워크 대역을 선택하세요."); return; }
+    fetch("/api/topology/switches?subnet=" + encodeURIComponent(subnet))
+      .then(function (r) { return r.json(); }).then(function (d) {
+        var n = _addLoadedNodes(d.nodes || [], false);
+        _renderEditor();
+        if (!n) alert("해당 대역(" + subnet + ")에 추가할 스위치가 없습니다(이미 있거나 없음).");
+      }).catch(function () { alert("스위치 현황 불러오기 오류"); });
+  });
+
   // 키보드: 편집 모드에서 Ctrl+C 복사 / Ctrl+V 붙여넣기 / Delete 삭제
   document.addEventListener("keydown", function (e) {
     // 토폴로지 탭 활성 + 편집 모드일 때만. 입력창/모달 포커스 중이면 무시(일반 복사 보존)
@@ -4346,7 +4394,7 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
         });
         _renderEditor(); e.preventDefault();
       }
-    } else if (e.key === "Delete" || e.key === "Backspace") {
+    } else if (e.key === "Delete") {   // Delete만(Backspace 제거 — 사이드버튼/제스처 오삭제 방지)
       if (ids.length) {
         var del = {}; ids.forEach(function (i) { del[i] = true; });
         _tdiag.nodes = _tdiag.nodes.filter(function (x) { return !del[x.id]; });

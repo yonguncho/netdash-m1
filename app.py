@@ -1445,6 +1445,27 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "topo_serverroom_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"nodes": []})
 
+    @app.route("/api/topology/subnets", methods=["GET"])
+    def topology_subnets():
+        """구성도 대역 드롭다운 목록(스위치 SVI + 설비 대역)."""
+        try:
+            from core import topology
+            return jsonify({"subnets": topology.list_subnets(db_path)})
+        except Exception as e:
+            log_event("error", "topo_subnets_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"subnets": []})
+
+    @app.route("/api/topology/switches", methods=["GET"])
+    def topology_switches():
+        """선택한 대역의 스위치를 편집기 노드로 반환('스위치 현황 불러오기')."""
+        try:
+            from core import topology
+            subnet = (request.args.get("subnet") or "").strip()
+            return jsonify(topology.switches_in_subnet(db_path, subnet))
+        except Exception as e:
+            log_event("error", "topo_switches_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"nodes": []})
+
     @app.route("/api/configs/diff", methods=["GET"])
     def config_diff():
         """설정 백업 두 개(a=이전, b=이후)의 줄 단위 diff. b 생략 시 a의 직전 백업과 비교."""
