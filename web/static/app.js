@@ -2283,6 +2283,7 @@ var _tSelId = null;                       // 마지막 클릭 노드(단일 선�
 var _tSel = {};                           // 다중 선택 집합 {id:true} — 드래그 영역/Shift 클릭
 var _tClip = null;                        // 복사 버퍼(노드 스냅샷 배열)
 var _tView = null;                        // 줌/팬 뷰박스 {x,y,w,h} — 재렌더에도 유지
+var _tLineStyle = null;                   // 선 그리기 도구 {style:'straight'|'elbow', dash:bool}
 var _tSeq = 1;
 
 // 현재 선택된 노드 id 목록(다중 우선, 없으면 단일)
@@ -2342,6 +2343,39 @@ function _buildPalette() {
     b.innerHTML = icon + "<span>" + escHtml(meta.pal) + "</span>";
     b.addEventListener("click", function () { _addNode(kind); });
     pal.appendChild(b);
+  });
+  // ── 선(연결) 도구 ── 선택 후 장비 두 개를 클릭해 그 스타일로 연결
+  var sep = document.createElement("div");
+  sep.style.cssText = "border-top:1px solid #1e293b;margin:6px 0 4px;font-size:11px;color:#64748b;padding-top:4px";
+  sep.textContent = "선 연결";
+  pal.appendChild(sep);
+  var lines = [
+    ["직선", { style: "straight", dash: false }, "M2 11 H20"],
+    ["꺾은선", { style: "elbow", dash: false }, "M2 4 H11 V18"],
+    ["점선", { style: "straight", dash: true }, "M2 11 H20"],
+    ["꺾은 점선", { style: "elbow", dash: true }, "M2 4 H11 V18"],
+  ];
+  lines.forEach(function (ln) {
+    var b = document.createElement("button");
+    b.className = "btn btn--secondary tline-btn"; b.dataset.style = JSON.stringify(ln[1]);
+    b.style.cssText = "display:flex;align-items:center;gap:6px;width:100%;font-size:11px;margin-bottom:5px;text-align:left;padding:4px 6px";
+    b.innerHTML = "<svg width='22' height='22' viewBox='0 0 22 22' style='flex-shrink:0'>" +
+      "<path d='" + ln[2] + "' fill='none' stroke='#22c55e' stroke-width='2'" + (ln[1].dash ? " stroke-dasharray='3 2'" : "") + "/></svg><span>" + ln[0] + "</span>";
+    b.addEventListener("click", function () {
+      if (!_tEditMode) { alert("먼저 '✏️ 편집 모드'를 켜세요."); return; }
+      _tLineStyle = (JSON.stringify(_tLineStyle) === b.dataset.style) ? null : JSON.parse(b.dataset.style);
+      _tLinkFrom = null;
+      _tHighlightLineBtn();
+    });
+    pal.appendChild(b);
+  });
+}
+
+function _tHighlightLineBtn() {
+  document.querySelectorAll(".tline-btn").forEach(function (b) {
+    var on = _tLineStyle && b.dataset.style === JSON.stringify(_tLineStyle);
+    b.className = "btn tline-btn " + (on ? "btn--primary" : "btn--secondary");
+    b.style.cssText = "display:flex;align-items:center;gap:6px;width:100%;font-size:11px;margin-bottom:5px;text-align:left;padding:4px 6px";
   });
 }
 
@@ -2406,11 +2440,19 @@ function _renderEditor() {
     if (e.a_port) tipParts.push((a.name || "A") + ": " + e.a_port);
     if (e.b_port) tipParts.push((b.name || "B") + ": " + e.b_port);
     var tip = tipParts.length ? tipParts.join("  ↔  ") : (e.note || "포트 미확인");
-    svg.push("<line x1='" + ax + "' y1='" + ay + "' x2='" + bx + "' y2='" + by +
-      "' stroke='#22c55e' stroke-width='2'/>");
+    var dash = e.dash ? " stroke-dasharray='7 5'" : "";
+    var pathD;
+    if (e.style === "elbow") {   // 꺾은선(ㄱ자): 긴 축부터 이동해 코너에서 꺾음
+      pathD = (Math.abs(dx) >= Math.abs(dy))
+        ? "M" + ax + " " + ay + " H" + bx + " V" + by
+        : "M" + ax + " " + ay + " V" + by + " H" + bx;
+    } else {
+      pathD = "M" + ax + " " + ay + " L" + bx + " " + by;
+    }
+    svg.push("<path d='" + pathD + "' fill='none' stroke='#22c55e' stroke-width='2'" + dash + "/>");
     // 넓은 투명 히트 영역(가는 선도 쉽게 호버) + data-tip(그 선의 포트)
-    svg.push("<line x1='" + ax + "' y1='" + ay + "' x2='" + bx + "' y2='" + by +
-      "' stroke='transparent' stroke-width='14' data-tip=\"" + escHtml(tip) + "\" style='cursor:help'/>");
+    svg.push("<path d='" + pathD + "' fill='none' stroke='transparent' stroke-width='14'" +
+      " data-tip=\"" + escHtml(tip) + "\" style='cursor:help'/>");
   });
   // 노드(존 박스는 위에서 배경으로 이미 그림 → 제외)
   _tdiag.nodes.forEach(function (n) {
@@ -2419,7 +2461,8 @@ function _renderEditor() {
     var color = (n.reachable === false || n.status === "failed") ? "#ef4444" : meta.color;
     var hl = (_tLinkFrom === n.id) ? "<circle cx='" + n.x + "' cy='" + n.y + "' r='26' fill='none' stroke='#38bdf8' stroke-width='2'/>" :
       _tIsSel(n.id) ? "<rect x='" + (n.x - 24) + "' y='" + (n.y - 24) + "' width='48' height='48' rx='6' fill='none' stroke='#facc15' stroke-width='2' stroke-dasharray='4 3'/>" : "";
-    svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tEditMode ? "move" : "default") + "'>");
+    var ncur = (_tLineStyle || _tLinkFrom) ? "crosshair" : (_tEditMode ? "move" : "default");
+    svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + ncur + "'>");
     svg.push(hl);
     if (meta.box) {
       // 대역 박스 — 아이콘 없이 네모 안에 대역 숫자만. 박스 자체가 노드.
@@ -2504,42 +2547,69 @@ function _tBindEditor(host, W, H) {
   });
   host.querySelectorAll(".tnode").forEach(function (g) {
     var id = g.getAttribute("data-id");
-    // 연결 대기 중이면: 노드 클릭 = 연결 완성
+    // 노드 클릭: 선/연결 도구 사용 중이면 시작점→끝점으로 연결, 아니면 선택만(설정은 더블클릭)
     g.addEventListener("click", function (e) {
-      if (!_tEditMode || !_tLinkFrom) return;
-      e.stopPropagation();
-      if (_tLinkFrom !== id) _tMakeEdge(_tLinkFrom, id);
-      _tLinkFrom = null; _renderEditor();
+      if (!_tEditMode) return;
+      if (_tLineStyle || _tLinkFrom) {
+        e.stopPropagation();
+        if (!_tLinkFrom) { _tLinkFrom = id; _renderEditor(); return; }   // 시작점 지정
+        if (_tLinkFrom !== id) _tMakeEdge(_tLinkFrom, id, _tLineStyle);  // 끝점 → 연결
+        _tLinkFrom = null; _renderEditor();                             // 선 도구는 계속 활성(연속 연결)
+      }
     });
-    // 드래그 이동 / 클릭 편집(편집 모드). 다중 선택 상태면 선택된 노드 전체를 함께 이동.
+    // 더블클릭 = 설정 편집(단순 클릭으로 팝업 뜨는 불편 제거)
+    g.addEventListener("dblclick", function (e) {
+      if (!_tEditMode || _tLinkFrom || _tLineStyle) return;
+      e.stopPropagation(); _openNodeModal(id);
+    });
+    // 드래그 이동(단일 클릭은 선택만). 다중 선택 상태면 선택 전체 함께 이동.
     g.addEventListener("mousedown", function (e) {
-      if (_tLinkFrom) return;                  // 연결 대기 중이면 클릭으로 연결(드래그 아님)
-      e.stopPropagation();                     // 캔버스 팬/영역선택 방지
-      // 선택 처리: Shift=토글 추가, 아니면 (선택집합에 없을 때) 단일 선택으로 재설정
+      if (_tLinkFrom || _tLineStyle) return;   // 연결/선 도구 중이면 클릭으로 연결
+      e.stopPropagation();
       if (e.shiftKey) { if (_tSel[id]) delete _tSel[id]; else _tSel[id] = true; _tSelId = id; _renderEditor(); }
-      else if (!_tSel[id]) { _tSel = {}; _tSelId = id; }
-      // 함께 이동할 노드: 다중 선택 안에 이 노드가 있으면 선택 전체, 아니면 이 노드만
+      else if (!_tSel[id]) { _tSel = {}; _tSelId = id; _renderEditor(); }
       var moveIds = (_tSel[id] && Object.keys(_tSel).length) ? Object.keys(_tSel) : [id];
       var moveNodes = moveIds.map(_tNode).filter(Boolean);
       var moveGs = {};
       host.querySelectorAll(".tnode").forEach(function (gg) {
         if (moveIds.indexOf(gg.getAttribute("data-id")) >= 0) moveGs[gg.getAttribute("data-id")] = gg;
       });
+      var single = moveIds.length === 1 ? _tNode(id) : null;
       var vb = svgEl._vb || { w: W, h: H };
       var rect = svgEl.getBoundingClientRect();
       var sx = vb.w / (rect.width || 1), sy = vb.h / (rect.height || 1);
       var px = e.clientX, py = e.clientY, moved = false, dx = 0, dy = 0;
+      var SNAP = 8 * sx;               // 정렬 스냅 허용치(뷰 단위)
+      function guide(gid, x1, y1, x2, y2, on) {
+        var el = document.getElementById(gid);
+        if (!on) { if (el) el.remove(); return; }
+        if (!el) { el = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          el.id = gid; el.setAttribute("stroke", "#f0abfc"); el.setAttribute("stroke-width", "1");
+          el.setAttribute("stroke-dasharray", "4 3"); svgEl.appendChild(el); }
+        el.setAttribute("x1", x1); el.setAttribute("y1", y1); el.setAttribute("x2", x2); el.setAttribute("y2", y2);
+      }
       function mm(ev) {
         dx = (ev.clientX - px) * sx; dy = (ev.clientY - py) * sy;
         if (Math.abs(ev.clientX - px) + Math.abs(ev.clientY - py) > 3) moved = true;
-        moveIds.forEach(function (mid) {        // 선택된 노드 그룹만 transform(가벼움)
+        var gx = false, gy = false;
+        if (single) {   // 단일 이동: 다른 노드와 수직/수평 정렬 시 스냅 + 가이드
+          var lx = single.x + dx, ly = single.y + dy;
+          _tdiag.nodes.forEach(function (o) {
+            if (o.id === id) return;
+            if (!gx && Math.abs(lx - o.x) < SNAP) { dx = o.x - single.x; gx = o.x; }
+            if (!gy && Math.abs(ly - o.y) < SNAP) { dy = o.y - single.y; gy = o.y; }
+          });
+          guide("tg-v", gx || 0, 0, gx || 0, vb.y + vb.h, gx !== false);
+          guide("tg-h", 0, gy || 0, vb.x + vb.w, gy || 0, gy !== false);
+        }
+        moveIds.forEach(function (mid) {
           if (moveGs[mid]) moveGs[mid].setAttribute("transform", "translate(" + dx + "," + dy + ")");
         });
       }
       function mu() {
         window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
+        guide("tg-v", 0, 0, 0, 0, false); guide("tg-h", 0, 0, 0, 0, false);
         if (moved) { moveNodes.forEach(function (nn) { nn.x += dx; nn.y += dy; }); _renderEditor(); }
-        else if (_tEditMode && !e.shiftKey) _openNodeModal(id);   // 이동 없이 클릭 = 편집
       }
       window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
     });
@@ -2550,7 +2620,8 @@ function _tBindEditor(host, W, H) {
 function _tBindRubberBand(host, W, H, svgEl) {
   svgEl.addEventListener("mousedown", function (e) {
     if (e.target !== svgEl) return;            // 빈 배경에서 시작할 때만(노드 위 X)
-    if (_tLinkFrom) return;
+    // 선/연결 도구 중 빈 곳 클릭 = 도구 취소
+    if (_tLineStyle || _tLinkFrom) { _tLineStyle = null; _tLinkFrom = null; _tHighlightLineBtn(); _renderEditor(); return; }
     var vb = svgEl._vb || { w: W, h: H };
     var rect = svgEl.getBoundingClientRect();
     function toVb(cx, cy) {
@@ -2624,13 +2695,14 @@ function _tBindView(host, W, H, svgEl) {
   if (_tEditMode) _tBindRubberBand(host, W, H, svgEl);
 }
 
-function _tMakeEdge(a, b) {
+function _tMakeEdge(a, b, style) {
   // 같은 두 장비 사이 '두 번째 선'도 허용(물리 링크가 2개인 경우). 3개 이상은 방지.
   var between = _tdiag.edges.filter(function (e) {
     return (e.a === a && e.b === b) || (e.a === b && e.b === a); });
   if (between.length >= 4) { _renderEditor(); return; }
   var idx = between.length;              // 0=첫 선, 1=두 번째 선 → 멤버 포트 배정 인덱스
-  var edge = { a: a, b: b, a_port: null, b_port: null };
+  var edge = { a: a, b: b, a_port: null, b_port: null,
+    style: (style && style.style) || "straight", dash: !!(style && style.dash) };
   _tdiag.edges.push(edge); _renderEditor();
   // 포트 자동 인식(양쪽 IP 있을 때). 선의 방향(a,b)이 응답의 a/b와 다를 수 있어 IP로 매칭.
   var na = _tNode(a), nb = _tNode(b);
@@ -4255,7 +4327,10 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     var mod = e.ctrlKey || e.metaKey;
     var ids = _tSelIds();
-    if (mod && (e.key === "a" || e.key === "A")) {
+    if (e.key === "Escape") {   // 선/연결 도구·선택 취소
+      _tLineStyle = null; _tLinkFrom = null; _tSel = {}; _tSelId = null;
+      _tHighlightLineBtn(); _renderEditor(); e.preventDefault();
+    } else if (mod && (e.key === "a" || e.key === "A")) {
       _tSel = {}; _tdiag.nodes.forEach(function (n) { _tSel[n.id] = true; });   // 전체 선택
       _renderEditor(); e.preventDefault();
     } else if (mod && (e.key === "c" || e.key === "C")) {

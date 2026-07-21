@@ -291,6 +291,11 @@ def test_topology_editor_ui():
     assert "_tBindRubberBand" in js and "_tSel" in js  # 드래그 영역 다중 선택
     assert "_tSelIds" in js                             # 다중 선택 대상(복사/삭제/이동)
     assert "_tView" in js and "_tBindView" in js        # 줌/팬 뷰 유지(재렌더에도 안 튐)
+    # v4.5: 선 타입 팔레트(직선/꺾은선/점선) + 더블클릭 편집 + 정렬 스냅 가이드
+    assert "_tLineStyle" in js and "tline-btn" in js     # 선 도구 팔레트
+    assert 'style === "elbow"' in js                     # 꺾은선 렌더
+    assert 'g.addEventListener("dblclick"' in js         # 더블클릭=설정(단일클릭은 선택만)
+    assert "tg-v" in js and "tg-h" in js                 # 정렬 스냅 가이드선
     assert 'id="topo-palette"' in html
     assert 'id="modal-topo-node"' in html and 'id="tn-ip"' in html
     # 편집기 핵심 함수/동작
