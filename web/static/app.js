@@ -2279,9 +2279,17 @@ var _tdiag = { nodes: [], edges: [] };   // {nodes:[{id,kind,ip,name,x,y,subnets
 var _tEditMode = false;                   // 편집 모드(끄면 보기 전용 — 실수 클릭 방지)
 var _tLinkFrom = null;                    // 연결 시작 노드(🔗 손잡이 클릭)
 var _tEditId = null;                      // 편집 중 노드 id
-var _tSelId = null;                       // 선택된 노드(Ctrl+C 복사 / Delete 삭제 대상)
-var _tClip = null;                        // 복사 버퍼(노드 스냅샷)
+var _tSelId = null;                       // 마지막 클릭 노드(단일 선택)
+var _tSel = {};                           // 다중 선택 집합 {id:true} — 드래그 영역/Shift 클릭
+var _tClip = null;                        // 복사 버퍼(노드 스냅샷 배열)
 var _tSeq = 1;
+
+// 현재 선택된 노드 id 목록(다중 우선, 없으면 단일)
+function _tSelIds() {
+  var ks = Object.keys(_tSel);
+  return ks.length ? ks : (_tSelId ? [_tSelId] : []);
+}
+function _tIsSel(id) { return !!_tSel[id] || _tSelId === id; }
 
 // 각 장비 종류 → 전용 SVG 심볼(_deviceSymbol) + 색 + 팔레트 라벨
 var _TOPO_KIND = {
@@ -2406,7 +2414,7 @@ function _renderEditor() {
     if (meta.zone) return;
     var color = (n.reachable === false || n.status === "failed") ? "#ef4444" : meta.color;
     var hl = (_tLinkFrom === n.id) ? "<circle cx='" + n.x + "' cy='" + n.y + "' r='26' fill='none' stroke='#38bdf8' stroke-width='2'/>" :
-      (_tSelId === n.id) ? "<rect x='" + (n.x - 24) + "' y='" + (n.y - 24) + "' width='48' height='48' rx='6' fill='none' stroke='#facc15' stroke-width='2' stroke-dasharray='4 3'/>" : "";
+      _tIsSel(n.id) ? "<rect x='" + (n.x - 24) + "' y='" + (n.y - 24) + "' width='48' height='48' rx='6' fill='none' stroke='#facc15' stroke-width='2' stroke-dasharray='4 3'/>" : "";
     svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tEditMode ? "move" : "default") + "'>");
     svg.push(hl);
     if (meta.box) {
@@ -2467,10 +2475,13 @@ function _tBindEditor(host, W, H) {
       var n = _tNode(rz.getAttribute("data-id")); if (!n) return;
       var vb = svgEl._vb || { w: W, h: H }, rect = svgEl.getBoundingClientRect();
       var sx = vb.w / (rect.width || 1), sy = vb.h / (rect.height || 1);
-      var ow = n.w || 320, oh = n.h || 220, px = e.clientX, py = e.clientY;
+      var ow = n.w || 320, oh = n.h || 220, ox = n.x, oy = n.y, px = e.clientX, py = e.clientY;
       function mm(ev) {
-        n.w = Math.max(120, ow + (ev.clientX - px) * sx * 2);   // 중심 기준이라 *2
-        n.h = Math.max(90, oh + (ev.clientY - py) * sy * 2);
+        // 좌상단 고정, 우하단만 늘어남(자유 리사이즈): w/h 증가분의 절반만큼 중심 이동
+        var nw = Math.max(120, ow + (ev.clientX - px) * sx);
+        var nh = Math.max(90, oh + (ev.clientY - py) * sy);
+        n.x = ox + (nw - ow) / 2; n.y = oy + (nh - oh) / 2;
+        n.w = nw; n.h = nh;
         _renderEditor();
       }
       function mu() { window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu); }
@@ -2496,13 +2507,20 @@ function _tBindEditor(host, W, H) {
       if (_tLinkFrom !== id) _tMakeEdge(_tLinkFrom, id);
       _tLinkFrom = null; _renderEditor();
     });
-    // 드래그 이동(양쪽 모드 다 가능 — 이동은 무해) / 클릭 편집(편집 모드에서만).
-    // 드래그 중엔 노드 그룹만 transform으로 옮겨 부드럽게(전체 재렌더 X), 놓을 때 1회 확정.
+    // 드래그 이동 / 클릭 편집(편집 모드). 다중 선택 상태면 선택된 노드 전체를 함께 이동.
     g.addEventListener("mousedown", function (e) {
       if (_tLinkFrom) return;                  // 연결 대기 중이면 클릭으로 연결(드래그 아님)
-      e.stopPropagation();                     // 캔버스 팬 방지
-      _tSelId = id;                            // 선택(복사/삭제 대상)
-      var n = _tNode(id); if (!n) return;
+      e.stopPropagation();                     // 캔버스 팬/영역선택 방지
+      // 선택 처리: Shift=토글 추가, 아니면 (선택집합에 없을 때) 단일 선택으로 재설정
+      if (e.shiftKey) { if (_tSel[id]) delete _tSel[id]; else _tSel[id] = true; _tSelId = id; _renderEditor(); }
+      else if (!_tSel[id]) { _tSel = {}; _tSelId = id; }
+      // 함께 이동할 노드: 다중 선택 안에 이 노드가 있으면 선택 전체, 아니면 이 노드만
+      var moveIds = (_tSel[id] && Object.keys(_tSel).length) ? Object.keys(_tSel) : [id];
+      var moveNodes = moveIds.map(_tNode).filter(Boolean);
+      var moveGs = {};
+      host.querySelectorAll(".tnode").forEach(function (gg) {
+        if (moveIds.indexOf(gg.getAttribute("data-id")) >= 0) moveGs[gg.getAttribute("data-id")] = gg;
+      });
       var vb = svgEl._vb || { w: W, h: H };
       var rect = svgEl.getBoundingClientRect();
       var sx = vb.w / (rect.width || 1), sy = vb.h / (rect.height || 1);
@@ -2510,15 +2528,59 @@ function _tBindEditor(host, W, H) {
       function mm(ev) {
         dx = (ev.clientX - px) * sx; dy = (ev.clientY - py) * sy;
         if (Math.abs(ev.clientX - px) + Math.abs(ev.clientY - py) > 3) moved = true;
-        g.setAttribute("transform", "translate(" + dx + "," + dy + ")");   // 이 노드만 이동(가벼움)
+        moveIds.forEach(function (mid) {        // 선택된 노드 그룹만 transform(가벼움)
+          if (moveGs[mid]) moveGs[mid].setAttribute("transform", "translate(" + dx + "," + dy + ")");
+        });
       }
       function mu() {
         window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
-        if (moved) { n.x += dx; n.y += dy; _renderEditor(); }   // 확정 후 1회 재렌더(선/박스 갱신)
-        else if (_tEditMode) _openNodeModal(id);                // 이동 없이 클릭 = 편집(편집 모드만)
+        if (moved) { moveNodes.forEach(function (nn) { nn.x += dx; nn.y += dy; }); _renderEditor(); }
+        else if (_tEditMode && !e.shiftKey) _openNodeModal(id);   // 이동 없이 클릭 = 편집
       }
       window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
     });
+  });
+  // 영역 선택(러버밴드): 편집 모드에서 빈 캔버스 드래그 → 사각 영역 안 노드 다중 선택.
+  if (_tEditMode) _tBindRubberBand(host, W, H, svgEl);
+}
+
+function _tBindRubberBand(host, W, H, svgEl) {
+  svgEl.addEventListener("mousedown", function (e) {
+    if (e.target !== svgEl) return;            // 빈 배경에서 시작할 때만(노드 위 X)
+    if (_tLinkFrom) return;
+    var vb = svgEl._vb || { w: W, h: H };
+    var rect = svgEl.getBoundingClientRect();
+    function toVb(cx, cy) {
+      return { x: vb.x + (cx - rect.left) / rect.width * vb.w,
+               y: vb.y + (cy - rect.top) / rect.height * vb.h };
+    }
+    var s = toVb(e.clientX, e.clientY);
+    window._tRubberActive = true;
+    if (!e.shiftKey) { _tSel = {}; _tSelId = null; }
+    var rc = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rc.setAttribute("fill", "#38bdf8"); rc.setAttribute("fill-opacity", "0.12");
+    rc.setAttribute("stroke", "#38bdf8"); rc.setAttribute("stroke-dasharray", "4 3");
+    svgEl.appendChild(rc);
+    function mm(ev) {
+      var c = toVb(ev.clientX, ev.clientY);
+      var x = Math.min(s.x, c.x), y = Math.min(s.y, c.y), w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
+      rc.setAttribute("x", x); rc.setAttribute("y", y); rc.setAttribute("width", w); rc.setAttribute("height", h);
+      rc._box = { x: x, y: y, w: w, h: h };
+    }
+    function mu() {
+      window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
+      window._tRubberActive = false;
+      var box = rc._box;
+      if (box && box.w > 4 && box.h > 4) {
+        _tdiag.nodes.forEach(function (n) {
+          if (n.x >= box.x && n.x <= box.x + box.w && n.y >= box.y && n.y <= box.y + box.h)
+            _tSel[n.id] = true;
+        });
+      }
+      if (rc.parentNode) rc.parentNode.removeChild(rc);
+      _renderEditor();
+    }
+    window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
   });
 }
 
@@ -4030,8 +4092,11 @@ function _topoBindZoomPan(host, width, height) {
   }, { passive: false });
   var drag = null;
   svgEl.addEventListener("mousedown", function (e) {
-    // 노드/연결손잡이 위에서는 팬하지 않음(노드 드래그·연결이 처리). 빈 캔버스만 팬.
+    // 노드/연결손잡이 위에서는 팬하지 않음. 편집 모드의 빈 캔버스 드래그는 '영역 선택'이
+    // 처리하므로 팬 안 함(뷰 모드에서만 빈 캔버스 팬).
+    if (window._tRubberActive) return;
     if (e.target.closest && e.target.closest(".topo-node, .tnode, .tlink-handle")) return;
+    if (typeof _tEditMode !== "undefined" && _tEditMode) return;   // 편집 모드=영역 선택
     drag = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y }; svgEl.style.cursor = "grabbing";
   });
   // window 리스너는 추적 등록 — 재렌더 시 _topoWinClear로 정리(누수 방지)
@@ -4148,20 +4213,29 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
     var t = e.target, tag = (t && t.tagName || "").toUpperCase();
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     var mod = e.ctrlKey || e.metaKey;
-    if (mod && (e.key === "c" || e.key === "C")) {
-      var n = _tNode(_tSelId);
-      if (n) { _tClip = JSON.parse(JSON.stringify(n)); e.preventDefault(); }
+    var ids = _tSelIds();
+    if (mod && (e.key === "a" || e.key === "A")) {
+      _tSel = {}; _tdiag.nodes.forEach(function (n) { _tSel[n.id] = true; });   // 전체 선택
+      _renderEditor(); e.preventDefault();
+    } else if (mod && (e.key === "c" || e.key === "C")) {
+      var picked = ids.map(_tNode).filter(Boolean);
+      if (picked.length) { _tClip = JSON.parse(JSON.stringify(picked)); e.preventDefault(); }
     } else if (mod && (e.key === "v" || e.key === "V")) {
-      if (_tClip) {
-        var c = JSON.parse(JSON.stringify(_tClip));
-        c.id = "n" + (_tSeq++); c.x = (c.x || 100) + 40; c.y = (c.y || 100) + 40;
-        _tdiag.nodes.push(c); _tSelId = c.id; _renderEditor(); e.preventDefault();
+      if (_tClip && _tClip.length) {
+        _tSel = {};
+        _tClip.forEach(function (src) {
+          var c = JSON.parse(JSON.stringify(src));
+          c.id = "n" + (_tSeq++); c.x = (c.x || 100) + 40; c.y = (c.y || 100) + 40;
+          _tdiag.nodes.push(c); _tSel[c.id] = true;
+        });
+        _renderEditor(); e.preventDefault();
       }
     } else if (e.key === "Delete" || e.key === "Backspace") {
-      if (_tSelId && _tNode(_tSelId)) {
-        _tdiag.nodes = _tdiag.nodes.filter(function (x) { return x.id !== _tSelId; });
-        _tdiag.edges = _tdiag.edges.filter(function (ed) { return ed.a !== _tSelId && ed.b !== _tSelId; });
-        _tSelId = null; _renderEditor(); e.preventDefault();
+      if (ids.length) {
+        var del = {}; ids.forEach(function (i) { del[i] = true; });
+        _tdiag.nodes = _tdiag.nodes.filter(function (x) { return !del[x.id]; });
+        _tdiag.edges = _tdiag.edges.filter(function (ed) { return !del[ed.a] && !del[ed.b]; });
+        _tSel = {}; _tSelId = null; _renderEditor(); e.preventDefault();
       }
     }
   });

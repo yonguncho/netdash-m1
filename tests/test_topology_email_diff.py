@@ -288,6 +288,8 @@ def test_topology_editor_ui():
     assert "_tEditMode" in js                # 편집 모드(끄면 보기 전용)
     assert "tlink-handle" in js              # 🔗 손잡이로 연결 시작
     assert "_tClip" in js and "_tSelId" in js  # Ctrl+C 복사 / Delete 삭제 (선택+클립보드)
+    assert "_tBindRubberBand" in js and "_tSel" in js  # 드래그 영역 다중 선택
+    assert "_tSelIds" in js                             # 다중 선택 대상(복사/삭제/이동)
     assert 'id="topo-palette"' in html
     assert 'id="modal-topo-node"' in html and 'id="tn-ip"' in html
     # 편집기 핵심 함수/동작
