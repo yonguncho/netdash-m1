@@ -64,7 +64,8 @@ def test_ui_low_fixes_static():
     assert "if (!tbody) return;" in js
     # VLAN/토폴로지 로드 실패 안내
     assert "VLAN 현황을 불러오지 못했습니다" in js
-    assert "토폴로지를 불러오지 못했습니다" in js
+    # v4.4: 토폴로지 편집기 로드 실패 문구('구성도를 불러오지 못했습니다')
+    assert "구성도를 불러오지 못했습니다" in js
     html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     # colspan 정정(설비 6, 방화벽 7)
     assert 'colspan="6"' in html

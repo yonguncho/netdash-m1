@@ -1355,6 +1355,17 @@ def save_vlan_names(db_path, switch_id, vlans):
                 log_event("warning", "save_vlan_names_skipped", error=str(e))
 
 
+def get_switch_vlan_ids(db_path, switch_id):
+    """스위치가 나르는 VLAN ID 집합(show vlan brief 기준). 없으면 빈 set."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT vlan FROM vlan_names WHERE switch_id=?", (switch_id,))
+            return {r["vlan"] for r in cur.fetchall() if r["vlan"] is not None}
+        except Exception:
+            return set()
+
+
 def get_vlan_summary(db_path):
     """전체 VLAN 목록과 스위치별 사용 현황 + VLAN 이름(show vlan brief).
 

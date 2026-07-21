@@ -508,6 +508,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return "존 일괄 지정"
             if p == "/api/credentials/delete":
                 return "저장 계정 삭제"
+            if p == "/api/topology/diagram":
+                return "토폴로지 구성도 저장"
             if p == "/api/servers":
                 return "서버 등록"
             if p == "/api/servers/collect-all":
@@ -1351,6 +1353,97 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         except Exception as e:
             log_event("error", "topology_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
+
+    # ── 하이브리드 토폴로지 편집기 (v4.4) ───────────────────────────
+    @app.route("/api/topology/diagram", methods=["GET"])
+    def get_topology_diagram():
+        """저장된 구성도(배치+연결) 로드. 없으면 빈 구성."""
+        try:
+            import json as _json
+            raw = db.get_setting(db_path, "topology_diagram", "") or ""
+            data = _json.loads(raw) if raw else {"nodes": [], "edges": []}
+            return jsonify(data)
+        except Exception as e:
+            log_event("error", "topo_diagram_get_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"nodes": [], "edges": []})
+
+    @app.route("/api/topology/diagram", methods=["POST"])
+    @rate_limit("save_topo_diagram", max_requests=60, window_seconds=60)
+    def save_topology_diagram():
+        """구성도 저장(배치 좌표·연결·대역칩). body: {nodes:[...], edges:[...]}"""
+        try:
+            import json as _json
+            data = request.get_json(silent=True) or {}
+            nodes = data.get("nodes", [])
+            edges = data.get("edges", [])
+            if not isinstance(nodes, list) or not isinstance(edges, list):
+                return jsonify({"error": "nodes/edges must be lists"}), 400
+            if len(nodes) > 2000 or len(edges) > 4000:
+                return jsonify({"error": "too large"}), 400
+            db.set_setting(db_path, "topology_diagram",
+                           _json.dumps({"nodes": nodes, "edges": edges}))
+            log_event("info", "topo_diagram_saved", nodes=len(nodes), edges=len(edges))
+            return jsonify({"ok": True})
+        except Exception as e:
+            log_event("error", "topo_diagram_save_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/topology/lookup", methods=["GET"])
+    def topology_lookup():
+        """IP로 등록 장비 조회(hostname·모델·상태 자동 채움)."""
+        try:
+            from core import topology, reachability
+            ip = (request.args.get("ip") or "").strip()
+            dev = topology.lookup_device(db_path, ip)
+            if not dev:
+                return jsonify({"found": False})
+            # 도달성 주입
+            if dev["kind"] == "sw":
+                r = reachability.get_state().get(dev["id"])
+                if r is not None:
+                    dev["reachable"] = r
+            elif dev["kind"] == "fw":
+                r = reachability.get_fw_state().get(dev["id"])
+                if r is not None:
+                    dev["reachable"] = r
+            dev["found"] = True
+            return jsonify(dev)
+        except Exception as e:
+            log_event("error", "topo_lookup_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"found": False, "error": "Internal server error"}), 500
+
+    @app.route("/api/topology/subnet-suggest", methods=["GET"])
+    def topology_subnet_suggest():
+        """스위치가 나르는 VLAN → 대역 자동 제안(L2 대역 박스 자동 채움)."""
+        try:
+            from core import topology
+            ip = (request.args.get("ip") or "").strip()
+            return jsonify({"subnets": topology.subnet_suggest(db_path, ip)})
+        except Exception as e:
+            log_event("error", "topo_subnet_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"subnets": []})
+
+    @app.route("/api/topology/link-ports", methods=["POST"])
+    def topology_link_ports():
+        """두 장비 사이 연결 포트 자동 인식. body: {a_ip, b_ip}"""
+        try:
+            from core import topology
+            data = request.get_json(silent=True) or {}
+            res = topology.resolve_link_ports(db_path, data.get("a_ip"), data.get("b_ip"))
+            return jsonify(res)
+        except Exception as e:
+            log_event("error", "topo_linkports_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"a_port": None, "b_port": None, "method": "none"})
+
+    @app.route("/api/topology/draft", methods=["GET"])
+    def topology_draft():
+        """자동 초안 — 서버실 트리를 편집기 초안(배치 없음)으로 반환."""
+        try:
+            from core import topology
+            return jsonify(topology.build_serverroom_tree(db_path))
+        except Exception as e:
+            log_event("error", "topo_draft_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"nodes": [], "links": [], "roots": []})
 
     @app.route("/api/configs/diff", methods=["GET"])
     def config_diff():

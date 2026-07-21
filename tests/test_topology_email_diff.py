@@ -277,43 +277,26 @@ def test_topology_l2_band_code_preserved():
     assert 'kind === "band"' in js              # 대역 유사노드 처리
 
 
-def test_topology_zone_view():
-    """존·대역 뷰(SVG 아이콘+연결선+포트): 모드 버튼 + 중심축 + Zone + L3 하위 대역."""
+def test_topology_editor_ui():
+    """v4.4: 자동 뷰 폐기 → 하이브리드 편집기(팔레트·배치·연결·대역칩·저장)."""
     js = APP_JS.read_text(encoding="utf-8")
     html = HTML.read_text(encoding="utf-8")
-    assert 'id="tab-topology"' in html          # 토폴로지 탭(단일 존·대역 뷰)
-    assert "_renderZoneMap" in js               # 존·대역 렌더러
-    assert "zoneSym" in js and "_zoneIconKind" in js  # 장비 SVG 아이콘
-    assert "zoneFws" in js and "internetFw" in js  # Zone/경계(Internet) 방화벽 분류
-    assert "internetSw" in js and "backbones" in js  # 중심축: Internet SW / OA Backbone
-    assert "_hostTokens" in js                  # 방화벽 호스트명 토큰으로 Zone 구분
-    assert "zoneByName" in js and "zoneKeyOf" in js  # 호스트명 1순위 + 이중화 병합
-    assert "centralBBs" in js                   # 중심 OA BB만 중심축(Zone 백본은 Zone 내부)
-    assert "cfgSubs" in js                       # L3 config 대역만(Zone 간 오염 방지)
-    # SVG 선+포트 하이브리드
-    assert "confirmedOwner" in js               # 직결 확정 링크 우선 배정
-    assert 'l.source === "cdp/lldp"' in js       # 확정=실선 / 추론=점선 구분
-    assert 'l.source === "mac" && l.mutual' in js  # 양방향 MAC=직결 신뢰(1순위 배정)
-    assert "macDirect" in js                     # MAC 직결 실선 표시
-    assert "subText" in js                       # L3 밑 대역 텍스트(L2 아이콘 없음)
-    # 이중화 쌍 나란히 배치 + 대역 중복 제거
-    assert "_pairKey" in js                     # 이중화 쌍 검출(M/B·1/2·BB1/BB2)
-    assert "_redunPairs" in js                  # 이중화 연결선
-    assert "distGroups" in js                   # 쌍당 대역 박스 1개(중복 제거)
-    assert "cfgSubs(d)" in js                   # 각 L3는 자기 config 대역만(중복 방지)
-    # 미분류 catch-all: 배정 안 된 등록 장비(L2 포함)도 누락 없이 아이콘 표시
-    assert "orphanDists" in js
-    assert 'n.device_type || n.kind === "fw" || rk(n) <= 3' in js
-    assert "EXT[_-]?SW" in js                    # 인터넷 스위치 감지 패턴 확장
-    # HA(VIP 공유) 방화벽: 쌍 인식·나란히 배치·이중화 선·링크 중복 제거
-    assert "vipGroup" in js and "haPartner" in js   # 같은 host = HA 쌍
-    assert "internetFwGroup" in js                  # 인터넷 FW 쌍 중심축 표시
-    assert "_vipKey" in js                          # Backup 중복 링크 제거(VIP 그룹당 1회)
-    # Contrail식 인터랙티브: 드래그 재배치 + 위치 저장 + 화면맞춤/초기화
-    assert "_topoBindDrag" in js and "_topoLayout" in js   # 드래그 + 저장(persist)
-    assert "netdash_topo_layout" in js              # localStorage 저장 키
-    assert "svgEl._fit" in js                       # 화면 맞춤(fit-to-view)
-    assert 'id="btn-topo-fit"' in html and 'id="btn-topo-reset-layout"' in html
+    assert 'id="tab-topology"' in html
+    # 편집기 툴바 + 팔레트 + 노드 편집 모달
+    assert 'id="btn-topo-draft"' in html and 'id="btn-topo-link"' in html
+    assert 'id="btn-topo-save"' in html
+    assert 'id="topo-palette"' in html
+    assert 'id="modal-topo-node"' in html and 'id="tn-ip"' in html
+    # 편집기 핵심 함수/동작
+    assert "_renderEditor" in js and "_buildPalette" in js
+    assert "_tMakeEdge" in js               # 수동 링크 생성 → 포트 자동 인식
+    assert "/api/topology/link-ports" in js  # 포트 자동 인식 호출
+    assert "/api/topology/lookup" in js      # IP → 장비 정보 자동 채움
+    assert "/api/topology/subnet-suggest" in js  # 대역 자동 제안
+    assert "/api/topology/diagram" in js     # 저장/로드
+    assert "_renderChips" in js              # 대역 칩(자동+수동) 편집
+    # 화면 맞춤 유지
+    assert "svgEl._fit" in js and 'id="btn-topo-fit"' in html
 
 
 def test_serial_c9300l_formats():

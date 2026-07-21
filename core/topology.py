@@ -550,3 +550,148 @@ def build_serverroom_tree(db_path):
     roots = [nid for nid, n in keep.items()
              if n["role"] in ("internet_fw", "backbone")]
     return {"nodes": list(keep.values()), "links": links, "roots": roots}
+
+
+# ─── 하이브리드 토폴로지 편집기 백엔드 (v4.4) ───────────────────────
+def lookup_device(db_path, ip):
+    """IP로 등록 장비 조회 — 편집기에서 IP 입력 시 hostname/모델 자동 채움용.
+
+    스위치 > 방화벽(host) > 서버 순. 없으면 None.
+    """
+    ip = (ip or "").strip()
+    if not ip:
+        return None
+    for s in db.get_switches(db_path):
+        if s.get("ip") == ip:
+            cls = classify_l3(_latest_configs(db_path, [s["id"]]).get(s["id"], ""))
+            return {"kind": "sw", "id": s["id"], "name": s.get("name"),
+                    "hostname": s.get("hostname"), "model": s.get("model"),
+                    "vendor": s.get("vendor"), "status": s.get("status"),
+                    "device_type": s.get("device_type") or (cls or ""),
+                    "l3_class": cls}
+    try:
+        for f in db.list_firewalls(db_path):
+            if f.get("host") == ip:
+                return {"kind": "fw", "id": f["id"], "name": f.get("name"),
+                        "vendor": f.get("vendor"), "status": f.get("status"),
+                        "device_type": "Firewall"}
+    except Exception:
+        pass
+    try:
+        for sv in db.list_servers(db_path):
+            if sv.get("ip") == ip:
+                return {"kind": "srv", "id": sv["id"], "name": sv.get("name"),
+                        "hostname": sv.get("hostname"), "os": sv.get("os_type"),
+                        "status": sv.get("status")}
+    except Exception:
+        pass
+    return None
+
+
+def subnet_suggest(db_path, ip):
+    """스위치가 나르는 VLAN → 대역 자동 제안(L2 대역 박스 자동 채움).
+
+    ① 그 스위치의 SVI(직접 보유 대역) ② + 그 스위치가 나르는 VLAN을
+    전체 L3 SVI 맵과 대조해 얻은 대역(L2라 SVI 없어도 상위 L3 대역 상속).
+    Returns: [{vlan, cidr, source: 'svi'|'vlan'}]
+    """
+    dev = lookup_device(db_path, ip)
+    if not dev or dev["kind"] != "sw":
+        return []
+    sid = dev["id"]
+    cfgs = _latest_configs(db_path, [s["id"] for s in db.get_switches(db_path)])
+    # 전역 VLAN→대역 맵(모든 스위치 SVI에서 수집)
+    vlan_to_cidr = {}
+    for other_sid, cfg in cfgs.items():
+        for s in parse_svi_subnets(cfg):
+            if s["vlan"] is not None and s["vlan"] not in vlan_to_cidr:
+                vlan_to_cidr[s["vlan"]] = s["cidr"]
+    out, seen = [], set()
+    # ① 자기 SVI(직접)
+    for s in parse_svi_subnets(cfgs.get(sid, "")):
+        if s["cidr"] not in seen:
+            seen.add(s["cidr"])
+            out.append({"vlan": s["vlan"], "cidr": s["cidr"], "source": "svi"})
+    # ② 나르는 VLAN → 상위 L3 대역 상속
+    for vid in sorted(db.get_switch_vlan_ids(db_path, sid)):
+        cidr = vlan_to_cidr.get(vid)
+        if cidr and cidr not in seen:
+            seen.add(cidr)
+            out.append({"vlan": vid, "cidr": cidr, "source": "vlan"})
+    return out
+
+
+def _identity_macs(db_path, dev, ip, ip_macs=None):
+    """장비의 식별 MAC 집합 — 링크 포트 자동 인식용.
+
+    스위치: 관리 MAC(자기 IP의 ARP) + 인터페이스 MAC. 방화벽/서버: 자기 IP의 ARP MAC.
+    """
+    macs = set()
+    ip_macs = ip_macs if ip_macs is not None else _arp_ip_macs(db_path)
+    m = ip_macs.get(ip)
+    if m:
+        macs.add(m.lower())
+    if dev and dev.get("kind") == "sw":
+        try:
+            dm = _device_macs(db_path, [s for s in db.get_switches(db_path)
+                                        if s["id"] == dev["id"]], ip_macs)
+            for s in dm.get(dev["id"], set()):
+                macs.add(s.lower())
+        except Exception:
+            pass
+    if dev and dev.get("kind") == "srv":
+        try:
+            sv = db.get_server(db_path, dev["id"])
+            if sv and sv.get("mac"):
+                macs.add(sv["mac"].lower())
+        except Exception:
+            pass
+    return macs
+
+
+def resolve_link_ports(db_path, a_ip, b_ip):
+    """두 장비 사이의 연결 포트를 수집 데이터로 자동 인식.
+
+    A(스위치) 쪽: B의 MAC이 보이는 A의 물리 포트. B(스위치) 쪽: 대칭.
+    Returns: {a_port, b_port, method}. 못 찾으면 해당 포트 None.
+    """
+    a = lookup_device(db_path, a_ip)
+    b = lookup_device(db_path, b_ip)
+    ip_macs = _arp_ip_macs(db_path)
+    a_macs = _identity_macs(db_path, a, a_ip, ip_macs)
+    b_macs = _identity_macs(db_path, b, b_ip, ip_macs)
+    mac_map = db.get_mac_to_switchport(db_path)     # {mac: [(sid, name, port)]}
+    port_counts = db.get_port_mac_counts(db_path)
+    pc_map = db.get_port_channel_members(db_path)
+
+    def _port_on(switch_dev, target_macs):
+        """switch_dev(스위치) 위에서 target_macs가 보이는 물리 포트(가장 구체적)."""
+        if not switch_dev or switch_dev.get("kind") != "sw":
+            return None
+        sid = switch_dev["id"]
+        best = None
+        for tm in target_macs:
+            for (msid, _n, port) in mac_map.get(tm, []):
+                if msid != sid:
+                    continue
+                pl = (port or "").lower()
+                is_logical = pl.startswith(("po", "vl", "port-channel"))
+                cnt = port_counts.get((sid, pl), 9999)
+                score = (1 if is_logical else 0, cnt)
+                if best is None or score < best[0]:
+                    best = (score, port)
+        if not best:
+            return None
+        port = best[1]
+        # Po면 물리 멤버로 치환
+        pl = (port or "").lower()
+        if pl.startswith(("po", "port-channel")):
+            members = pc_map.get((sid, pl))
+            if members:
+                port = "%s (%s)" % (", ".join(members), port)
+        return port
+
+    a_port = _port_on(a, b_macs)
+    b_port = _port_on(b, a_macs)
+    method = "mac" if (a_port or b_port) else "none"
+    return {"a_port": a_port, "b_port": b_port, "method": method}

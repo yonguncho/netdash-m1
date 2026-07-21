@@ -2273,16 +2273,268 @@ function _isCoreDevice(n) {
   return false;
 }
 
+// ═══ 하이브리드 토폴로지 편집기 (v4.4) ═══════════════════════════
+// 사람이 배치(팔레트 드래그·연결) + 툴이 정보 자동 채움(IP→hostname, 선→포트).
+var _tdiag = { nodes: [], edges: [] };   // {nodes:[{id,kind,ip,name,x,y,subnets,...}], edges}
+var _tLinkMode = false;                   // 연결 모드
+var _tLinkFrom = null;                    // 연결 첫 노드
+var _tEditId = null;                      // 편집 중 노드 id
+var _tSeq = 1;
+
+var _TOPO_KIND = {
+  internet: { sym: null, color: "#0ea5e9", label: "🌐" },
+  internet_fw: { sym: "방화벽", color: "#ef4444" },
+  firewall: { sym: "방화벽", color: "#ef4444" },
+  backbone: { sym: "백본", color: "#a855f7" },
+  l3: { sym: "L3", color: "#8b5cf6" },
+  l4: { sym: "L4", color: "#f59e0b" },
+  l2: { sym: "L2", color: "#14b8a6" },
+  server: { sym: null, color: "#3b82f6", label: "🖥" },
+};
+
 function loadTopology() {
-  fetch("/api/topology").then(function (r) { return r.json(); }).then(function (data) {
-    _topoData = { nodes: data.nodes || [], links: data.links || [] };
-    renderTopology();
+  _buildPalette();
+  fetch("/api/topology/diagram").then(function (r) { return r.json(); }).then(function (d) {
+    _tdiag = { nodes: d.nodes || [], edges: d.edges || [] };
+    _tdiag.nodes.forEach(function (n) {
+      var m = /(\d+)/.exec(n.id || ""); if (m && +m[1] >= _tSeq) _tSeq = +m[1] + 1;
+    });
+    _renderEditor();
   }).catch(function (e) {
     console.error("topology:", e);
     var h = document.getElementById("topology-canvas");
-    if (h) h.innerHTML = "<p style='color:#991b1b;padding:16px'>토폴로지를 불러오지 못했습니다. 새로고침 후 다시 시도하세요.</p>";
+    if (h) h.innerHTML = "<p style='color:#991b1b;padding:16px'>구성도를 불러오지 못했습니다. 새로고침 후 다시 시도하세요.</p>";
   });
 }
+
+function _buildPalette() {
+  var pal = document.getElementById("topo-palette");
+  if (!pal || pal.dataset.built) return;
+  pal.dataset.built = "1";
+  var items = [["internet", "🌐 인터넷"], ["internet_fw", "🔥 인터넷FW"], ["firewall", "🔥 방화벽"],
+    ["backbone", "⬛ 백본"], ["l3", "🟪 L3"], ["l4", "🟧 L4"], ["l2", "⬜ L2"], ["server", "🖥 서버"]];
+  items.forEach(function (it) {
+    var b = document.createElement("button");
+    b.className = "btn btn--secondary";
+    b.style.cssText = "display:block;width:100%;font-size:12px;margin-bottom:5px;text-align:left";
+    b.textContent = it[1];
+    b.addEventListener("click", function () { _addNode(it[0]); });
+    pal.appendChild(b);
+  });
+}
+
+function _addNode(kind) {
+  var id = "n" + (_tSeq++);
+  _tdiag.nodes.push({ id: id, kind: kind, ip: "", name: _TOPO_KIND[kind] ? kind : kind,
+    x: 260 + (_tdiag.nodes.length % 5) * 40, y: 120 + (_tdiag.nodes.length % 4) * 40, subnets: [] });
+  _renderEditor();
+  _openNodeModal(id);
+}
+
+function _tNode(id) { return _tdiag.nodes.find(function (n) { return n.id === id; }); }
+
+function _renderEditor() {
+  var host = document.getElementById("topology-canvas");
+  if (!host) return;
+  var W = 1600, H = 1000;
+  var svg = ["<svg id='topo-svg' xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'" +
+    " viewBox='0 0 " + W + " " + H + "' preserveAspectRatio='xMidYMid meet'" +
+    " style='display:block;background:#0f172a;cursor:" + (_tLinkMode ? "crosshair" : "grab") + "'>"];
+  // 연결선
+  _tdiag.edges.forEach(function (e) {
+    var a = _tNode(e.a), b = _tNode(e.b);
+    if (!a || !b) return;
+    var port = [e.a_port, e.b_port].filter(Boolean).join(" ↔ ");
+    svg.push("<line x1='" + a.x + "' y1='" + a.y + "' x2='" + b.x + "' y2='" + b.y +
+      "' stroke='#22c55e' stroke-width='2'/>");
+    if (port) svg.push("<text x='" + ((a.x + b.x) / 2) + "' y='" + ((a.y + b.y) / 2 - 4) +
+      "' fill='#94a3b8' font-size='11' text-anchor='middle'>" + escHtml(port) + "</text>");
+  });
+  // 노드
+  _tdiag.nodes.forEach(function (n) {
+    var meta = _TOPO_KIND[n.kind] || _TOPO_KIND.l2;
+    var color = (n.reachable === false || n.status === "failed") ? "#ef4444" : meta.color;
+    var hl = (_tLinkFrom === n.id) ? "<circle cx='" + n.x + "' cy='" + n.y + "' r='26' fill='none' stroke='#38bdf8' stroke-width='2'/>" : "";
+    svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tLinkMode ? "pointer" : "move") + "'>");
+    svg.push(hl);
+    if (meta.sym) svg.push(_deviceSymbol(meta.sym, n.x - 17, n.y - 17, color));
+    else svg.push("<circle cx='" + n.x + "' cy='" + n.y + "' r='16' fill='" + color +
+      "' fill-opacity='0.18' stroke='" + color + "' stroke-width='1.8'/>" +
+      "<text x='" + n.x + "' y='" + (n.y + 5) + "' font-size='14' text-anchor='middle'>" + (meta.label || "") + "</text>");
+    svg.push("<text x='" + n.x + "' y='" + (n.y + 32) + "' fill='#e2e8f0' font-size='12' text-anchor='middle'>" +
+      escHtml(n.name || "") + "</text>");
+    if (n.ip) svg.push("<text x='" + n.x + "' y='" + (n.y + 45) + "' fill='#64748b' font-size='10' text-anchor='middle'>" + escHtml(n.ip) + "</text>");
+    // 대역 박스
+    var subs = n.subnets || [];
+    if (subs.length) {
+      var bx = n.x - 80, by = n.y + 52, bw = 160, bh = 18 + subs.slice(0, 8).length * 14;
+      svg.push("<rect x='" + bx + "' y='" + by + "' width='" + bw + "' height='" + bh +
+        "' rx='4' fill='#0b1220' stroke='" + meta.color + "' stroke-opacity='0.5'/>");
+      subs.slice(0, 8).forEach(function (s, i) {
+        var v = s.vlan != null ? ("V" + s.vlan + " ") : "";
+        var col = s.source === "manual" ? "#60a5fa" : "#cbd5e1";
+        svg.push("<text x='" + (bx + 7) + "' y='" + (by + 14 + i * 14) + "' fill='" + col +
+          "' font-size='10'>" + escHtml(v + s.cidr) + "</text>");
+      });
+    }
+    svg.push("</g>");
+  });
+  svg.push("</svg>");
+  host.innerHTML = "<div id='topo-tip' style='position:fixed;display:none;background:#1e293b;color:#e2e8f0;padding:4px 8px;border-radius:4px;font-size:12px;z-index:99;pointer-events:none'></div>" + svg.join("");
+  _tBindEditor(host, W, H);
+}
+
+function _tBindEditor(host, W, H) {
+  var svgEl = host.querySelector("#topo-svg");
+  if (!svgEl) return;
+  // 줌/팬 재사용
+  _topoWinClear(); _topoBindZoomPan(host, W, H);
+  host.querySelectorAll(".tnode").forEach(function (g) {
+    var id = g.getAttribute("data-id");
+    // 연결 모드: 클릭으로 두 노드 선택
+    g.addEventListener("click", function (e) {
+      if (!_tLinkMode) return;
+      e.stopPropagation();
+      if (!_tLinkFrom) { _tLinkFrom = id; _renderEditor(); return; }
+      if (_tLinkFrom === id) { _tLinkFrom = null; _renderEditor(); return; }
+      _tMakeEdge(_tLinkFrom, id); _tLinkFrom = null;
+    });
+    // 드래그(배치)
+    g.addEventListener("mousedown", function (e) {
+      if (_tLinkMode) return;
+      e.stopPropagation();
+      var n = _tNode(id); if (!n) return;
+      var vb = svgEl._vb || { w: W, h: H };
+      var rect = svgEl.getBoundingClientRect();
+      var sx = vb.w / (rect.width || 1), sy = vb.h / (rect.height || 1);
+      var ox = n.x, oy = n.y, px = e.clientX, py = e.clientY, moved = false;
+      function mm(ev) {
+        moved = Math.abs(ev.clientX - px) + Math.abs(ev.clientY - py) > 3;
+        n.x = ox + (ev.clientX - px) * sx; n.y = oy + (ev.clientY - py) * sy;
+        _renderEditor();
+      }
+      function mu() {
+        window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
+        if (!moved) _openNodeModal(id);   // 클릭(이동 없음) = 편집 열기
+      }
+      window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
+    });
+  });
+}
+
+function _tMakeEdge(a, b) {
+  if (_tdiag.edges.some(function (e) {
+    return (e.a === a && e.b === b) || (e.a === b && e.b === a); })) { _renderEditor(); return; }
+  var edge = { a: a, b: b, a_port: null, b_port: null };
+  _tdiag.edges.push(edge); _renderEditor();
+  // 포트 자동 인식(양쪽 IP 있을 때)
+  var na = _tNode(a), nb = _tNode(b);
+  if (na && nb && na.ip && nb.ip) {
+    fetch("/api/topology/link-ports", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a_ip: na.ip, b_ip: nb.ip }) })
+      .then(function (r) { return r.json(); }).then(function (res) {
+        edge.a_port = res.a_port; edge.b_port = res.b_port;
+        if (!res.a_port && !res.b_port) edge.note = "포트 미확인";
+        _renderEditor();
+      }).catch(function () {});
+  }
+}
+
+function _openNodeModal(id) {
+  var n = _tNode(id); if (!n) return;
+  _tEditId = id;
+  document.getElementById("tn-ip").value = n.ip || "";
+  document.getElementById("tn-name").value = n.name || "";
+  document.getElementById("tn-kind").value = n.kind || "l2";
+  document.getElementById("tn-auto").textContent = "";
+  _renderChips();
+  openModal("modal-topo-node");
+}
+
+function _renderChips() {
+  var n = _tNode(_tEditId); if (!n) return;
+  var box = document.getElementById("tn-chips");
+  box.innerHTML = (n.subnets || []).map(function (s, i) {
+    var v = s.vlan != null ? ("V" + s.vlan + " ") : "";
+    var bg = s.source === "manual" ? "#1e3a5f" : "#334155";
+    return "<span style='background:" + bg + ";color:#e2e8f0;font-size:11px;padding:2px 6px;border-radius:10px'>" +
+      escHtml(v + s.cidr) + " <a href='#' data-chip='" + i + "' style='color:#f87171;text-decoration:none'>✕</a></span>";
+  }).join("");
+  box.querySelectorAll("[data-chip]").forEach(function (a) {
+    a.addEventListener("click", function (e) {
+      e.preventDefault();
+      n.subnets.splice(+a.getAttribute("data-chip"), 1); _renderChips();
+    });
+  });
+}
+
+(function () {
+  // 팔레트/모달 이벤트는 탭 진입 전에도 안전하게 바인딩(요소 존재 시)
+  var lk = document.getElementById("tn-lookup");
+  if (lk) lk.addEventListener("click", function () {
+    var ip = document.getElementById("tn-ip").value.trim();
+    if (!ip) return;
+    fetch("/api/topology/lookup?ip=" + encodeURIComponent(ip)).then(function (r) { return r.json(); })
+      .then(function (d) {
+        var el = document.getElementById("tn-auto");
+        if (!d.found) { el.style.color = "#f59e0b"; el.textContent = "등록된 장비에 없는 IP입니다(수동 입력 가능)."; return; }
+        el.style.color = "#22c55e";
+        el.textContent = "✓ " + (d.name || "") + (d.hostname ? " · " + d.hostname : "") +
+          (d.model ? " · " + d.model : "") + (d.device_type ? " · " + d.device_type : "");
+        var nm = document.getElementById("tn-name");
+        if (!nm.value || nm.value === _tNode(_tEditId).kind) nm.value = d.hostname || d.name || nm.value;
+        // 구분 자동 매핑
+        var dt = (d.device_type || "").toLowerCase();
+        var ks = document.getElementById("tn-kind");
+        if (d.kind === "fw") ks.value = "firewall";
+        else if (d.kind === "srv") ks.value = "server";
+        else if (dt.indexOf("backbone") >= 0 || dt.indexOf("core") >= 0) ks.value = "backbone";
+        else if (d.l3_class === "L3" || dt.indexOf("l3") >= 0) ks.value = "l3";
+        else if (dt.indexOf("l4") >= 0) ks.value = "l4";
+        else ks.value = "l2";
+      }).catch(function () {});
+  });
+  var sg = document.getElementById("tn-subnet-suggest");
+  if (sg) sg.addEventListener("click", function () {
+    var ip = document.getElementById("tn-ip").value.trim();
+    if (!ip) { alert("먼저 IP를 입력하세요."); return; }
+    fetch("/api/topology/subnet-suggest?ip=" + encodeURIComponent(ip)).then(function (r) { return r.json(); })
+      .then(function (d) {
+        var n = _tNode(_tEditId); if (!n) return;
+        n.subnets = n.subnets || [];
+        (d.subnets || []).forEach(function (s) {
+          if (!n.subnets.some(function (x) { return x.cidr === s.cidr; }))
+            n.subnets.push({ vlan: s.vlan, cidr: s.cidr, source: "auto" });
+        });
+        _renderChips();
+      }).catch(function () {});
+  });
+  var addS = document.getElementById("tn-subnet-add");
+  if (addS) addS.addEventListener("click", function () {
+    var inp = document.getElementById("tn-subnet-input");
+    var v = inp.value.trim(); if (!v) return;
+    var n = _tNode(_tEditId); if (!n) return;
+    n.subnets = n.subnets || [];
+    if (!n.subnets.some(function (x) { return x.cidr === v; }))
+      n.subnets.push({ vlan: null, cidr: v, source: "manual" });
+    inp.value = ""; _renderChips();
+  });
+  var sv = document.getElementById("tn-save");
+  if (sv) sv.addEventListener("click", function () {
+    var n = _tNode(_tEditId); if (!n) return;
+    n.ip = document.getElementById("tn-ip").value.trim();
+    n.name = document.getElementById("tn-name").value.trim() || n.name;
+    n.kind = document.getElementById("tn-kind").value;
+    closeModal("modal-topo-node"); _renderEditor();
+  });
+  var del = document.getElementById("tn-delete");
+  if (del) del.addEventListener("click", function () {
+    if (!confirm("이 노드를 삭제할까요?")) return;
+    _tdiag.nodes = _tdiag.nodes.filter(function (n) { return n.id !== _tEditId; });
+    _tdiag.edges = _tdiag.edges.filter(function (e) { return e.a !== _tEditId && e.b !== _tEditId; });
+    closeModal("modal-topo-node"); _renderEditor();
+  });
+})();
 
 function renderTopology() {
   var host = document.getElementById("topology-canvas");
@@ -3696,10 +3948,47 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
     var svgEl = document.querySelector("#topo-svg");
     if (svgEl && svgEl._fit) svgEl._fit();
   });
-  var rst = document.getElementById("btn-topo-reset-layout");
-  if (rst) rst.addEventListener("click", function () {
-    if (Object.keys(_topoLayout).length && !confirm("드래그로 옮긴 위치를 모두 초기화할까요?")) return;
-    _resetTopoLayout();
+  // 연결 모드 토글
+  var link = document.getElementById("btn-topo-link");
+  if (link) link.addEventListener("click", function () {
+    _tLinkMode = !_tLinkMode; _tLinkFrom = null;
+    link.className = "btn " + (_tLinkMode ? "btn--primary" : "btn--secondary");
+    link.style.fontSize = "12px";
+    link.textContent = _tLinkMode ? "🔗 연결 모드 (켜짐 — 두 장비 클릭)" : "🔗 연결 모드";
+    _renderEditor();
+  });
+  // 저장
+  var save = document.getElementById("btn-topo-save");
+  if (save) save.addEventListener("click", function () {
+    fetch("/api/topology/diagram", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_tdiag) }).then(function (r) { return r.json(); }).then(function (res) {
+        if (res.ok) { save.textContent = "💾 저장됨"; setTimeout(function () { save.textContent = "💾 저장"; }, 1500); }
+        else alert(res.error || "저장 실패");
+      }).catch(function () { alert("저장 오류"); });
+  });
+  // 자동 초안 불러오기 — 서버실 트리를 편집기 노드/엣지로 변환해 캔버스에 배치
+  var draft = document.getElementById("btn-topo-draft");
+  if (draft) draft.addEventListener("click", function () {
+    if (_tdiag.nodes.length && !confirm("현재 구성도를 자동 초안으로 덮어쓸까요? (저장 전이면 사라집니다)")) return;
+    fetch("/api/topology/draft").then(function (r) { return r.json(); }).then(function (d) {
+      var idmap = {}, nodes = [], TIER_Y = { 1: 120, 2: 300, 3: 500 };
+      var perTier = {};
+      (d.nodes || []).forEach(function (n) {
+        var role = n.role || "l3";
+        var tier = n.tier || 3;
+        perTier[tier] = (perTier[tier] || 0) + 1;
+        var nid = "n" + (_tSeq++); idmap[n.id] = nid;
+        nodes.push({ id: nid, kind: role, ip: n.ip || "", name: n.name || "",
+          x: 200 + perTier[tier] * 200, y: TIER_Y[tier] || 500,
+          reachable: n.reachable, status: n.status,
+          subnets: (n.subnets_vlan || []).map(function (s) {
+            return { vlan: s.vlan, cidr: s.cidr, source: "auto" }; }) });
+      });
+      var edges = (d.links || []).filter(function (l) { return idmap[l.a] && idmap[l.b]; })
+        .map(function (l) { return { a: idmap[l.a], b: idmap[l.b], a_port: l.a_port, b_port: l.b_port }; });
+      _tdiag = { nodes: nodes, edges: edges };
+      _renderEditor();
+    }).catch(function () { alert("초안 불러오기 오류"); });
   });
 })();
 

@@ -54,6 +54,50 @@
     </div>
   </div>
 
+  <!-- 토폴로지 노드 편집 모달 -->
+  <div id="modal-topo-node" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__box" style="width:440px">
+      <div class="modal__header">
+        <span id="tn-title">장비 정보</span>
+        <button class="modal__close" data-close="modal-topo-node">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label>IP (입력하면 등록 장비에서 hostname·모델 자동 채움)</label>
+        <div style="display:flex;gap:6px">
+          <input id="tn-ip" type="text" placeholder="10.0.0.1" style="flex:1">
+          <button id="tn-lookup" class="btn btn--secondary" style="font-size:12px">자동 채움</button>
+        </div>
+        <div id="tn-auto" style="font-size:12px;color:#22c55e;margin:6px 0;min-height:16px"></div>
+        <label>표시 이름</label>
+        <input id="tn-name" type="text" placeholder="장비 이름">
+        <label>구분</label>
+        <select id="tn-kind">
+          <option value="internet">🌐 인터넷</option>
+          <option value="internet_fw">🔥 인터넷 방화벽</option>
+          <option value="firewall">🔥 방화벽</option>
+          <option value="backbone">⬛ 백본</option>
+          <option value="l3">🟪 L3 스위치</option>
+          <option value="l4">🟧 L4 스위치</option>
+          <option value="l2">⬜ L2 스위치</option>
+          <option value="server">🖥 서버</option>
+        </select>
+        <label style="margin-top:8px">대역 (L3/L2 아래 네트워크 — 자동 제안 + 직접 추가)</label>
+        <div id="tn-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0"></div>
+        <div style="display:flex;gap:6px">
+          <input id="tn-subnet-input" type="text" placeholder="10.0.30.0/24" style="flex:1;font-size:12px">
+          <button id="tn-subnet-add" class="btn btn--secondary" style="font-size:12px">+ 추가</button>
+          <button id="tn-subnet-suggest" class="btn btn--ghost" style="font-size:12px" title="이 스위치가 나르는 VLAN의 대역을 자동 제안">🪄 제안</button>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <button id="tn-delete" class="btn btn--danger" style="margin-right:auto">노드 삭제</button>
+        <button id="tn-save" class="btn btn--primary">적용</button>
+        <button class="btn btn--ghost" data-close="modal-topo-node">닫기</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 서버 등록 모달 -->
   <div id="modal-add-server" class="modal hidden">
     <div class="modal__backdrop"></div>
@@ -392,19 +436,27 @@
       <div id="vlan-accordion"></div>
     </div>
 
-    <!-- 토폴로지 탭 (스위치 간 연결 관계 자동 추론) -->
+    <!-- 토폴로지 탭 (하이브리드 편집기: 사람이 배치, 툴이 정보 자동 채움) -->
     <div id="tab-topology" class="tab-pane">
       <div class="pane-toolbar">
-        <span class="pane-toolbar__title">네트워크 토폴로지</span>
+        <span class="pane-toolbar__title">네트워크 구성도 (편집기)</span>
         <div class="pane-toolbar__actions">
-          <span style="font-size:12px;color:#94a3b8">🗂 존·대역 구성도 (드래그로 재배치 · 위치 저장)</span>
+          <button id="btn-topo-draft" class="btn btn--secondary" style="font-size:12px" title="수집 데이터로 자동 초안을 캔버스에 깝니다(이후 자유 편집)">🪄 자동 초안 불러오기</button>
+          <button id="btn-topo-link" class="btn btn--secondary" style="font-size:12px" title="연결 모드: 켠 뒤 장비 두 개를 차례로 클릭하면 선이 그어지고 포트를 자동 인식">🔗 연결 모드</button>
           <button id="btn-topo-fit" class="btn btn--secondary" style="font-size:12px" title="전체가 보이도록 화면에 맞춤">⤢ 화면 맞춤</button>
-          <button id="btn-topo-reset-layout" class="btn btn--secondary" style="font-size:12px" title="드래그로 옮긴 위치를 초기화(자동 배치로 복원)">↺ 배치 초기화</button>
-          <button id="btn-pptx-report" class="btn btn--primary" style="font-size:12px" title="네트워크 구성도를 PPTX로 자동 생성(고객 전달용)">📊 구성도 PPTX</button>
-          <button id="btn-topo-refresh" class="btn btn--secondary" style="font-size:12px">↻ 새로고침</button>
+          <button id="btn-pptx-report" class="btn btn--secondary" style="font-size:12px" title="네트워크 구성도를 PPTX로 자동 생성(고객 전달용)">📊 구성도 PPTX</button>
+          <button id="btn-topo-save" class="btn btn--primary" style="font-size:12px" title="배치·연결·대역을 저장(재시작·다른 PC에서도 유지)">💾 저장</button>
+          <button id="btn-topo-refresh" class="btn btn--secondary" style="font-size:12px" title="저장된 구성도 다시 불러오기">↻ 새로고침</button>
         </div>
       </div>
-      <div id="topology-canvas" style="display:flex;flex-direction:column;background:#0f172a;border-radius:8px;height:calc(100vh - 170px);min-height:520px;overflow:hidden"></div>
+      <div style="display:flex;gap:8px;height:calc(100vh - 170px);min-height:520px">
+        <!-- 팔레트 -->
+        <div id="topo-palette" style="width:110px;flex-shrink:0;background:#0e1526;border-radius:8px;padding:8px;overflow:auto">
+          <div style="font-size:11px;color:#64748b;margin-bottom:6px">팔레트<br>(클릭→추가)</div>
+        </div>
+        <!-- 캔버스 -->
+        <div id="topology-canvas" style="flex:1;background:#0f172a;border-radius:8px;overflow:hidden;position:relative"></div>
+      </div>
     </div>
   </main>
 
