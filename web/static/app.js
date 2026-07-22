@@ -563,15 +563,23 @@ function _deviceRackKeys(dev) {
   return { group: "위치 미상(미지정)", rack: "기타" };
 }
 
+// 현황판 = 현장 TPS(액세스) 스위치 전용 뷰.
+// 서버실 소속(room_rack)·서버·방화벽 구분은 각자 전용 탭(서버실/서버/방화벽 현황)에만 노출.
+function _isDashSwitch(sw) {
+  if (!sw) return false;
+  if (sw.room_rack) return false;                     // 서버실 위치 → 서버실 현황
+  var dt = (sw.device_type || "");
+  if (dt === "Server" || dt === "Firewall") return false;  // 서버/방화벽 → 전용 탭
+  return true;
+}
+function _dashSwitches(list) { return (list || []).filter(_isDashSwitch); }
+
 function renderRackView(switches) {
   var host = document.getElementById("rack-view");
   if (!host) return;
-  switches = _applyStatusFilter(_applyLocFilter(switches, "loc-filter-dash"));
-  var fws = _dashStatusFilter === "all"
-    ? _applyLocFilter(_firewalls || [], "loc-filter-dash") : [];
-  // 스위치 + 방화벽을 하나의 위치 맵으로. 그룹 → 랙 → 유닛
-  var devices = switches.map(function (s) { return { k: "sw", o: s }; })
-    .concat(fws.map(function (f) { return { k: "fw", o: f }; }));
+  switches = _applyStatusFilter(_applyLocFilter(_dashSwitches(switches), "loc-filter-dash"));
+  // 현황판은 TPS 스위치 전용 — 방화벽은 방화벽 현황 탭에만 표시(여기선 제외)
+  var devices = switches.map(function (s) { return { k: "sw", o: s }; });
   var groups = {};
   devices.forEach(function (d) {
     var keys = _deviceRackKeys(d.o);
@@ -836,21 +844,19 @@ function renderRoomRackView(switches, firewalls, servers) {
 }
 
 function renderSwitchGrid(switches) {
+  switches = _dashSwitches(switches);   // 현황판 = 현장 TPS 스위치 전용(서버실/서버/방화벽 제외)
   _updateStatusCounts(_applyLocFilter(switches, "loc-filter-dash"));
   switches = _applyStatusFilter(_applyLocFilter(switches, "loc-filter-dash"));
-  // 상태 필터가 걸려 있으면 방화벽 카드는 숨김(스위치 재수집 목적 화면)
-  var fws = _dashStatusFilter === "all"
-    ? _applyLocFilter(_firewalls || [], "loc-filter-dash") : [];
   var grid = document.getElementById("switch-grid");
-  if (!switches.length && !fws.length) {
+  if (!switches.length) {
     grid.innerHTML = "<p class='placeholder'>" +
       (_dashStatusFilter === "all"
-        ? "표시할 장비가 없습니다. (위치 필터를 확인하거나 스위치/방화벽을 추가하세요)"
+        ? "표시할 TPS 스위치가 없습니다. (위치 필터를 확인하거나 스위치를 추가하세요)"
         : "해당 상태의 스위치가 없습니다.") + "</p>";
+    _updateBulkCollectBtn();
     return;
   }
-  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, true); }).join("") +
-                   fws.map(_fwCardHTML).join("");
+  grid.innerHTML = switches.map(function (sw) { return swCardHTML(sw, true); }).join("");
   switches.forEach(function(sw) {
     // 그리드 스코프 조회: swcard-<id>가 현황판/서버실 두 그리드에 중복 생성되어
     // document.getElementById는 항상 앞선 현황판 카드를 반환했다(서버실 카드 클릭

@@ -25,9 +25,8 @@ def test_reconcile_tab_removed():
 
 def test_dashboard_unifies_firewall_card():
     js = APP_JS.read_text(encoding="utf-8")
-    # 통합 방화벽 카드 함수
+    # 통합 방화벽 카드 함수(서버실 카드뷰에서 사용)
     assert "function _fwCardHTML" in js
-    # 현황판 카드/랙뷰가 방화벽 포함
     assert "_fwCardHTML" in js
     assert "function _deviceRackKeys" in js
     # 위치 폴백: room_rack / location
@@ -36,6 +35,18 @@ def test_dashboard_unifies_firewall_card():
 
 def test_room_uses_same_card():
     js = APP_JS.read_text(encoding="utf-8")
-    # 서버실/현황판 모두 동일한 통합 방화벽 카드 사용 → 스위치와 통일
+    # 서버실 카드뷰는 통합 방화벽 카드 사용(스위치와 동일 골격)
     assert "firewalls.map(_fwCardHTML)" in js  # 서버실 카드뷰(현황판과 동일 평면 그리드)
-    assert "fws.map(_fwCardHTML)" in js        # 현황판 카드뷰
+
+
+def test_dashboard_shows_tps_switches_only():
+    """현황판 = 현장 TPS 스위치 전용. 서버실 소속/서버/방화벽은 전용 탭에만."""
+    js = APP_JS.read_text(encoding="utf-8")
+    # 필터 헬퍼 존재 + 세 가지 제외 조건
+    assert "function _isDashSwitch" in js
+    assert "sw.room_rack) return false" in js            # 서버실 위치 제외
+    assert '"Server" || dt === "Firewall") return false' in js  # 서버/방화벽 구분 제외
+    # 현황판 카드뷰가 필터를 적용
+    assert "switches = _dashSwitches(switches)" in js
+    # 현황판 카드뷰는 방화벽 카드를 더 이상 붙이지 않음
+    assert "fws.map(_fwCardHTML)" not in js
