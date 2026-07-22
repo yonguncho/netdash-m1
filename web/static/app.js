@@ -678,7 +678,7 @@ function _fwCardHTML(f) {
   // 도달성 감시에서 끊김이면 카드 전체를 위험 상태로 표시(현황판/서버실 공통)
   var sc = f.reachable === false ? "critical" : (_fwStatusMeta[f.status] || "new");
   var reachBadge = f.reachable === false
-    ? "<span class='sw-card__alert-badge badge--critical' title='도달성 감시: 관리 포트 TCP 응답 없음'>🔴 연결 끊김</span>"
+    ? "<span class='sw-card__alert-badge badge--critical reach-down' title='도달성 감시: 관리 포트 TCP 응답 없음'><span class='reach-dot'></span> 연결 끊김</span>"
     : "";
   var locLine = f.tps_location ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>📍 " + escHtml(f.tps_location) + "</span>"
     : f.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
@@ -887,7 +887,7 @@ function swCardHTML(sw, withCheck) {
   var alertBadge = (sw.alert && sw.alert !== "none")
     ? "<span class='sw-card__alert-badge badge--" + sw.alert + "'>" + (sw.alert === "critical" ? "⚠ LOOP" : "⚠ FLAP") + "</span>"
     : (sw.reachable === false
-       ? "<span class='sw-card__alert-badge badge--critical' title='도달성 감시(TCP-22)에서 응답 없음'>🔴 도달불가</span>"
+       ? "<span class='sw-card__alert-badge badge--critical reach-down' title='도달성 감시(TCP-22)에서 응답 없음'><span class='reach-dot'></span> 도달불가</span>"
        : "");
 
   var dotClass = sw.alert === "critical" ? "dot--critical"
@@ -1303,8 +1303,9 @@ function loadFacility() {
   var sel = document.getElementById("fac-switch");
   if (sel) {
     var cur = sel.value;
-    sel.innerHTML = "<option value=''>스위치 선택</option>" +
-      (_switches || []).map(function (s) {
+    // 설비 게이트웨이는 현장 TPS 스위치 — 서버·서버실·방화벽은 제외(_dashSwitches)
+    sel.innerHTML = "<option value=''>TPS 스위치 선택</option>" +
+      _dashSwitches(_switches || []).map(function (s) {
         return "<option value='" + s.id + "'" + (String(s.id) === cur ? " selected" : "") +
           ">" + escHtml(s.name) + " (" + escHtml(s.ip) + ")</option>";
       }).join("");
@@ -1330,7 +1331,24 @@ function renderFacilityProgress(st) {
     el.innerHTML = "<strong>수집 중</strong> — " + escHtml(st.subnet || "") + " · " +
       st.done + "/" + st.total + " (" + pct + "%) · " + escHtml(st.message || "");
   } else {
-    el.textContent = st.message || "";
+    var html = st.message ? "<span>" + escHtml(st.message) + "</span>" : "";
+    // 완료 diff 배너 — 직전 스캔에서 새로 추가되거나 끊긴 설비를 한눈에
+    var added = st.last_added || [], removed = st.last_removed || [];
+    if (added.length || removed.length) {
+      html += "<div style='margin-top:6px;display:flex;flex-wrap:wrap;gap:6px'>";
+      if (added.length) {
+        html += "<span style='background:#dcfce7;color:#166534;border-radius:6px;padding:3px 8px;font-size:12px' " +
+          "title='" + escHtml(added.join(', ')) + "'>➕ 새 설비 " + added.length + "대: " +
+          escHtml(added.slice(0, 8).join(', ')) + (added.length > 8 ? " …" : "") + "</span>";
+      }
+      if (removed.length) {
+        html += "<span style='background:#fee2e2;color:#991b1b;border-radius:6px;padding:3px 8px;font-size:12px' " +
+          "title='" + escHtml(removed.join(', ')) + "'>➖ 끊김 " + removed.length + "대: " +
+          escHtml(removed.slice(0, 8).join(', ')) + (removed.length > 8 ? " …" : "") + "</span>";
+      }
+      html += "</div>";
+    }
+    el.innerHTML = html;
   }
 }
 

@@ -1555,7 +1555,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             ok = notifier.send_email(db_path, "[NetDash] 테스트 메일",
                                      "NetDash 알람 이메일 설정이 정상입니다.")
             return jsonify({"ok": ok,
-                            "detail": "발송 성공" if ok else "발송 실패 — SMTP 서버/수신 주소를 확인하세요"})
+                            "detail": "발송 성공" if ok else
+                            "발송 실패 — 수신 주소, 또는 (직접 전달 모드면) 수신 도메인 메일 서버 도달 여부를 확인하세요"})
         except Exception as e:
             log_event("error", "email_test_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500

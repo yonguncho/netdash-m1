@@ -651,6 +651,7 @@ def _apply_scan(db_path, subnet, by_ip):
     existing = {h["ip"]: h for h in db.get_facility_hosts(db_path) if h.get("subnet") == subnet}
     merged = list(by_ip.values())   # 이번에 응답한 설비(online=1)
     new_cnt = off_cnt = 0
+    added_ips, removed_ips = [], []   # 이번 스캔 diff(추가/끊김) — 완료 배너용
     # MAC 생존 신호: ping(ICMP)에 응답 안 해 ARP에 없더라도, 그 MAC이 아직
     # 스위치 MAC 테이블(최신 스냅샷)에 살아 있으면 '연결됨'으로 본다. ICMP 차단
     # 장비(윈도우 서버·보안장비 등)가 포트 UP·MAC 학습 상태인데 오프라인으로
@@ -666,6 +667,7 @@ def _apply_scan(db_path, subnet, by_ip):
                                  mac=host.get("mac"), switch_id=host.get("switch_id"),
                                  label=host.get("switch_name"), message="새 설비 감지: " + ip)
             new_cnt += 1
+            added_ips.append(ip)
         else:
             if not ex.get("online"):
                 db.save_device_event(db_path, "device_online", "info", subnet=subnet, ip=ip,
@@ -709,9 +711,12 @@ def _apply_scan(db_path, subnet, by_ip):
                                  label=ex.get("switch_name"),
                                  message="설비 연결 끊김: " + ip + _loc)
             off_cnt += 1
+            removed_ips.append(ip)
 
     db.clear_facility_subnet(db_path, subnet)
     db.save_facility_hosts(db_path, merged)
+    # 완료 배너용 diff 스냅샷(설비 페이지에서 추가/끊김을 한눈에)
+    _set(last_subnet=subnet, last_added=added_ips[:50], last_removed=removed_ips[:50])
     return len(merged), new_cnt, off_cnt
 
 
@@ -761,6 +766,97 @@ def reconcile_online_by_mac(db_path):
     if restored:
         utils.log_event("info", "facility_reconciled_online", restored=restored)
     return restored
+
+
+# 자주 모니터링(끊김/복구 즉시 감지)용 상태 — 연속 미스 디바운스
+_MISS_THRESHOLD = 2      # MAC 연속 N회 실종 시에만 오프라인 전환(순간 aging 오탐 방지)
+_miss_counts = {}        # {(subnet, ip): 연속 실종 횟수}
+
+
+def monitor_known_hosts(db_path):
+    """이미 수집된 설비를 '자주'(도달성 감시 60초 주기) 재판정 — 대역 재스캔 없이.
+
+    대역 전체 ping 스윕은 하루 1회지만, 그 사이 연결 끊김/복구를 빨리 알기 위해
+    스위치 MAC 테이블(최신 스냅샷)만으로 online↔offline을 양방향 갱신한다.
+      - 오프라인인데 MAC 살아있음 → online 복구(+ device_online)
+      - 온라인인데 MAC 실종이 연속 _MISS_THRESHOLD회 → offline(+ device_offline)
+    순간적인 MAC aging 오탐을 막기 위해 연속 실종 횟수로 디바운스한다.
+    스위치 재수집으로 MAC 테이블이 자주 갱신될수록 정확해진다.
+    대역 수집이 진행 중이면 건너뛴다(스캔이 곧 정확히 갱신). 반환: (복구수, 끊김수).
+    """
+    if get_status().get("running"):
+        return (0, 0)
+    try:
+        mac_alive = set(db.get_mac_to_switchport(db_path).keys())
+    except Exception:
+        return (0, 0)
+    if not mac_alive:
+        return (0, 0)   # MAC 스냅샷이 아예 없으면(수집 전) 판단 보류
+    try:
+        hosts = db.get_facility_hosts(db_path)
+    except Exception:
+        return (0, 0)
+    changed = {}        # {subnet: True} — 저장 필요 대역
+    online_now, offline_now = [], []
+    seen_keys = set()
+    for h in hosts:
+        subnet = h.get("subnet")
+        ip = h.get("ip")
+        key = (subnet, ip)
+        seen_keys.add(key)
+        mac = (h.get("mac") or "").lower()
+        if not mac:
+            continue
+        alive = mac in mac_alive
+        if h.get("online"):
+            if alive:
+                _miss_counts.pop(key, None)
+            else:
+                n = _miss_counts.get(key, 0) + 1
+                _miss_counts[key] = n
+                if n >= _MISS_THRESHOLD:
+                    h["online"] = 0
+                    changed[subnet] = True
+                    offline_now.append(h)
+                    _miss_counts.pop(key, None)
+        else:
+            if alive:
+                h["online"] = 1
+                changed[subnet] = True
+                online_now.append(h)
+                _miss_counts.pop(key, None)
+    # 사라진 호스트의 miss 카운터 정리(메모리 누수 방지)
+    for k in [k for k in _miss_counts if k not in seen_keys]:
+        _miss_counts.pop(k, None)
+    if not changed:
+        return (0, 0)
+    # 대역별로 다시 저장(현재 hosts 리스트에 online 필드가 갱신돼 있음)
+    for subnet in changed:
+        try:
+            rows = [{k: x.get(k) for k in _KEEP_COLS + ("online",)}
+                    for x in hosts if x.get("subnet") == subnet]
+            db.clear_facility_subnet(db_path, subnet)
+            db.save_facility_hosts(db_path, rows)
+        except Exception as e:
+            utils.log_event("warning", "facility_monitor_save_skip", subnet=subnet, error=str(e))
+    for h in online_now:
+        db.save_device_event(db_path, "device_online", "info", subnet=h.get("subnet"),
+                             ip=h.get("ip"), mac=h.get("mac"),
+                             message="설비 복구(MAC 테이블 확인): " + (h.get("ip") or ""))
+    for h in offline_now:
+        _loc = ""
+        if h.get("switch_name") and h.get("port"):
+            _loc = " (마지막 위치: %s %s)" % (h["switch_name"], h["port"])
+        elif h.get("switch_name"):
+            _loc = " (마지막 스위치: %s, 포트 미확인)" % h["switch_name"]
+        db.save_device_event(db_path, "device_offline", "warning", subnet=h.get("subnet"),
+                             ip=h.get("ip"), mac=h.get("mac"), switch_id=h.get("switch_id"),
+                             label=h.get("switch_name"),
+                             message="설비 연결 끊김(MAC 실종): " + (h.get("ip") or "") + _loc)
+    if online_now or offline_now:
+        utils.log_event("info", "facility_monitor", restored=len(online_now),
+                        dropped=len(offline_now))
+    return (len(online_now), len(offline_now))
 
 
 _EXPORT_COLS = ["대역", "IP", "MAC", "연결 스위치", "포트", "포트 설명", "직접연결", "그 외 관측", "상태"]

@@ -484,53 +484,69 @@
         <button class="btn btn--ghost" data-close="modal-auto-collect">&times;</button>
       </div>
       <div class="modal__body">
-        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
-          <input id="ac-enabled" type="checkbox"> 자동 수집 사용
-        </label>
-        <label style="margin-top:12px">수집 시각 (HH:MM, 쉼표로 구분)</label>
-        <input id="ac-times" type="text" placeholder="06:00,18:00">
-        <p style="margin-top:8px;color:#64748b;font-size:12px">
-          예) 하루 2회: <code>06:00,18:00</code><br>
-          저장된 자격증명이 있는 스위치/방화벽만 자동 수집됩니다(수집 시 "계정 저장" 체크).
-        </p>
-        <hr style="margin:12px 0;border:none;border-top:1px solid #e5e7eb">
-        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
-          <input id="ac-fac-enabled" type="checkbox"> 설비 대역 자동 스캔 (1일 1회, 대역별 순차)
-        </label>
-        <label style="margin-top:8px">스캔 시각 (HH:MM)</label>
-        <input id="ac-fac-time" type="text" placeholder="07:00" style="width:100px">
-        <p id="ac-fac-info" style="margin-top:4px;color:#64748b;font-size:12px"></p>
-        <hr style="margin:12px 0;border:none;border-top:1px solid #e5e7eb">
-        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
-          <input id="ac-reach-enabled" type="checkbox"> 스위치 도달성 감시 (TCP-22, 1분 주기 — 장비 부하 없음)
-        </label>
-        <label style="margin-top:8px">알람 보존 기간 (일, 지난 이벤트 자동 정리)</label>
-        <input id="ac-retention" type="number" min="7" max="365" style="width:100px">
-        <hr style="margin:12px 0;border:none;border-top:1px solid #e5e7eb">
-        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
-          <input id="em-enabled" type="checkbox"> 알람 이메일 발송 (60초 묶음, 내부 SMTP 릴레이)
-        </label>
-        <div style="display:flex;gap:8px;margin-top:6px">
-          <div style="flex:2"><label>SMTP 서버</label><input id="em-host" type="text" placeholder="10.0.0.25"></div>
-          <div style="flex:1"><label>포트</label><input id="em-port" type="text" placeholder="25"></div>
-        </div>
-        <label style="margin-top:6px">발신 주소</label>
-        <input id="em-from" type="text" placeholder="netdash@company.local">
-        <label style="margin-top:6px">수신 주소 (쉼표로 여러 명)</label>
-        <input id="em-to" type="text" placeholder="admin@company.local, noc@company.local">
-        <div style="display:flex;gap:8px;margin-top:6px;align-items:flex-end">
-          <div style="flex:1"><label>알림 수준</label>
-            <select id="em-sev"><option value="warning">경고 이상만(권장)</option><option value="info">모든 이벤트</option></select>
+
+        <!-- ① 장비 자동 수집 -->
+        <div class="ac-section">
+          <div class="ac-section__title">🖥 장비 자동 수집 <span style="font-weight:400;color:#94a3b8">(스위치·방화벽 SSH)</span></div>
+          <label class="ac-toggle"><input id="ac-enabled" type="checkbox"> 사용</label>
+          <div class="field-row" style="margin-top:8px">
+            <div style="flex:1"><label>수집 시각 (HH:MM, 쉼표로 구분)</label>
+              <input id="ac-times" type="text" placeholder="06:00,18:00"></div>
           </div>
-          <button id="btn-em-test" class="btn btn--secondary" style="font-size:12px">테스트 발송</button>
+          <p class="ac-section__hint">예) 하루 2회 <code>06:00,18:00</code> · 저장된 계정이 있는 장비만 대상(수집 시 "계정 저장" 체크).</p>
         </div>
-        <p style="margin-top:4px;color:#64748b;font-size:12px">
-          인증이 필요한 릴레이면 아래에 입력(암호화 저장, 비워두면 기존 유지):</p>
-        <div style="display:flex;gap:8px">
-          <input id="em-user" type="text" placeholder="SMTP 계정(선택)" autocomplete="off" style="flex:1">
-          <input id="em-pass" type="password" placeholder="비밀번호(선택)" autocomplete="new-password" style="flex:1">
+
+        <!-- ② 설비 대역 자동 스캔 -->
+        <div class="ac-section">
+          <div class="ac-section__title">🏭 설비 대역 자동 스캔 <span style="font-weight:400;color:#94a3b8">(대역별 순차, 동시 1개)</span></div>
+          <label class="ac-toggle"><input id="ac-fac-enabled" type="checkbox"> 사용 (1일 1회 전체 스캔)</label>
+          <div class="field-row" style="margin-top:8px">
+            <div><label>스캔 시각 (HH:MM)</label>
+              <input id="ac-fac-time" type="text" placeholder="07:00" style="width:100px"></div>
+          </div>
+          <p id="ac-fac-info" class="ac-section__hint"></p>
+          <p class="ac-section__hint">전체 ping 스윕은 무겁기에 1일 1회. <b>이미 수집된 설비는 도달성 감시(1분) 주기로 MAC 테이블을 대조해 끊김/복구를 자동 반영</b>합니다.</p>
         </div>
-        <div id="em-test-result" style="margin-top:6px;font-size:12px"></div>
+
+        <!-- ③ 상태 감시 & 알람 정리 -->
+        <div class="ac-section">
+          <div class="ac-section__title">📡 상태 감시 &amp; 알람</div>
+          <label class="ac-toggle"><input id="ac-reach-enabled" type="checkbox"> 도달성 감시 (스위치 TCP-22 · 방화벽 관리포트, 1분 주기 — 장비 부하 없음)</label>
+          <div class="field-row" style="margin-top:8px">
+            <div><label>알람 보존 기간 (일, 지난 이벤트 자동 정리)</label>
+              <input id="ac-retention" type="number" min="7" max="365" style="width:100px"></div>
+          </div>
+        </div>
+
+        <!-- ④ 이메일 알림 -->
+        <div class="ac-section">
+          <div class="ac-section__title">✉ 이메일 알림 <span style="font-weight:400;color:#94a3b8">(60초 묶음 발송)</span></div>
+          <label class="ac-toggle"><input id="em-enabled" type="checkbox"> 사용</label>
+          <div class="field-row" style="margin-top:8px">
+            <div style="flex:2"><label>SMTP 서버 <span style="color:#94a3b8">(비우면 수신 도메인으로 직접 전달)</span></label>
+              <input id="em-host" type="text" placeholder="비워두면 직접 전달 (예: 10.0.0.25)"></div>
+            <div style="flex:1"><label>포트</label><input id="em-port" type="text" placeholder="25"></div>
+          </div>
+          <div class="field-row" style="margin-top:6px">
+            <div style="flex:1"><label>발신 주소</label>
+              <input id="em-from" type="text" placeholder="netdash@localhost"></div>
+            <div style="flex:1"><label>수신 주소 (쉼표로 여러 명)</label>
+              <input id="em-to" type="text" placeholder="admin@company.local, noc@company.local"></div>
+          </div>
+          <div class="field-row" style="margin-top:6px">
+            <div style="flex:1"><label>알림 수준</label>
+              <select id="em-sev"><option value="warning">경고 이상만(권장)</option><option value="info">모든 이벤트</option></select>
+            </div>
+            <button id="btn-em-test" class="btn btn--secondary" style="font-size:12px">테스트 발송</button>
+          </div>
+          <p class="ac-section__hint">SMTP 서버를 비우면 별도 릴레이 없이 <b>수신 주소의 메일 서버로 직접 전달</b>합니다(수신 도메인 메일 서버가 내부에서 도달·수신 허용해야 함).</p>
+          <p class="ac-section__hint" style="margin-top:2px">인증이 필요한 릴레이면 아래 입력(암호화 저장, 비우면 기존 유지):</p>
+          <div class="field-row">
+            <input id="em-user" type="text" placeholder="SMTP 계정(선택)" autocomplete="off" style="flex:1">
+            <input id="em-pass" type="password" placeholder="비밀번호(선택)" autocomplete="new-password" style="flex:1">
+          </div>
+          <div id="em-test-result" style="margin-top:6px;font-size:12px"></div>
+        </div>
       </div>
       <div class="modal__footer">
         <button id="btn-ac-save" class="btn btn--primary">저장</button>

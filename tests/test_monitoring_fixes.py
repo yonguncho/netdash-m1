@@ -75,8 +75,10 @@ def test_fw_table_and_cards_show_reachability():
     assert "<th>인터페이스</th><th>ARP</th>" not in html   # 컬럼 제거
     js = APP_JS.read_text(encoding="utf-8")
     assert "🟢 연결됨" in js and "🔴 끊김" in js            # 방화벽 표
-    assert "🔴 연결 끊김" in js                             # 방화벽 카드 배지
-    assert "🔴 도달불가" in js                              # 스위치 카드 배지(기존)
+    # 카드 배지: 빨간 원(reach-dot)이 반짝이는 마크업 + 텍스트
+    assert "reach-dot" in js and "reach-down" in js
+    assert "연결 끊김</span>" in js                         # 방화벽 카드 배지
+    assert "도달불가</span>" in js                          # 스위치 카드 배지
 
 
 def test_topology_hover_highlight():

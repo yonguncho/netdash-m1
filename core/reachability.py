@@ -47,22 +47,60 @@ def _check_tcp(ip, port=22, timeout=_TCP_TIMEOUT):
 
 
 def _sweep(db_path):
-    """등록 스위치 전체를 동시 _CONCURRENCY개 제한으로 확인, 전이 시 이벤트."""
+    """등록 스위치·방화벽을 확인, 전이 시 이벤트.
+
+    HA/이중화 대응: 동일 (IP, 포트)를 공유하는 장비(FW_M/FW_B 등)는 '한 번만' 확인해
+    같은 결과를 공유한다. 활성 장비가 응답하면 같은 IP의 대기 장비도 '도달'로 간주 →
+    대기측이 도달 불가로 오탐되지 않는다. 확인 횟수도 줄어 부하가 낮아진다.
+    """
     switches = db.get_switches(db_path) or []
+    try:
+        firewalls = db.list_firewalls(db_path)
+    except Exception:
+        firewalls = []
+
+    # 1) 확인 대상 (IP, 포트) 유니크 집합 — 동일 키는 1회만 확인
+    targets = {}   # (ip, port) -> None
+    for sw in switches:
+        ip = (sw.get("ip") or "").strip()
+        if ip:
+            targets.setdefault((ip, 22), None)
+    for fw in firewalls:
+        host = (fw.get("host") or "").strip()
+        if host:
+            targets.setdefault((host, int(fw.get("port") or 443)), None)
+
+    # 2) 유니크 키를 동시 _CONCURRENCY개 제한으로 확인
+    results = {}   # (ip, port) -> bool
     sem = threading.Semaphore(_CONCURRENCY)
     threads = []
 
-    def _one(sw):
+    def _probe(key):
+        ip, port = key
         with sem:
-            ok = _check_tcp(sw.get("ip"))
+            results[key] = _check_tcp(ip, port)
+
+    for key in targets:
+        t = threading.Thread(target=_probe, args=(key,), daemon=True)
+        t.start()
+        threads.append(t)
+        time.sleep(0.05)                 # 시작 시점 분산(버스트 방지)
+    for t in threads:
+        t.join(timeout=_TCP_TIMEOUT + 5)
+
+    # 3) 스위치 상태 반영(전이 시 이벤트) — 결과는 IP 공유 그룹이 동일
+    for sw in switches:
+        ip = (sw.get("ip") or "").strip()
+        ok = results.get((ip, 22))
+        if ok is None:
+            continue
         sid = sw["id"]
         with _lock:
             prev = _state.get(sid)
             _state[sid] = ok
         if prev is None:
-            return                       # 첫 관측은 이벤트 없이 기준만 설정
-        # 알람에 이름+IP 함께 표기(어느 장비인지 즉시 특정)
-        sw_disp = "%s (%s)" % (sw.get("name") or sid, sw.get("ip") or "-")
+            continue                     # 첫 관측은 이벤트 없이 기준만 설정
+        sw_disp = "%s (%s)" % (sw.get("name") or sid, ip or "-")
         if prev and not ok:
             db.save_device_event(db_path, "switch_unreachable", "warning",
                                  switch_id=sid, label=sw.get("name"),
@@ -72,44 +110,28 @@ def _sweep(db_path):
                                  switch_id=sid, label=sw.get("name"),
                                  message="스위치 도달 복구: %s" % sw_disp)
 
-    # 방화벽도 함께 감시 — 관리 포트(등록 포트, 기본 443)로 TCP 핸드셰이크만
-    try:
-        firewalls = db.list_firewalls(db_path)
-    except Exception:
-        firewalls = []
-
-    def _one_fw(fw):
-        with sem:
-            ok = _check_tcp(fw.get("host"), fw.get("port") or 443)
+    # 4) 방화벽 상태 반영 — 동일 IP 공유(FW_M/FW_B)는 같은 결과를 따른다
+    for fw in firewalls:
+        host = (fw.get("host") or "").strip()
+        port = int(fw.get("port") or 443)
+        ok = results.get((host, port))
+        if ok is None:
+            continue
         fid = fw["id"]
         with _lock:
             prev = _fw_state.get(fid)
             _fw_state[fid] = ok
         if prev is None:
-            return
-        fw_disp = "%s (%s)" % (fw.get("name") or fid, fw.get("host") or "-")
+            continue
+        fw_disp = "%s (%s)" % (fw.get("name") or fid, host or "-")
         if prev and not ok:
             db.save_device_event(db_path, "firewall_unreachable", "warning",
                                  label=fw.get("name"),
-                                 message="방화벽 도달 불가(TCP-%s): %s" % (
-                                     fw.get("port") or 443, fw_disp))
+                                 message="방화벽 도달 불가(TCP-%s): %s" % (port, fw_disp))
         elif ok and not prev:
             db.save_device_event(db_path, "firewall_recovered", "info",
                                  label=fw.get("name"),
                                  message="방화벽 도달 복구: %s" % fw_disp)
-
-    for sw in switches:
-        t = threading.Thread(target=_one, args=(sw,), daemon=True)
-        t.start()
-        threads.append(t)
-        time.sleep(0.05)                 # 시작 시점 분산(버스트 방지)
-    for fw in firewalls:
-        t = threading.Thread(target=_one_fw, args=(fw,), daemon=True)
-        t.start()
-        threads.append(t)
-        time.sleep(0.05)
-    for t in threads:
-        t.join(timeout=_TCP_TIMEOUT + 5)
 
 
 def _loop(db_path):
@@ -126,11 +148,11 @@ def _loop(db_path):
                 pass
             if enabled:
                 _sweep(db_path)
-                # 설비 오프라인 오탐 주기적 해소: MAC 테이블에 살아있으면 online 복원
-                # (스캔 없이도 관제의 '설비 연결 실패'가 스스로 정리됨)
+                # 이미 수집된 설비를 자주(이 60초 주기) 재판정: 대역 재스캔 없이
+                # 스위치 MAC 테이블만으로 online↔offline 양방향 갱신(끊김/복구 즉시 감지).
                 try:
                     from . import facility
-                    facility.reconcile_online_by_mac(db_path)
+                    facility.monitor_known_hosts(db_path)
                 except Exception:
                     pass
         except Exception as e:

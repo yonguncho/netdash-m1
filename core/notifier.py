@@ -79,15 +79,88 @@ def _severity_ok(ev, min_sev):
     return (ev.get("severity") or "info") in ("warning", "critical")
 
 
+def _mx_hosts(domain):
+    """수신 도메인의 메일 서버 후보. dnspython 있으면 MX 우선, 없으면 관례적 이름 추정.
+
+    폐쇄망 내부 메일(예: user@company.local)은 대개 회사 메일 서버가
+    company.local / mail.company.local 로 잡힌다. 우선순위대로 반환.
+    """
+    hosts = []
+    try:                                  # MX 레코드(있으면 가장 정확)
+        import dns.resolver  # type: ignore
+        answers = dns.resolver.resolve(domain, "MX")
+        for r in sorted(answers, key=lambda x: x.preference):
+            hosts.append(str(r.exchange).rstrip("."))
+    except Exception:
+        pass
+    for cand in (domain, "mail." + domain, "smtp." + domain, "mx." + domain):
+        if cand not in hosts:
+            hosts.append(cand)
+    return hosts
+
+
+def _direct_send(from_addr, recipients, msg_str, port):
+    """SMTP 릴레이 없이 수신자 도메인의 메일 서버로 직접 전달(무인증).
+
+    도메인별로 후보 메일 서버에 순서대로 접속을 시도해 첫 성공 시 그 도메인 완료.
+    반환: (성공한 수신자 수, 마지막 오류 메시지).
+    """
+    by_domain = {}
+    for addr in recipients:
+        if "@" in addr:
+            by_domain.setdefault(addr.rsplit("@", 1)[1].lower(), []).append(addr)
+    ok_count = 0
+    last_err = ""
+    for domain, addrs in by_domain.items():
+        delivered = False
+        for host in _mx_hosts(domain):
+            try:
+                with smtplib.SMTP(host, port, timeout=15) as s:
+                    try:
+                        s.ehlo()
+                        if s.has_extn("starttls"):
+                            s.starttls()
+                            s.ehlo()
+                    except Exception:
+                        pass              # TLS 미지원 서버는 평문으로 계속
+                    s.sendmail(from_addr, addrs, msg_str)
+                delivered = True
+                ok_count += len(addrs)
+                utils.log_event("info", "email_direct_delivered", domain=domain,
+                                host=host, count=len(addrs))
+                break
+            except Exception as e:
+                last_err = "%s: %s" % (host, str(e)[:120])
+                continue
+        if not delivered:
+            utils.log_event("warning", "email_direct_failed", domain=domain, error=last_err)
+    return ok_count, last_err
+
+
 def send_email(db_path, subject, body):
-    """설정된 SMTP로 즉시 1통 발송. 성공 True/실패 False."""
+    """이메일 1통 발송. 성공 True/실패 False.
+
+    smtp_host가 있으면 그 릴레이로, 없으면 수신 도메인 메일 서버로 '직접 전달'.
+    """
     cfg = _settings(db_path)
-    if not (cfg["host"] and cfg["to"]):
+    if not cfg["to"]:
         return False
+    from_addr = cfg["from"] or "netdash@localhost"
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = cfg["from"]
+    msg["From"] = from_addr
     msg["To"] = ", ".join(cfg["to"])
+    msg_str = msg.as_string()
+
+    # 릴레이 미지정 → 수신 도메인으로 직접 전달(SMTP 서버 없이)
+    if not cfg["host"]:
+        ok_count, last_err = _direct_send(from_addr, cfg["to"], msg_str, cfg["port"] or 25)
+        if ok_count:
+            return True
+        utils.log_event("warning", "email_send_failed",
+                        error="direct delivery failed: " + (last_err or "no route"))
+        return False
+
     try:
         with smtplib.SMTP(cfg["host"], cfg["port"], timeout=15) as s:
             auth = _auth(db_path)
@@ -97,7 +170,7 @@ def send_email(db_path, subject, body):
                 except Exception:
                     pass  # 내부 릴레이는 TLS 미지원 가능
                 s.login(auth[0], auth[1])
-            s.sendmail(cfg["from"], cfg["to"], msg.as_string())
+            s.sendmail(from_addr, cfg["to"], msg_str)
         return True
     except Exception as e:
         utils.log_event("warning", "email_send_failed", error=str(e)[:200])
