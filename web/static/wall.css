@@ -63,6 +63,7 @@ body {
   padding: 5px 14px; font-size: 17px; color: #e2e8f0;
 }
 .wall-sumchip b { color: #fbbf24; margin-left: 4px; }
+.wall-sumchip i { color: #94a3b8; font-style: normal; font-size: 14px; }
 .wall-cat__more { margin-top: 10px; color: #94a3b8; font-size: 14px; }
 /* 설비 카드는 다수일 때 더 컴팩트하게 */
 .wall-cat .pcard { min-width: 190px; padding: 12px 14px; }

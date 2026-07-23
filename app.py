@@ -1523,13 +1523,44 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 base = "LOOP 경보" if crit else "FLAP 경보"
                 return base + ((" [" + ", ".join(ports) + "]") if ports else "")
 
-            # 설비 실패가 많을 때 대역별 요약(개수 내림차순) — 관제 가독성
-            _fac_cnt = {}
+            # 설비 실패 통계: 어느 '연결 스위치'에서 많이 끊겼고 그 스위치는 어디에 있나.
+            # 현재 switch_name이 비면(위치 미확인) 과거 MAC 이력에서 마지막 스위치를 찾는다.
+            from core import tps_location as _tl2, serverroom as _sr2
+
+            def _sw_loc(sw):
+                """스위치의 위치 문자열: TPS 라벨 / 서버실 랙 / location / hostname 구역."""
+                if not sw:
+                    return ""
+                info = _tl2.parse(sw.get("hostname"))
+                if info:
+                    return info["label"]
+                room = _sr2.parse_rack(sw.get("location"))
+                if room:
+                    return room["label"]
+                if sw.get("location"):
+                    return sw["location"]
+                m = re.match(r"^[A-Za-z0-9]+_(.+?)_SW(?:ITCH)?[\d_-]*$",
+                             (sw.get("hostname") or sw.get("name") or ""), re.I)
+                return m.group(1) if m else ""
+
+            _sw_by_name = {s.get("name"): s for s in switches if s.get("name")}
+            _mac_hist_cache = {}
+            _fac_sw = {}   # switch_name -> {count, location}
             for h in fac_off:
-                _k = h.get("subnet") or "대역미상"
-                _fac_cnt[_k] = _fac_cnt.get(_k, 0) + 1
+                sname = h.get("switch_name")
+                if not sname:
+                    _mac = (h.get("mac") or "").lower()
+                    if _mac not in _mac_hist_cache:
+                        _mac_hist_cache[_mac] = db.find_mac_history(db_path, h.get("mac")) or {}
+                    sname = (_mac_hist_cache[_mac] or {}).get("switch_name")
+                key = sname or "미확인"
+                ent = _fac_sw.setdefault(key, {"count": 0, "location": ""})
+                ent["count"] += 1
+                if not ent["location"] and sname:
+                    ent["location"] = _sw_loc(_sw_by_name.get(sname))
             _fac_subnet_summary = sorted(
-                [{"subnet": k, "count": v} for k, v in _fac_cnt.items()],
+                [{"switch": k, "location": v["location"], "count": v["count"]}
+                 for k, v in _fac_sw.items()],
                 key=lambda x: -x["count"])
 
             # 카테고리별 정돈된 문제 목록(관제 화면 섹션 렌더용)

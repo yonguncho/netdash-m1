@@ -43,10 +43,12 @@ function refresh() {
     } else {
       host.innerHTML = cats.map(function (c) {
         var count = (c.total != null) ? c.total : c.items.length;
-        // 대역별 요약 칩(설비 실패 다수일 때 한눈에)
+        // 스위치별 요약 칩(어느 스위치에서 몇 개 끊겼고 그 스위치 위치는 어디인지)
         var summaryHtml = (c.summary && c.summary.length)
           ? "<div class='wall-cat__summary'>" + c.summary.map(function (s) {
-              return "<span class='wall-sumchip'>" + esc(s.subnet) + " <b>" + s.count + "</b></span>";
+              return "<span class='wall-sumchip'>🔌 " + esc(s.switch || "미확인") +
+                (s.location ? " <i>(" + esc(s.location) + ")</i>" : "") +
+                " <b>" + s.count + "</b></span>";
             }).join("") + "</div>"
           : "";
         var moreHtml = (c.total != null && c.total > c.items.length)

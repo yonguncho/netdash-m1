@@ -189,8 +189,8 @@ def test_get_db_retries_transient_open_error(temp_db, monkeypatch):
     assert calls["n"] >= 2
 
 
-# ── 관제 설비 실패 대역별 요약 ──────────────────────────────────
-def test_wall_facility_subnet_summary(tmp_path, monkeypatch):
+# ── 관제 설비 실패 스위치별 요약(+위치) ────────────────────────
+def test_wall_facility_switch_summary(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import app as app_module
     application = app_module.create_app(demo_mode=True)
@@ -198,19 +198,26 @@ def test_wall_facility_subnet_summary(tmp_path, monkeypatch):
     collector.shutdown_workers()
     from config import get_config
     dbp = get_config(demo_mode=True).get_db_path()
+    # 연결 스위치 등록(위치 파악용 — hostname 구역 RC_4F)
+    sa = db.save_switch(dbp, "SW-A", "10.1.0.11", "cisco_ios")
+    db.update_switch(dbp, sa, hostname="SKBA_RC_4F_SW1")
+    db.save_switch(dbp, "SW-B", "10.2.0.11", "cisco_ios")
     hosts = []
     for i in range(5):
         hosts.append({"subnet": "10.1.0.0/24", "ip": "10.1.0.%d" % (i + 1),
-                      "mac": "AA:00:00:00:01:%02d" % i, "switch_name": "", "port": "", "online": 0})
+                      "mac": "AA:00:00:00:01:%02d" % i, "switch_name": "SW-A", "port": "Gi1/0/%d" % i,
+                      "direct": 1, "online": 0})
     for i in range(3):
         hosts.append({"subnet": "10.2.0.0/24", "ip": "10.2.0.%d" % (i + 1),
-                      "mac": "BB:00:00:00:02:%02d" % i, "switch_name": "", "port": "", "online": 0})
+                      "mac": "BB:00:00:00:02:%02d" % i, "switch_name": "SW-B", "port": "Gi1/0/%d" % i,
+                      "direct": 1, "online": 0})
     db.save_facility_hosts(dbp, hosts)
     cats = application.test_client().get("/api/wall").get_json()["categories"]
     fac = [c for c in cats if c["key"] == "facility"][0]
     assert fac["total"] == 8
-    summ = {s["subnet"]: s["count"] for s in fac["summary"]}
-    assert summ["10.1.0.0/24"] == 5 and summ["10.2.0.0/24"] == 3
+    summ = {s["switch"]: s for s in fac["summary"]}
+    assert summ["SW-A"]["count"] == 5 and summ["SW-B"]["count"] == 3
+    assert summ["SW-A"]["location"] == "RC_4F"          # hostname 구역 위치
     assert fac["summary"][0]["count"] >= fac["summary"][-1]["count"]   # 내림차순
 
 
