@@ -171,6 +171,44 @@ def test_progress_autohide_present():
     assert "_hideTimer" in js
 
 
+def test_db_error_banner_ui_present():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "showDbErrorBanner" in js and "dberr-banner" in js
+    assert "/api/health" in js
+
+
+# ── DB 오류 상세 힌트 ───────────────────────────────────────────
+def test_db_error_hint_classifies():
+    import sqlite3
+    h1 = db.db_error_hint(sqlite3.OperationalError("unable to open database file"), r"\\srv\share\netdash.db")
+    assert "열 수 없" in h1["reason"] and h1["hint"]
+    h2 = db.db_error_hint(sqlite3.OperationalError("database is locked"))
+    assert "잠금" in h2["reason"]
+    h3 = db.db_error_hint(sqlite3.OperationalError("disk I/O error"))
+    assert "입출력" in h3["reason"]
+
+
+def test_health_endpoint_ok(client):
+    r = client.get("/api/health")
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+
+
+def test_state_returns_db_error_detail(client, monkeypatch):
+    """DB 접근 실패 시 /api/state가 원인/힌트를 담아 503 반환."""
+    import sqlite3
+    from core import db as dbmod
+    def boom(dbp):
+        dbmod._record_db_error(dbmod.db_error_hint(
+            sqlite3.OperationalError("unable to open database file"), dbp))
+        raise sqlite3.OperationalError("unable to open database file")
+    monkeypatch.setattr(dbmod, "get_switches", boom)
+    r = client.get("/api/state")
+    assert r.status_code == 503
+    j = r.get_json()
+    assert j["error"] == "db_error" and j["db_error"]["reason"]
+    assert j["db_error"]["hint"]
+
+
 # ── DB 회복력(재시도) ───────────────────────────────────────────
 def test_get_db_retries_transient_open_error(temp_db, monkeypatch):
     import sqlite3

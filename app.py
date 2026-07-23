@@ -743,7 +743,22 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # CWE-532 fix: Sanitize error messages to prevent credential/path exposure in logs
             sanitized_error = _sanitize_error_msg(str(e))
             log_event("error", "api_state_error", error_type=type(e).__name__, error=sanitized_error)
+            # DB 오류면 구체적 원인/힌트를 함께 반환(화면 배너에 상세 표시)
+            info = db.get_last_db_error()
+            if info:
+                return jsonify({"error": "db_error", "db_error": info}), 503
             return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/health", methods=["GET"])
+    def health():
+        """경량 상태 점검 — DB 접근 가능 여부와 실패 시 원인/힌트."""
+        try:
+            db.get_switches(db_path)   # 가벼운 DB 프로브
+            return jsonify({"ok": True})
+        except Exception:
+            info = db.get_last_db_error()
+            return jsonify({"ok": False, "db_error": info or {"reason": "DB 오류",
+                            "hint": "netdash_error.log를 확인하세요."}}), 503
 
     @app.route("/api/switches", methods=["GET"])
     def get_switches():

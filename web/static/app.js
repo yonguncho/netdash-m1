@@ -56,6 +56,29 @@ function clearReadonlyBanner() {
   setTimeout(function () { el.remove(); }, 8000);
 }
 
+// ─── DB 오류 상세 배너(원인·힌트·경로) ──────────────────────────
+function showDbErrorBanner(info) {
+  info = info || {};
+  var el = document.getElementById("dberr-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "dberr-banner";
+    el.style.cssText = "position:sticky;top:0;z-index:10000;background:#991b1b;" +
+      "color:#fff;padding:10px 16px;font-size:13px;line-height:1.6;border-bottom:2px solid #fca5a5";
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  el.innerHTML =
+    "<b>⚠ DB 오류: " + escHtml(info.reason || "알 수 없음") + "</b>" +
+    (info.path_kind ? " <span style='opacity:.85'>[" + escHtml(info.path_kind) + "]</span>" : "") +
+    (info.hint ? "<div style='font-weight:400;margin-top:2px'>" + escHtml(info.hint) + "</div>" : "") +
+    (info.detail ? "<div style='font-weight:400;opacity:.8;font-size:11px;margin-top:2px'>상세: " +
+      escHtml(info.detail) + (info.path ? " · 경로: " + escHtml(info.path) : "") + "</div>" : "");
+}
+function clearDbErrorBanner() {
+  var el = document.getElementById("dberr-banner");
+  if (el) el.remove();
+}
+
 // ─── 이벤트 위임 (CSP 'self' 호환: inline onclick 금지) ──────────────
 // 동적 생성 버튼은 data-action/data-payload/data-id로 위임 처리한다.
 document.addEventListener("click", function (e) {
@@ -5043,6 +5066,9 @@ function pollState() {
   fetch("/api/state")
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      // DB 오류면 상세 원인 배너 표시 후 중단(부분 렌더 방지)
+      if (data && data.db_error) { showDbErrorBanner(data.db_error); return; }
+      clearDbErrorBanner();
       if (data.readonly) showReadonlyBanner(data.primary_host);
       else clearReadonlyBanner();
       _switches = data.switches || [];
@@ -5063,7 +5089,13 @@ function pollState() {
       loadAlerts(false);  // 알람 배지 갱신(준실시간)
       _notifyZoneOutages(data.zone_outages || []);
     })
-    .catch(function(e) { console.error("poll error:", e); });
+    .catch(function(e) {
+      console.error("poll error:", e);
+      // 응답 자체가 실패(서버 다운/DB 접근 불가) — health로 원인 조회해 배너 표시
+      fetch("/api/health").then(function (r) { return r.json(); }).then(function (h) {
+        if (h && h.ok === false && h.db_error) showDbErrorBanner(h.db_error);
+      }).catch(function () {});
+    });
 }
 
 // TPS 구역 전원다운 감지 팝업 — 새로 발생한 구역만 1회 알림(반복 방지)

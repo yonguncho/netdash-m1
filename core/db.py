@@ -408,6 +408,68 @@ def _restrict_db_permissions(db_path):
             utils.log_event("warning", "db_chmod_failed", path=db_path_str, error=str(e))
 
 
+_last_db_error = {}
+_dberr_lock = threading.Lock()
+
+
+def _record_db_error(info):
+    with _dberr_lock:
+        _last_db_error.clear()
+        _last_db_error.update(info)
+
+
+def get_last_db_error():
+    """가장 최근 DB 오류 정보(없으면 빈 dict). 화면 배너·health용."""
+    with _dberr_lock:
+        return dict(_last_db_error)
+
+
+def clear_last_db_error():
+    with _dberr_lock:
+        _last_db_error.clear()
+
+
+def db_error_hint(exc, db_path=None):
+    """DB 예외를 사용자 친화적 한국어 원인 힌트로 분류. (로그·화면 표시용)
+
+    반환: {reason, hint, detail, path, path_kind}
+    """
+    detail = str(exc)
+    m = detail.lower()
+    try:
+        net = utils.is_network_path(db_path) if db_path is not None else False
+    except Exception:
+        net = False
+    path_kind = "네트워크(공유폴더/원격드라이브)" if net else "로컬"
+    if "unable to open" in m:
+        reason = "DB 파일/폴더를 열 수 없음"
+        hint = ("DB 경로에 접근이 안 됩니다. ① 공유폴더/드라이브 연결이 끊겼는지 "
+                "② 폴더·파일 권한(다른 PC에서 처음 열 때 owner-only) — icacls로 권한 초기화 "
+                "③ 백신 실시간검사가 netdash.db를 잠갔는지 ④ 경로가 실제로 존재하는지 확인하세요.")
+    elif "database is locked" in m or "locked" in m:
+        reason = "DB 잠금(사용 중)"
+        hint = ("다른 프로세스/다른 PC가 DB에 쓰는 중입니다. 잠시 후 자동 재시도되며, "
+                "지속되면 다른 PC의 수집을 끝내거나 앱을 하나만 실행하세요.")
+    elif "disk i/o" in m or "i/o error" in m:
+        reason = "디스크/네트워크 입출력 오류"
+        hint = "공유폴더·네트워크 연결 또는 디스크 상태를 확인하세요(SMB 순단 가능)."
+    elif "readonly" in m or "read-only" in m or "attempt to write a readonly" in m:
+        reason = "읽기 전용 상태"
+        hint = "이 인스턴스는 읽기 전용(주 서버가 따로 있음)이거나 파일이 읽기전용입니다."
+    elif "no such table" in m or "malformed" in m or "not a database" in m:
+        reason = "DB 파일 손상/스키마 이상"
+        hint = "DB 파일이 손상됐거나 다른 파일일 수 있습니다. 백업에서 복구하거나 새 DB로 초기화하세요."
+    elif "disk full" in m or "full" in m:
+        reason = "저장 공간 부족"
+        hint = "디스크 여유 공간을 확보하세요."
+    else:
+        reason = "DB 오류"
+        hint = "상세 메시지를 확인하세요. 지속되면 netdash_error.log를 확인하세요."
+    return {"reason": reason, "hint": hint, "detail": detail[:300],
+            "path": str(db_path) if db_path is not None else "",
+            "path_kind": path_kind}
+
+
 def _open_conn(db_path):
     """SQLite 연결 + PRAGMA 설정을 열어 반환. 실패 시 예외(호출부에서 재시도)."""
     conn = None
@@ -467,13 +529,17 @@ def get_db(db_path):
             raise last
         yield conn
         conn.commit()
+        clear_last_db_error()   # 성공 → 이전 오류 배너 해제
     except Exception as e:
         if conn:
             try:
                 conn.rollback()
             except Exception:
                 pass
-        utils.log_event("error", "db_error", error=str(e), path=str(db_path))
+        info = db_error_hint(e, db_path)
+        _record_db_error(info)
+        utils.log_event("error", "db_error", reason=info["reason"],
+                        error=info["detail"], path=info["path"], path_kind=info["path_kind"])
         raise
     finally:
         if conn:
