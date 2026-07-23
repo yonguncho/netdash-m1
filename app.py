@@ -1453,6 +1453,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             unreach = [s for s in switches if reach.get(s["id"]) is False]
             fac = db.get_facility_hosts(db_path)
             fac_off = [h for h in fac if not h.get("online")]
+            # 오프라인 설비 MAC의 '마지막 관측 위치'를 1회 배치 조회(호스트별 N쿼리 방지 — 성능).
+            _mac_last = (db.get_mac_last_seen(db_path, [h.get("mac") for h in fac_off])
+                         if fac_off else {})
+
+            def _hist_by_mac(mac):
+                import re as _re
+                h = _re.sub(r"[^0-9a-f]", "", (mac or "").lower())
+                return _mac_last.get(h) if len(h) == 12 else None
 
             # TPS 구역 전원다운 의심: 한 구역의 스위치가 2대 이상이고 전부 도달불가면 정전 의심
             zone_out = []
@@ -1502,8 +1510,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 if sw:
                     return "%s (포트 미확인)" % sw
                 # 과거 연결 이력: 현재 위치를 몰라도, 이 MAC이 과거 스냅샷에서 학습된
-                # '마지막 위치'가 있으면 그걸 보여준다(사용자 요청 — 이전 이력 비교).
-                hist = db.find_mac_history(db_path, h.get("mac"))
+                # '마지막 위치'가 있으면 그걸 보여준다(배치 맵 사용 — 성능).
+                hist = _hist_by_mac(h.get("mac"))
                 if hist and hist.get("switch_name"):
                     when = (hist.get("ts") or "")[:16]
                     return "과거 확인: %s · %s%s (현재 끊김)" % (
@@ -1559,15 +1567,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return m.group(1) if m else ""
 
             _sw_by_name = {s.get("name"): s for s in switches if s.get("name")}
-            _mac_hist_cache = {}
             _fac_sw = {}   # switch_name -> {count, location}
             for h in fac_off:
                 sname = h.get("switch_name")
                 if not sname:
-                    _mac = (h.get("mac") or "").lower()
-                    if _mac not in _mac_hist_cache:
-                        _mac_hist_cache[_mac] = db.find_mac_history(db_path, h.get("mac")) or {}
-                    sname = (_mac_hist_cache[_mac] or {}).get("switch_name")
+                    hist = _hist_by_mac(h.get("mac"))   # 배치 맵(추가 쿼리 없음)
+                    sname = (hist or {}).get("switch_name")
                 key = sname or "미확인"
                 ent = _fac_sw.setdefault(key, {"count": 0, "location": ""})
                 ent["count"] += 1
@@ -2844,8 +2849,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             if fid in _collecting_firewalls:
                 return jsonify({"error": "이미 수집 중입니다"}), 409
             _collecting_firewalls.add(fid)
-        db.set_firewall_status(db_path, fid, "collecting")
         try:
+            # set_status를 try 안으로 이동 — DB 지연/잠금으로 실패해도 아래 finally가
+            # fid를 반드시 해제(이전엔 try 밖이라 예외 시 500 + fid 잔류로 영구 409).
+            db.set_firewall_status(db_path, fid, "collecting")
             result = firewall_mod.collect_firewall(
                 fw["vendor"], fw["host"], fw.get("port"),
                 token=token, username=username, password=password,
@@ -2878,9 +2885,17 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                             "interfaces": len(result["interfaces"]),
                             "arp": len(result["arp"])})
         except Exception as e:
-            db.set_firewall_status(db_path, fid, "failed")
+            try:
+                db.set_firewall_status(db_path, fid, "failed")
+            except Exception:
+                pass  # DB 자체 문제면 상태 기록도 실패 — 무시하고 오류 응답 반환
             sanitized = collector._sanitize_error_msg(str(e))
             log_event("error", "firewall_collect_error", firewall_id=fid, error=sanitized)
+            # DB 오류면 원인 힌트를 함께(항상 JSON 응답 → 프론트 '서버 오류' 대신 상세 표시)
+            di = db.get_last_db_error()
+            if di:
+                return jsonify({"error": "DB 오류: " + di.get("reason", ""),
+                                "detail": di.get("hint", "") + " (" + (di.get("detail") or "") + ")"}), 503
             return jsonify({"error": "수집 실패", "detail": sanitized}), 502
         finally:
             token = username = password = None

@@ -177,6 +177,47 @@ def test_db_error_banner_ui_present():
     assert "/api/health" in js
 
 
+# ── 관제 성능: MAC 이력 배치 조회 ───────────────────────────────
+def test_get_mac_last_seen_batch(temp_db):
+    sid = db.save_switch(temp_db, "SW-L", "10.9.0.11", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sid)
+    db.save_mac_entries(temp_db, snap, sid,
+                        [{"mac": "AA:BB:CC:DD:EE:01", "port": "Gi1/0/1", "vlan": 10}])
+    m = db.get_mac_last_seen(temp_db, ["aabb.ccdd.ee01"])   # 형식 무관
+    assert m.get("aabbccddee01", {}).get("switch_name") == "SW-L"
+    assert m["aabbccddee01"]["port"] == "Gi1/0/1"
+    # want 필터: 관심 밖 MAC만 주면 빈 dict
+    assert db.get_mac_last_seen(temp_db, ["00:00:00:00:00:99"]) == {}
+
+
+def test_wall_uses_batch_mac_lookup():
+    """/api/wall 요약이 호스트별 find_mac_history가 아니라 배치(get_mac_last_seen)를 쓴다."""
+    import inspect
+    import app as _app
+    src = inspect.getsource(_app.create_app)
+    assert "get_mac_last_seen" in src
+    # 오프라인 설비마다 find_mac_history를 부르는 패턴은 제거됨
+    assert "db.find_mac_history(db_path, h.get" not in src
+
+
+# ── 방화벽 수집 오류 시 JSON 응답 + 잠금 해제(영구 409 방지) ─────
+def test_firewall_collect_error_frees_lock(client, monkeypatch):
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    fid = db.save_firewall(dbp, "FW-T", "fortigate", "10.7.7.7", 443)
+    from core import firewall as fwmod
+
+    def boom(*a, **k):
+        raise RuntimeError("collect failed")
+
+    monkeypatch.setattr(fwmod, "collect_firewall", boom)
+    r1 = client.post("/api/firewalls/%d/collect" % fid, json={})
+    assert r1.status_code in (502, 503)
+    assert r1.get_json() is not None            # HTML 500 아님(→ 프론트 '서버 오류' 방지)
+    r2 = client.post("/api/firewalls/%d/collect" % fid, json={})
+    assert r2.status_code != 409                 # fid 잔류 없음(영구 409 아님)
+
+
 # ── DB 오류 상세 힌트 ───────────────────────────────────────────
 def test_db_error_hint_classifies():
     import sqlite3

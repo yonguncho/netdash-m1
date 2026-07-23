@@ -996,6 +996,47 @@ def find_mac_history(db_path, mac):
     return None
 
 
+def get_mac_last_seen(db_path, want_macs=None):
+    """MAC별 '가장 최근 관측 위치'를 1회 쿼리로 배치 구성(과거 스냅샷 포함).
+
+    find_mac_history를 호스트마다 부르면 N번 풀스캔이라 데이터가 많을 때 매우 느리다.
+    관제/설비 요약에서 한 번만 호출해 {정규화MAC: {switch_name, port, ts}} 맵을 얻는다.
+    want_macs(대상 MAC 반복자)를 주면 그 MAC만 유지(메모리 절약).
+    """
+    import re as _re
+    want = None
+    if want_macs is not None:
+        want = set()
+        for m in want_macs:
+            h = _re.sub(r"[^0-9a-f]", "", (m or "").lower())
+            if len(h) == 12:
+                want.add(h)
+        if not want:
+            return {}
+    out, best_sid = {}, {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT m.mac AS mac, m.port AS port, s.name AS sw, "
+                "       snap.collected_at AS ts, snap.id AS sid "
+                "FROM mac_entries m JOIN switches s ON m.switch_id = s.id "
+                "JOIN snapshots snap ON m.snapshot_id = snap.id")
+            for r in cur.fetchall():
+                h = _re.sub(r"[^0-9a-f]", "", (r["mac"] or "").lower())
+                if len(h) != 12:
+                    continue
+                if want is not None and h not in want:
+                    continue
+                sid = r["sid"] or 0
+                if h not in best_sid or sid > best_sid[h]:   # 가장 최근 스냅샷 유지
+                    best_sid[h] = sid
+                    out[h] = {"switch_name": r["sw"], "port": r["port"], "ts": r["ts"]}
+        except Exception:
+            pass
+    return out
+
+
 def get_mac_to_switchport(db_path):
     """전체 스위치의 최신 MAC→(switch_id, switch_name, port) 매핑.
 
