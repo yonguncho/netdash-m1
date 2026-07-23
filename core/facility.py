@@ -441,7 +441,9 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     vrf_capable = vendor in ("cisco_ios", "cisco_nxos", "arista_eos")
     net = ipaddress.IPv4Network(subnet, strict=False)
     ips = [str(h) for h in net.hosts()]
-    _set(running=True, subnet=subnet, done=0, total=len(ips), message="연결 중")
+    # 새 스캔 시작 시 이전 diff 배너 초기화(직전 결과가 무기한 남지 않도록)
+    _set(running=True, subnet=subnet, done=0, total=len(ips), message="연결 중",
+         last_subnet=subnet, last_added=[], last_removed=[])
 
     # keepalive: 긴 ping 스윕(/23=~510회, 15분+) 중 방화벽/장비의 유휴 세션 정리로
     # TCP가 끊겨 'socket is closed'가 나던 문제 완화.

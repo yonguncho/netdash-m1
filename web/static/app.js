@@ -1332,10 +1332,13 @@ function renderFacilityProgress(st) {
       st.done + "/" + st.total + " (" + pct + "%) · " + escHtml(st.message || "");
   } else {
     var html = st.message ? "<span>" + escHtml(st.message) + "</span>" : "";
-    // 완료 diff 배너 — 직전 스캔에서 새로 추가되거나 끊긴 설비를 한눈에
+    // 완료 diff 배너 — 직전 스캔에서 새로 추가되거나 끊긴 설비를 한눈에(대상 대역 라벨 포함)
     var added = st.last_added || [], removed = st.last_removed || [];
     if (added.length || removed.length) {
-      html += "<div style='margin-top:6px;display:flex;flex-wrap:wrap;gap:6px'>";
+      html += "<div style='margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center'>";
+      if (st.last_subnet) {
+        html += "<span style='font-size:12px;color:#475569'>📍 " + escHtml(st.last_subnet) + " 스캔 결과</span>";
+      }
       if (added.length) {
         html += "<span style='background:#dcfce7;color:#166534;border-radius:6px;padding:3px 8px;font-size:12px' " +
           "title='" + escHtml(added.join(', ')) + "'>➕ 새 설비 " + added.length + "대: " +
