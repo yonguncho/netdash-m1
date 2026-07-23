@@ -189,6 +189,23 @@ def _ssh_detail_windows(ip, username, password):
     return detail
 
 
+def infer_os_from_scan(open_ports, netbios_hit=False):
+    """무자격 신호(열린 포트·NetBIOS)로 OS 추정: 'windows' | 'linux' | None.
+
+    SSH(22)가 툴 PC에서 막힌 서버도 OS를 표시하기 위한 폴백. SSH 상세(detect_os)가
+    성공하면 그 결과가 우선한다.
+      - Windows 신호: 3389(RDP)/445(SMB)/135(RPC)/139(NetBIOS) 또는 NetBIOS 응답.
+      - Linux 신호: 22(SSH) 열림 + Windows 신호 없음.
+    """
+    ports = set(open_ports or [])
+    win_signals = ports & {135, 139, 445, 3389}
+    if netbios_hit or win_signals:
+        return "windows"
+    if 22 in ports:
+        return "linux"
+    return None
+
+
 def detect_os(ip, username, password, timeout=15):
     """SSH 접속 후 OS 자동 인식: 'linux' | 'windows' | None(접속 실패).
 
@@ -253,9 +270,21 @@ def collect_server(db_path, server_id, username=None, password=None):
     except Exception as e:
         errors.append("스캔: %s" % e)
     # hostname: 역방향 DNS → (없으면) NetBIOS 이름질의(UDP137, 윈도우 무자격 조회)
-    rdns = reverse_dns(ip) or netbios_name(ip)
+    rdns = reverse_dns(ip)
+    nb_hit = False
+    if not rdns:
+        nb = netbios_name(ip)
+        if nb:
+            rdns = nb
+            nb_hit = True
     if rdns:
         fields["hostname"] = rdns
+    # OS 자동 추정(무자격): SSH가 막힌 서버도 열린 포트·NetBIOS로 OS를 표시.
+    # 사용자가 이미 linux/windows로 지정했으면 유지. SSH 상세(detect_os) 성공 시 덮어씀.
+    if (sv.get("os_type") or "auto").lower() not in ("linux", "windows"):
+        inferred = infer_os_from_scan(open_ports, nb_hit)
+        if inferred:
+            fields["os_type"] = inferred
     # 연결 위치: ARP→MAC→스위치포트. 물리 포트 우선, Po면 물리 멤버로 해석.
     loc = db.find_mac_location(db_path, ip)
     if loc.get("mac"):

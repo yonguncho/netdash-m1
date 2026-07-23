@@ -224,6 +224,33 @@ function _applyLocFilter(list, inputId) {
   });
 })();
 
+// ─── 서버/방화벽 엑셀 일괄 등록(공통 바인더) ─────────────────────
+function _bindExcelImport(btnId, inputId, url, label, reload) {
+  var btn = document.getElementById(btnId);
+  var inp = document.getElementById(inputId);
+  if (!btn || !inp) return;
+  btn.addEventListener("click", function () { inp.click(); });
+  inp.addEventListener("change", function () {
+    if (!inp.files.length) return;
+    var fd = new FormData();
+    fd.append("file", inp.files[0]);
+    fetch(url, { method: "POST", body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          alert(label + " 완료: " + res.imported + "건 등록" +
+            (res.skipped ? " (제외 " + res.skipped + "건)" : "") + " / 전체 " + res.total + "행");
+          if (typeof reload === "function") reload();
+        } else alert(res.error || "등록 실패");
+        inp.value = "";
+      }).catch(function (e) { console.error(e); alert("서버 오류"); inp.value = ""; });
+  });
+}
+_bindExcelImport("btn-server-import", "server-import-file", "/api/servers/import",
+  "서버 엑셀 등록", function () { if (typeof loadServers === "function") loadServers(); });
+_bindExcelImport("btn-firewall-import", "firewall-import-file", "/api/firewalls/import",
+  "방화벽 엑셀 등록", function () { if (typeof loadFirewalls === "function") loadFirewalls(); });
+
 // 테이블 검색창 HTML 생성 헬퍼
 function _searchBox(targetId, placeholder) {
   return "<input class='tbl-search' data-target='" + targetId + "' placeholder='" +
@@ -984,41 +1011,8 @@ function _nbrSrcBadge(sw) {
   return "";
 }
 
-// 구분 인라인 변경(위임) — 선택 즉시 저장
-document.addEventListener("change", function (e) {
-  var t = e.target;
-  if (!t || !t.classList || !t.classList.contains("sw-type-sel")) return;
-  var id = parseInt(t.getAttribute("data-id"), 10);
-  fetch("/api/switches/" + id, {
-    method: "PUT", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({device_type: t.value}),
-  }).then(function (r) { return r.json(); }).then(function (res) {
-    if (!res.ok) alert(res.error || "구분 변경 실패");
-    else pollState();
-  }).catch(function (err) { console.error(err); });
-});
-
-// 구분 일괄 변경(체크된 항목에 적용)
-(function () {
-  var sel = document.getElementById("sw-bulk-type");
-  var btn = document.getElementById("btn-sw-apply-type");
-  if (!sel || !btn) return;
-  sel.addEventListener("change", function () { btn.disabled = !sel.value; });
-  btn.addEventListener("click", function () {
-    var ids = Array.prototype.map.call(
-      document.querySelectorAll("#switch-table-body .sw-check:checked"),
-      function (c) { return parseInt(c.value, 10); });
-    if (!ids.length) { alert("먼저 변경할 스위치를 체크하세요."); return; }
-    if (!sel.value) return;
-    fetch("/api/switches/bulk-set-type", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ids: ids, device_type: sel.value}),
-    }).then(function (r) { return r.json(); }).then(function (res) {
-      if (res.ok) { alert(res.updated + "대 구분을 '" + sel.value + "'로 변경했습니다."); pollState(); }
-      else alert(res.error || "일괄 변경 실패");
-    }).catch(function (e) { console.error(e); alert("일괄 변경 오류"); });
-  });
-})();
+// 구분(L2/L3/L4)은 running-config·벤더로 자동 분류된다(topology.classify_switch_kind).
+// 수동 드롭다운·일괄변경 UI는 제거됨(API /api/switches/bulk-set-type은 유지).
 
 // 존은 hostname 명명규칙으로 자동 분류된다(topology.infer_zone —
 // 예: SKBA_F1_DMZ_SW_1 → DMZ, SKBA_F1_VDI_NASSW_1 → VDI NAS).
@@ -1039,11 +1033,14 @@ function _applySwSearch(list) {
 }
 
 function renderSwitchTable(switches) {
-  switches = _applySwSearch(switches);
+  // 서버(구분=Server)는 스위치 현황에서 제외 — 서버 현황/서버실 현황에만 표시
+  switches = _applySwSearch((switches || []).filter(function (s) {
+    return (s.device_type || "") !== "Server";
+  }));
   var tbody = document.getElementById("switch-table-body");
   if (!tbody) return;  // 요소 부재 시 조기 반환(가드 역전 → tbody.innerHTML 크래시 방지)
   if (!switches.length) {
-    tbody.innerHTML = "<tr><td colspan='14' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='13' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
     var allChk0 = document.getElementById("sw-check-all");
     if (allChk0) allChk0.checked = false;
     _updateBulkDeleteBtn();
@@ -1055,17 +1052,18 @@ function renderSwitchTable(switches) {
       ? "<span style='color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" +
         (sw.location ? "<br><span style='font-size:11px;color:#64748b'>" + escHtml(sw.location) + "</span>" : "")
       : escHtml(sw.location || "-");
-    // 구분(장비 유형) — 인라인 드롭다운(변경 즉시 저장). 이름은 카드/검색에서 사용.
-    var typeSel = "<select class='sw-type-sel' data-id='" + sw.id + "' style='font-size:12px;padding:3px'>" +
-      "<option value=''" + (!sw.device_type ? " selected" : "") + ">미지정</option>" +
-      _DEVICE_TYPES.map(function (t) {
-        return "<option" + (sw.device_type === t ? " selected" : "") + ">" + escHtml(t) + "</option>";
-      }).join("") + "</select>";
+    // 구분 자동 분류(L2/L3/L4) — running-config·벤더로 판정(수동 지정 불필요).
+    // 미수집이면 'SWITCH'로 표기(수집하면 자동 확정).
+    var kind = sw.kind_auto ||
+      (sw.device_type && sw.device_type.indexOf("Switch") >= 0 ? sw.device_type : "");
+    var kindLabel = kind
+      ? "<span class='status-badge' style='background:#e0e7ff;color:#3730a3'>" + escHtml(kind) + "</span>"
+      : "<span class='status-badge' style='background:#f1f5f9;color:#475569' title='running-config를 수집하면 L2/L3/L4로 자동 분류됩니다'>SWITCH</span>";
     // 모델·버전(수집 시 show version에서 자동 추출) — 별도 컬럼
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'" +
       (_tblSel[sw.id] ? " checked" : "") + "></td>" +
-      "<td>" + typeSel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
+      "<td>" + kindLabel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(_vendorLabel(sw.vendor)) +
       _nbrSrcBadge(sw) + "</td><td>" +
       (sw.model ? escHtml(sw.model)
@@ -1074,19 +1072,13 @@ function renderSwitchTable(switches) {
         : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.serial ? "<code style='font-size:11px'>" + escHtml(sw.serial) + "</code>"
         : "<span style='color:#94a3b8' title='재수집하면 show version/inventory에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
-      locCell + "</td><td>" +
-      (sw.zone ? "<span style='font-size:11px'>" + escHtml(sw.zone) + "</span>"
-        : (sw.zone_auto
-          ? "<span style='font-size:11px;color:#64748b' title='hostname 명명규칙에서 자동 분류됨'>" +
-            escHtml(sw.zone_auto) + "</span>"
-          : "<span style='color:#94a3b8' title='hostname 명명규칙(사이트_층_존_SW_번호)이면 자동 분류됩니다'>-</span>")) +
-      "</td><td><span class='status-badge status-badge--" + sc + "'>" +
+      locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
       escHtml(sw.status) + "</span>" +
       (sw.status === "failed" && sw.last_error
         ? "<div style='font-size:11px;color:#991b1b;max-width:260px'>" + escHtml(sw.last_error) + "</div>"
         : "") +
       "</td><td>" +
-      (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "-") +
+      (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "<span title='정상 — 포트 flapping/loop 이벤트 없음'>-</span>") +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
@@ -4529,7 +4521,7 @@ function loadConfigTab(switchId) {
   });
 })();
 
-// ─── config 다운로드(ZIP) — 체크된 스위치만(미선택 시 전체) ──────────
+// ─── config 다운로드(ZIP) — 체크된 스위치만(선택 필수) ──────────
 (function () {
   var btn = document.getElementById("btn-configs-export");
   if (btn) btn.addEventListener("click", function () {
@@ -4539,9 +4531,7 @@ function loadConfigTab(switchId) {
     if (ids.length) {
       window.location = "/api/configs/export-all?ids=" + ids.join(",");
     } else {
-      if (confirm("선택된 장비가 없습니다. 전체 스위치의 config를 다운로드할까요?")) {
-        window.location = "/api/configs/export-all";
-      }
+      alert("config를 다운로드할 스위치를 먼저 체크하세요.");
     }
   });
 })();

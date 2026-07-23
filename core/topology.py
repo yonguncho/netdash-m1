@@ -487,6 +487,24 @@ def classify_l3(cfg):
     return "L2"
 
 
+def classify_switch_kind(cfg, vendor=None):
+    """스위치 구분 자동 분류(표시용): 'L4 Switch' / 'L3 Switch' / 'L2 Switch' / None(미수집).
+
+    - L4: 로드밸런서 벤더(Alteon/Radware) → 설정 없이도 판정.
+    - L3/L2: running-config로 판정(classify_l3 — ip routing / SVI≥2 / 정적라우트).
+    - config 미수집이면 None(프론트에서 'SWITCH'로 표시).
+    """
+    v = (vendor or "").lower()
+    if v in ("alteon", "radware"):
+        return "L4 Switch"
+    k = classify_l3(cfg)
+    if k == "L3":
+        return "L3 Switch"
+    if k == "L2":
+        return "L2 Switch"
+    return None
+
+
 _INTERNET_FW_RE = _re_zone.compile(
     r"internet|외부|ext|perimeter|edge|외부망|인터넷", _re_zone.I)
 

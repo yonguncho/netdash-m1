@@ -25,6 +25,7 @@ from core.utils import log_event
 from core.collector import _sanitize_error_msg
 from core.excel_loader import load_workbook as load_excel_workbook
 from core.excel_loader import parse_switch_inventory
+from core.excel_loader import parse_server_inventory, parse_firewall_inventory
 
 logging.basicConfig(
     level=logging.INFO,
@@ -600,6 +601,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
             # hostname → TPS 물리 위치 라벨 + 랙 그룹핑 키 주입(포맷 일치 시)
             from core import tps_location, serverroom, topology as _topo
+            # 구분 자동 분류(L2/L3/L4) — 최신 running-config + 벤더로 판정(수동 지정 불필요)
+            _cfgs = db.get_latest_configs(db_path)
+            for sw in switches:
+                _kind = _topo.classify_switch_kind(_cfgs.get(sw["id"]), sw.get("vendor"))
+                if _kind:
+                    sw["kind_auto"] = _kind
             for sw in switches:
                 # 존 자동 분류(hostname 명명규칙) — 명시 zone 없을 때 표시용
                 if not sw.get("zone"):
@@ -860,6 +867,96 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify({"ok": True, "imported": len(imported), "skipped": skipped, "total": len(rows)})
         except Exception as e:
             log_event("error", "import_inventory_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    def _read_xlsx_safe(file):
+        """업로드 xlsx 수신 + 크기·zip bomb 검증. 반환: (content_bytes, error_response|None)."""
+        if not file or not file.filename:
+            return None, (jsonify({"error": "file required"}), 400)
+        if not file.filename.endswith(".xlsx"):
+            return None, (jsonify({"error": ".xlsx file required"}), 400)
+        content = file.read()
+        if len(content) / (1024 * 1024) > 16:
+            return None, (jsonify({"error": "file too large (16MB)"}), 413)
+        import zipfile as _zip
+        try:
+            with _zip.ZipFile(io.BytesIO(content), "r") as zf:
+                total = 0
+                for info in zf.infolist():
+                    if info.file_size / (1024 * 1024) > 10:
+                        return None, (jsonify({"error": "ZIP entry too large"}), 413)
+                    total += info.file_size
+                    if info.compress_size > 0 and info.file_size / info.compress_size > 100:
+                        return None, (jsonify({"error": "compression ratio too high (zip bomb)"}), 413)
+                if total / (1024 * 1024) > 50:
+                    return None, (jsonify({"error": "uncompressed size too large"}), 413)
+        except _zip.BadZipFile:
+            return None, (jsonify({"error": "invalid xlsx file"}), 400)
+        return content, None
+
+    @app.route("/api/servers/import", methods=["POST"])
+    @rate_limit("import_servers", max_requests=5, window_seconds=60)
+    def import_servers():
+        """이름/IP(+위치/OS) 엑셀 → 서버 일괄 등록. 상세·계정은 이후 '수집'에서."""
+        log_event("info", "import_servers_requested")
+        if "file" not in request.files:
+            return jsonify({"error": "file field required"}), 400
+        content, err = _read_xlsx_safe(request.files["file"])
+        if err:
+            return err
+        try:
+            rows = parse_server_inventory(io.BytesIO(content))
+            allowed = config.collector.get("allowed_ip_ranges")
+            imported = skipped = 0
+            for r in rows:
+                try:
+                    ip = validate_ipv4(r["ip"], allowed)
+                except ValueError:
+                    skipped += 1
+                    continue
+                try:
+                    db.save_server(db_path, r["name"], ip,
+                                   os_type=(r.get("os_type") or "auto"),
+                                   location=(r.get("location") or None))
+                    imported += 1
+                except Exception:
+                    skipped += 1
+            log_event("info", "servers_imported", imported=imported, skipped=skipped, total=len(rows))
+            return jsonify({"ok": True, "imported": imported, "skipped": skipped, "total": len(rows)})
+        except Exception as e:
+            log_event("error", "import_servers_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls/import", methods=["POST"])
+    @rate_limit("import_firewalls", max_requests=5, window_seconds=60)
+    def import_firewalls():
+        """이름/벤더/호스트IP(+포트/위치) 엑셀 → 방화벽 일괄 등록."""
+        log_event("info", "import_firewalls_requested")
+        if "file" not in request.files:
+            return jsonify({"error": "file field required"}), 400
+        content, err = _read_xlsx_safe(request.files["file"])
+        if err:
+            return err
+        try:
+            rows = parse_firewall_inventory(io.BytesIO(content))
+            allowed = config.collector.get("allowed_ip_ranges")
+            imported = skipped = 0
+            for r in rows:
+                try:
+                    host = validate_ipv4(r["host"], allowed)
+                except ValueError:
+                    skipped += 1
+                    continue
+                try:
+                    db.save_firewall(db_path, r.get("name") or host, r.get("vendor") or "fortigate",
+                                     host, port=r.get("port"), location=(r.get("location") or None))
+                    imported += 1
+                except Exception:
+                    skipped += 1
+            log_event("info", "firewalls_imported", imported=imported, skipped=skipped, total=len(rows))
+            return jsonify({"ok": True, "imported": imported, "skipped": skipped, "total": len(rows)})
+        except Exception as e:
+            log_event("error", "import_firewalls_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/upload", methods=["POST"])

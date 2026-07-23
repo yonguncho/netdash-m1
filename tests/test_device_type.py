@@ -74,11 +74,19 @@ def test_switch_column_filters_removed():
     assert "_applySwSearch" in js               # 상단 검색창 = 전 컬럼 통합 검색
 
 
-def test_device_type_ui():
+def test_device_type_auto_classify_ui():
+    """구분은 running-config·벤더로 자동 분류(L2/L3/L4). 수동 드롭다운·일괄변경 UI 제거."""
     html = HTML.read_text(encoding="utf-8")
-    assert 'id="sw-bulk-type"' in html and 'id="btn-sw-apply-type"' in html
-    assert 'id="add-devtype"' in html
-    assert "BackBone" in html and "L4 Switch" in html
+    # 스위치 현황 테이블: 수동 구분 일괄변경 UI + '존' 컬럼 제거
+    assert 'id="sw-bulk-type"' not in html
+    assert 'id="btn-sw-apply-type"' not in html
+    assert "<th>존</th>" not in html
     js = APP_JS.read_text(encoding="utf-8")
-    assert "sw-type-sel" in js and "_DEVICE_TYPES" in js
-    assert "/api/switches/bulk-set-type" in js
+    # 인라인 구분 드롭다운 제거 + 자동 분류 라벨(kind_auto) 사용
+    assert "sw-type-sel" not in js
+    assert "kind_auto" in js
+    # 백엔드 자동 분류 함수 존재(topology.classify_switch_kind)
+    from core import topology
+    assert hasattr(topology, "classify_switch_kind")
+    # 서버(구분=Server)는 스위치 현황 테이블에서 제외
+    assert 'device_type || "") !== "Server"' in js

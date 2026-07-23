@@ -1133,6 +1133,23 @@ def get_config_backup_content(db_path, backup_id):
             return None
 
 
+def get_latest_configs(db_path):
+    """스위치별 최신 running-config 백업 내용 {switch_id: content}. L2/L3 자동 분류용."""
+    out = {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT c.switch_id AS sid, c.content AS content FROM config_backups c "
+                "JOIN (SELECT switch_id, MAX(id) AS mid FROM config_backups GROUP BY switch_id) m "
+                "ON c.id = m.mid")
+            for r in cur.fetchall():
+                out[r["sid"]] = r["content"]
+        except Exception:
+            pass
+    return out
+
+
 def count_unacked_events(db_path):
     with get_db(db_path) as conn:
         cur = conn.cursor()

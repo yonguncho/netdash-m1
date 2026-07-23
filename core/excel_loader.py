@@ -28,17 +28,20 @@ MIN_MATCHED_COLS = 2
 
 # 알려진 필드와 별칭 매핑 (모두 정규화된 형태: 공백 제거 + 소문자)
 ALIASES = {
-    'name': {'name', 'switchname', 'devicename'},
-    'ip': {'ip', 'ipv4', 'ipaddress', 'address'},
+    'name': {'name', 'switchname', 'devicename', '이름', '장비명', '장비이름'},
+    'ip': {'ip', 'ipv4', 'ipaddress', 'address', '호스트', '호스트ip', '관리ip', 'host'},
     'hostname': {'hostname', 'dnsname', 'fqdn', '사용서버명', '서버명'},
-    'vendor': {'vendor', 'manufacturer', 'os', 'platform'},
-    'location': {'location', 'site', 'datacenter', 'dc', '랙위치'},
+    'vendor': {'vendor', 'manufacturer', 'os', 'platform', '벤더', '제조사'},
+    'location': {'location', 'site', 'datacenter', 'dc', '랙위치', '위치', '랙'},
     'mac': {'mac', 'macaddress', 'hwaddr'},
     # M7: 장부(ledger) 위치 — 호스트 블록에서 기대 연결 위치를 적재
     'ledger_switch': {'연결스위치', 'connectedswitch', 'ledgerswitch', 'uplinkswitch'},
     'ledger_port': {'연결포트', 'connectedport', 'ledgerport', 'uplinkport'},
     # 장비 인벤토리 업로드용 서브넷
     'subnet': {'subnet', 'ipsubnet', 'cidr', 'network', 'netmask', '서브넷', '대역', '네트워크'},
+    # 방화벽/서버 인벤토리용
+    'port': {'port', '포트', 'mgmtport', '관리포트'},
+    'os_type': {'ostype', 'osname', '운영체제'},
 }
 
 IP_REGEX = re.compile(
@@ -109,6 +112,97 @@ def parse_switch_inventory(source) -> List[Dict[str, Any]]:
                 "vendor": "unknown",
             })
     return out
+
+
+def _inventory_rows(source, wanted, key_field, builder):
+    """공통 인벤토리 파서: wanted 컬럼을 헤더에서 자동 매핑, key_field 값이 유효한 행만.
+
+    key_field='ip'면 IP 검증, 그 외엔 비어있지 않으면 채택. builder(_get)로 dict 생성.
+    """
+    field_alias = {f: ALIASES[f] for f in wanted if f in ALIASES}
+    out, seen = [], set()
+    wb = openpyxl_load(source, read_only=True, data_only=True)
+    for ws in wb.worksheets:
+        colmap = None
+        for row in ws.iter_rows(values_only=True):
+            if colmap is None:
+                m = {}
+                for ci, cell in enumerate(row):
+                    n = _norm(cell)
+                    for f, al in field_alias.items():
+                        if n in al and f not in m:
+                            m[f] = ci
+                if key_field in m:
+                    colmap = m
+                continue
+
+            def _get(field):
+                ci = colmap.get(field)
+                if ci is None or ci >= len(row):
+                    return ""
+                v = row[ci]
+                return str(v).strip() if v is not None else ""
+
+            key = _get(key_field)
+            if not key:
+                continue
+            if key_field == 'ip' and not _is_valid_ip(key):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            item = builder(_get)
+            if item:
+                out.append(item)
+    return out
+
+
+def parse_server_inventory(source) -> List[Dict[str, Any]]:
+    """이름/IP(필수) + 위치/OS(선택) 엑셀 → 서버 등록 행 목록.
+
+    Returns: [{name, ip, location, os_type}] — 계정·상세는 이후 '수집'에서 채운다.
+    """
+    def _b(_get):
+        ip = _get('ip')
+        return {
+            "name": _get('name') or _get('hostname') or ip,
+            "ip": ip,
+            "location": _get('location'),
+            "os_type": (_get('os_type') or "auto"),
+        }
+    return _inventory_rows(source, ('name', 'ip', 'hostname', 'location', 'os_type'),
+                           'ip', _b)
+
+
+def parse_firewall_inventory(source) -> List[Dict[str, Any]]:
+    """이름/벤더/호스트IP(필수) + 포트/위치(선택) 엑셀 → 방화벽 등록 행 목록.
+
+    Returns: [{name, vendor, host, port, location}].
+    벤더는 fortigate/paloalto로 정규화(미상이면 fortigate 기본).
+    """
+    def _b(_get):
+        host = _get('ip')
+        v = _norm(_get('vendor'))
+        if 'palo' in v or 'pan' in v:
+            vendor = "paloalto"
+        elif 'forti' in v or 'fgt' in v:
+            vendor = "fortigate"
+        else:
+            vendor = "fortigate"
+        port = _get('port')
+        try:
+            port = int(port) if port else None
+        except ValueError:
+            port = None
+        return {
+            "name": _get('name') or host,
+            "vendor": vendor,
+            "host": host,
+            "port": port,
+            "location": _get('location'),
+        }
+    return _inventory_rows(source, ('name', 'vendor', 'ip', 'port', 'location'),
+                           'ip', _b)
 
 
 def _looks_like_header(row: List[Any]) -> bool:
