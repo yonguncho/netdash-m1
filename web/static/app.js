@@ -1504,7 +1504,8 @@ function _facMatchesSearch(h, q) {
   if (!q) return true;
   var ql = q.toLowerCase();
   var hay = [(h.ip || ""), (h.subnet || ""), (h.switch_name || ""), (h.port || ""),
-             (h.port_desc || ""), (h.via || "")].join(" ").toLowerCase();
+             (h.port_desc || ""), (h.via || ""), (h.hist_switch || ""), (h.hist_port || "")]
+    .join(" ").toLowerCase();
   if (hay.indexOf(ql) >= 0) return true;
   var qhex = ql.replace(/[^0-9a-f]/g, "");
   if (qhex.length >= 4) {
@@ -1574,10 +1575,28 @@ function _renderFacilityRows() {
         ? "<span title='연결 스위치에서 수집한 포트 설명'>" + escHtml(h.port_desc) + "</span>"
         : "<span style='color:#cbd5e1'>-</span>";
     } else {
-      // Po/Vl 등 업링크 경유 상세는 툴팁으로만(표는 깔끔하게)
-      var tip = h.via ? " title='업링크 경유 관측: " + escHtml(h.via) + "'" : "";
-      swCell = "<span style='color:#b45309;cursor:help'" + tip + ">직접 연결 미확인 ⓘ</span>";
-      portCell = "<span style='color:#94a3b8'>—</span>";
+      // 직접 연결 미확인 — 사유를 호버 툴팁으로 명확히 구분해 보여준다
+      var reasons = [];
+      if (!h.online) reasons.push("현재 오프라인(마지막 수집에서 무응답)");
+      if (h.via) reasons.push("업링크(Po/Vl) 경유로만 관측: " + h.via);
+      reasons.push("등록 스위치의 '최신' MAC 테이블에서 직접(액세스) 포트로 확인 안 됨 — " +
+                   "연결된 액세스 스위치가 아직 수집되지 않았거나, 그 사이 MAC이 테이블에서 노후(aging)됨");
+      var reasonText = reasons.join(" · ");
+      var histBadge = h.hist_switch
+        ? " <span class='status-badge status-badge--new' title='과거 스냅샷에서 확인된 마지막 연결 위치'>과거 연결</span>"
+        : "";
+      swCell = "<span style='color:#b45309;cursor:help' title='" + escHtml(reasonText) +
+        "'>직접 연결 미확인 ⓘ</span>" + histBadge;
+      if (h.hist_switch) {
+        swCell += "<div style='font-size:11px;color:#64748b;margin-top:2px'>🕘 " + escHtml(h.hist_switch) +
+          (h.hist_port ? " · " + escHtml(h.hist_port) : "") +
+          (h.hist_ts ? " · " + escHtml(String(h.hist_ts).slice(0, 16)) : "") + "</div>";
+        portCell = h.hist_port
+          ? "<code style='color:#94a3b8'>" + escHtml(h.hist_port) + "</code>"
+          : "<span style='color:#94a3b8'>—</span>";
+      } else {
+        portCell = "<span style='color:#94a3b8'>—</span>";
+      }
       descCell = "<span style='color:#94a3b8'>—</span>";
     }
     // 상태 컬럼 제거 — 오프라인(연결 실패)은 행 배경(빨강)으로만 신호

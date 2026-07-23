@@ -1254,10 +1254,28 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
     @app.route("/api/facility", methods=["GET"])
     def facility_list():
-        """설비 현황 + 수집 진행 상태 조회."""
+        """설비 현황 + 수집 진행 상태 조회.
+
+        현재 연결 위치를 모르는 설비(switch_name 없음 — 온라인/오프라인 무관)는,
+        과거 스냅샷의 MAC 위치를 배치 조회해 '과거 연결' 정보(hist_*)로 주입한다.
+        (MAC 수집 시점엔 어느 스위치 테이블에 있었으므로 과거 이력으로 특정 가능)
+        (스캔 진행 중엔 3초 폴링 부하를 피해 생략 — 스캔이 곧 정확히 갱신)
+        """
         try:
-            return jsonify({"hosts": db.get_facility_hosts(db_path),
-                            "status": facility_mod.get_status()})
+            hosts = db.get_facility_hosts(db_path)
+            status = facility_mod.get_status()
+            if not status.get("running"):
+                off = [h for h in hosts if not h.get("switch_name")]
+                if off:
+                    mac_last = db.get_mac_last_seen(db_path, [h.get("mac") for h in off])
+                    for h in off:
+                        _hx = re.sub(r"[^0-9a-f]", "", (h.get("mac") or "").lower())
+                        hh = mac_last.get(_hx) if len(_hx) == 12 else None
+                        if hh and hh.get("switch_name"):
+                            h["hist_switch"] = hh.get("switch_name")
+                            h["hist_port"] = hh.get("port")
+                            h["hist_ts"] = hh.get("ts")
+            return jsonify({"hosts": hosts, "status": status})
         except Exception as e:
             log_event("error", "facility_list_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
@@ -1462,6 +1480,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 h = _re.sub(r"[^0-9a-f]", "", (mac or "").lower())
                 return _mac_last.get(h) if len(h) == 12 else None
 
+            def _fac_switch_of(h):
+                """설비의 연결 스위치명(현재 없으면 과거 이력). 없으면 '미확인'."""
+                sn = h.get("switch_name")
+                if not sn:
+                    sn = (_hist_by_mac(h.get("mac")) or {}).get("switch_name")
+                return sn or "미확인"
+
             # TPS 구역 전원다운 의심: 한 구역의 스위치가 2대 이상이고 전부 도달불가면 정전 의심
             zone_out = []
             try:
@@ -1569,10 +1594,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             _sw_by_name = {s.get("name"): s for s in switches if s.get("name")}
             _fac_sw = {}   # switch_name -> {count, location}
             for h in fac_off:
-                sname = h.get("switch_name")
-                if not sname:
-                    hist = _hist_by_mac(h.get("mac"))   # 배치 맵(추가 쿼리 없음)
-                    sname = (hist or {}).get("switch_name")
+                sname = h.get("switch_name") or (_hist_by_mac(h.get("mac")) or {}).get("switch_name")
                 key = sname or "미확인"
                 ent = _fac_sw.setdefault(key, {"count": 0, "location": ""})
                 ent["count"] += 1
@@ -1604,6 +1626,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                  "summary": _fac_subnet_summary,   # 대역별 실패 수(많을 때 한눈에)
                  "items": [{"name": h.get("ip"), "ip": h.get("mac") or "",
                             "fip": h.get("ip"), "subnet": h.get("subnet") or "",
+                            "switch": _fac_switch_of(h),   # 칩 클릭 필터용
                             "recollect": True,
                             "detail": _facility_detail(h)}
                            for h in fac_off[:30]]},

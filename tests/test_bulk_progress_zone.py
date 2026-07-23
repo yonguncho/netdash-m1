@@ -190,6 +190,31 @@ def test_get_mac_last_seen_batch(temp_db):
     assert db.get_mac_last_seen(temp_db, ["00:00:00:00:00:99"]) == {}
 
 
+def test_facility_list_injects_history(tmp_path, monkeypatch):
+    """오프라인·연결미확인 설비에 과거 스냅샷 연결 이력(hist_*)이 주입된다."""
+    monkeypatch.chdir(tmp_path)
+    import app as app_module
+    application = app_module.create_app(demo_mode=True)
+    from core import collector
+    collector.shutdown_workers()
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    # 과거 스냅샷에 이 MAC이 SW-EDGE Gi1/0/7에 있었음
+    sid = db.save_switch(dbp, "SW-EDGE", "10.4.0.9", "cisco_ios")
+    snap = db.save_snapshot(dbp, sid)
+    db.save_mac_entries(dbp, snap, sid, [{"mac": "CC:CC:CC:00:00:77", "port": "Gi1/0/7", "vlan": 5}])
+    # 위치 미확인 설비 2건: 오프라인 + 온라인(둘 다 과거 이력 주입돼야 함)
+    db.save_facility_hosts(dbp, [
+        {"subnet": "10.4.0.0/24", "ip": "10.4.0.77", "mac": "CC:CC:CC:00:00:77",
+         "switch_name": "", "port": "", "online": 0},
+        {"subnet": "10.4.0.0/24", "ip": "10.4.0.78", "mac": "CC:CC:CC:00:00:77",
+         "switch_name": "", "port": "", "online": 1}])
+    hosts = application.test_client().get("/api/facility").get_json()["hosts"]
+    by_ip = {x["ip"]: x for x in hosts}
+    assert by_ip["10.4.0.77"].get("hist_switch") == "SW-EDGE"      # 오프라인
+    assert by_ip["10.4.0.78"].get("hist_switch") == "SW-EDGE"      # 온라인 미확인도
+
+
 def test_wall_uses_batch_mac_lookup():
     """/api/wall 요약이 호스트별 find_mac_history가 아니라 배치(get_mac_last_seen)를 쓴다."""
     import inspect
@@ -298,6 +323,15 @@ def test_wall_facility_switch_summary(tmp_path, monkeypatch):
     assert summ["SW-A"]["count"] == 5 and summ["SW-B"]["count"] == 3
     assert summ["SW-A"]["location"] == "RC_4F"          # hostname 구역 위치
     assert fac["summary"][0]["count"] >= fac["summary"][-1]["count"]   # 내림차순
+    # 각 항목에 연결 스위치(switch) 필드 — 관제 칩 클릭 필터용
+    assert all("switch" in it for it in fac["items"])
+    assert {it["switch"] for it in fac["items"]} == {"SW-A", "SW-B"}
+
+
+def test_wall_chip_filter_ui_present():
+    wall = WALL_JS.read_text(encoding="utf-8")
+    assert "renderProblems" in wall and "wallFacFilter" in wall
+    assert "wall-sumchip--click" in wall and "data-fswitch" in wall
 
 
 def test_wall_summary_ui_present():

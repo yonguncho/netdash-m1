@@ -52,7 +52,7 @@ body {
 }
 .wall-cat__grid {
   display: flex; flex-wrap: wrap; gap: 12px;
-  max-height: 42vh; overflow-y: auto;   /* 실패가 많아도 레이아웃을 밀지 않고 스크롤 */
+  max-height: 62vh; overflow-y: auto;   /* 많을 때만 스크롤 — 화면 세로를 넉넉히 사용 */
 }
 .wall-cat--warn .pcard { border-color: #f59e0b; background: #1a1607; }
 .wall-cat--warn .pcard__why { color: #fbbf24; }
@@ -64,6 +64,18 @@ body {
 }
 .wall-sumchip b { color: #fbbf24; margin-left: 4px; }
 .wall-sumchip i { color: #94a3b8; font-style: normal; font-size: 14px; }
+.wall-sumchip--click { cursor: pointer; }
+.wall-sumchip--click:hover { background: #334155; border-color: #64748b; }
+.wall-sumchip--active { background: #2563eb; border-color: #93c5fd; color: #fff; }
+.wall-sumchip--active i { color: #dbeafe; }
+.wall-cat__filter {
+  margin: 2px 0 10px; font-size: 15px; color: #e2e8f0;
+}
+.wall-filter-clear {
+  margin-left: 8px; font-size: 13px; padding: 2px 10px; cursor: pointer;
+  background: #1e293b; color: #e2e8f0; border: 1px solid #475569; border-radius: 6px;
+}
+.wall-filter-clear:hover { background: #334155; }
 .wall-cat__more { margin-top: 10px; color: #94a3b8; font-size: 14px; }
 /* 설비 카드는 다수일 때 더 컴팩트하게 */
 .wall-cat .pcard { min-width: 190px; padding: 12px 14px; }

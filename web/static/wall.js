@@ -23,6 +23,64 @@ function setTile(id, val, tileOnWhenPositive) {
   }
 }
 
+var _lastWall = null;
+var wallFacFilter = null;   // 설비 카테고리에서 선택된 스위치(칩 클릭) — null=전체
+
+// 문제 카테고리 섹션 렌더(칩 필터 적용). refresh와 칩 클릭에서 공용 호출.
+function renderProblems() {
+  var d = _lastWall;
+  var host = document.getElementById("wall-problems");
+  if (!host || !d) return;
+  var cats = (d.categories || []).filter(function (c) { return (c.items || []).length > 0; });
+  if (!cats.length) {
+    host.innerHTML = "<div class='wall-ok'>✓ 이상 없음<small>모든 장비 정상 · " +
+      (d.total_switches || 0) + "대 감시 중</small></div>";
+    return;
+  }
+  host.innerHTML = cats.map(function (c) {
+    var isFac = c.key === "facility";
+    var count = (c.total != null) ? c.total : c.items.length;
+    // 스위치별 요약 칩 — 설비 카테고리는 클릭 시 그 스위치 설비만 필터
+    var summaryHtml = (c.summary && c.summary.length)
+      ? "<div class='wall-cat__summary'>" + c.summary.map(function (s) {
+          var sw = s.switch || "미확인";
+          var active = (isFac && wallFacFilter === sw) ? " wall-sumchip--active" : "";
+          var attr = isFac ? " data-fswitch='" + esc(sw) + "'" : "";
+          return "<span class='wall-sumchip" + (isFac ? " wall-sumchip--click" : "") + active + "'" + attr + ">🔌 " +
+            esc(sw) + (s.location ? " <i>(" + esc(s.location) + ")</i>" : "") +
+            " <b>" + s.count + "</b></span>";
+        }).join("") + "</div>"
+      : "";
+    // 칩 필터 적용(설비 카테고리 한정)
+    var items = c.items;
+    var filterBar = "";
+    if (isFac && wallFacFilter) {
+      items = items.filter(function (p) { return (p.switch || "미확인") === wallFacFilter; });
+      filterBar = "<div class='wall-cat__filter'>필터: 🔌 " + esc(wallFacFilter) +
+        " (" + items.length + ") <button class='wall-filter-clear'>✕ 전체 보기</button></div>";
+    }
+    var moreHtml = (!wallFacFilter && c.total != null && c.total > c.items.length)
+      ? "<div class='wall-cat__more'>외 " + (c.total - c.items.length) + "건 — 설비 현황에서 전체 확인</div>"
+      : "";
+    return "<div class='wall-cat wall-cat--" + esc(c.severity || "warn") + "'>" +
+      "<div class='wall-cat__title'>" + esc(c.title) +
+      " <span class='wall-cat__count'>" + count + "</span></div>" +
+      summaryHtml + filterBar +
+      "<div class='wall-cat__grid'>" +
+      items.map(function (p) {
+        var rc = p.recollect
+          ? "<button class='pcard__recollect' data-ip='" + esc(p.fip || "") +
+            "' data-subnet='" + esc(p.subnet || "") + "' title='이 설비 대역을 연결 게이트웨이에서 재수집'>재수집</button>"
+          : "";
+        return "<div class='pcard'><div class='pcard__name'>" + esc(p.name || "-") + "</div>" +
+          (p.ip ? "<div class='pcard__ip'>" + esc(p.ip) + "</div>" : "") +
+          (p.detail ? "<div class='pcard__why'>" + esc(p.detail) + "</div>" : "") +
+          rc + "</div>";
+      }).join("") +
+      "</div>" + moreHtml + "</div>";
+  }).join("");
+}
+
 function refresh() {
   fetch("/api/wall").then(function (r) { return r.json(); }).then(function (d) {
     setTile("t-total", d.total_switches || 0, false);
@@ -32,47 +90,8 @@ function refresh() {
     setTile("t-facoff", d.facility_offline || 0, true);
     setTile("t-unack", d.unacked_alerts || 0, true);
 
-    // 카테고리별 섹션 렌더(도달 불가 / 수집 실패 / 경보 / 설비 연결 실패)
-    var host = document.getElementById("wall-problems");
-    var cats = (d.categories || []).filter(function (c) {
-      return (c.items || []).length > 0;
-    });
-    if (!cats.length) {
-      host.innerHTML = "<div class='wall-ok'>✓ 이상 없음<small>모든 장비 정상 · " +
-        (d.total_switches || 0) + "대 감시 중</small></div>";
-    } else {
-      host.innerHTML = cats.map(function (c) {
-        var count = (c.total != null) ? c.total : c.items.length;
-        // 스위치별 요약 칩(어느 스위치에서 몇 개 끊겼고 그 스위치 위치는 어디인지)
-        var summaryHtml = (c.summary && c.summary.length)
-          ? "<div class='wall-cat__summary'>" + c.summary.map(function (s) {
-              return "<span class='wall-sumchip'>🔌 " + esc(s.switch || "미확인") +
-                (s.location ? " <i>(" + esc(s.location) + ")</i>" : "") +
-                " <b>" + s.count + "</b></span>";
-            }).join("") + "</div>"
-          : "";
-        var moreHtml = (c.total != null && c.total > c.items.length)
-          ? "<div class='wall-cat__more'>외 " + (c.total - c.items.length) +
-            "건 — 설비 현황에서 전체 확인</div>"
-          : "";
-        return "<div class='wall-cat wall-cat--" + esc(c.severity || "warn") + "'>" +
-          "<div class='wall-cat__title'>" + esc(c.title) +
-          " <span class='wall-cat__count'>" + count + "</span></div>" +
-          summaryHtml +
-          "<div class='wall-cat__grid'>" +
-          c.items.map(function (p) {
-            var rc = p.recollect
-              ? "<button class='pcard__recollect' data-ip='" + esc(p.fip || "") +
-                "' data-subnet='" + esc(p.subnet || "") + "' title='이 설비 대역을 연결 게이트웨이에서 재수집'>재수집</button>"
-              : "";
-            return "<div class='pcard'><div class='pcard__name'>" + esc(p.name || "-") + "</div>" +
-              (p.ip ? "<div class='pcard__ip'>" + esc(p.ip) + "</div>" : "") +
-              (p.detail ? "<div class='pcard__why'>" + esc(p.detail) + "</div>" : "") +
-              rc + "</div>";
-          }).join("") +
-          "</div>" + moreHtml + "</div>";
-      }).join("");
-    }
+    _lastWall = d;
+    renderProblems();
 
     var tick = document.getElementById("wall-events");
     tick.innerHTML = (d.recent_events || []).map(function (ev) {
@@ -97,6 +116,17 @@ function clock() {
   var host = document.getElementById("wall-problems");
   if (!host) return;
   host.addEventListener("click", function (e) {
+    // 설비 요약 칩 클릭 → 그 스위치 설비만 필터(재클릭 시 해제)
+    var chip = e.target.closest(".wall-sumchip--click");
+    if (chip) {
+      var sw = chip.getAttribute("data-fswitch");
+      wallFacFilter = (wallFacFilter === sw) ? null : sw;
+      renderProblems();
+      return;
+    }
+    if (e.target.closest(".wall-filter-clear")) {
+      wallFacFilter = null; renderProblems(); return;
+    }
     var btn = e.target.closest(".pcard__recollect");
     if (!btn) return;
     var ip = btn.getAttribute("data-ip"), subnet = btn.getAttribute("data-subnet");
