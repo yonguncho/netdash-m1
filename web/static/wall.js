@@ -47,10 +47,14 @@ function refresh() {
           " <span class='wall-cat__count'>" + c.items.length + "</span></div>" +
           "<div class='wall-cat__grid'>" +
           c.items.map(function (p) {
+            var rc = p.recollect
+              ? "<button class='pcard__recollect' data-ip='" + esc(p.fip || "") +
+                "' data-subnet='" + esc(p.subnet || "") + "' title='이 설비 대역을 연결 게이트웨이에서 재수집'>재수집</button>"
+              : "";
             return "<div class='pcard'><div class='pcard__name'>" + esc(p.name || "-") + "</div>" +
               (p.ip ? "<div class='pcard__ip'>" + esc(p.ip) + "</div>" : "") +
               (p.detail ? "<div class='pcard__why'>" + esc(p.detail) + "</div>" : "") +
-              "</div>";
+              rc + "</div>";
           }).join("") +
           "</div></div>";
       }).join("");
@@ -73,6 +77,26 @@ function clock() {
   var el = document.getElementById("wall-clock");
   if (el) el.textContent = new Date().toLocaleString("ko-KR");
 }
+
+// 설비 '재수집' 버튼(위임) — 카드가 매 새로고침 재생성돼도 컨테이너 리스너는 유지
+(function () {
+  var host = document.getElementById("wall-problems");
+  if (!host) return;
+  host.addEventListener("click", function (e) {
+    var btn = e.target.closest(".pcard__recollect");
+    if (!btn) return;
+    var ip = btn.getAttribute("data-ip"), subnet = btn.getAttribute("data-subnet");
+    btn.disabled = true; btn.textContent = "시작…";
+    fetch("/api/facility/recollect", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ip: ip, subnet: subnet}),
+    }).then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+      .then(function (res) {
+        if (res.ok) { btn.textContent = "재수집 중…"; }
+        else { alert((res.b && res.b.error) || "재수집 실패"); btn.disabled = false; btn.textContent = "재수집"; }
+      }).catch(function () { btn.disabled = false; btn.textContent = "재수집"; });
+  });
+})();
 
 refresh();
 clock();

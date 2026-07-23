@@ -332,6 +332,7 @@
           <input id="server-import-file" type="file" accept=".xlsx" style="display:none">
         </div>
       </div>
+      <div id="server-progress" style="margin:6px 0"></div>
       <p style="margin:4px 0 10px;font-size:12px;color:#64748b">
         계정 없이도 <b>열린 포트·hostname·MAC·연결 스위치/포트</b>(기존 스위치 수집 데이터 대조)를 수집합니다.
         공통 SSH 계정을 입력하면 <b>OS를 자동 인식</b>하고 OS·리스닝 포트까지 수집합니다.
@@ -364,6 +365,7 @@
           <button id="btn-fac-detect" class="btn btn--secondary">대역 자동 찾기</button>
           <input id="fac-subnet" type="text" placeholder="10.92.174.0/23" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:150px">
           <button id="btn-fac-collect" class="btn btn--primary">대역 수집(ping)</button>
+          <button id="btn-fac-scan-all" class="btn btn--secondary" title="기억된 모든 대역을 순차로 일괄 스캔(동시 1개 대역만)">전체 대역 수집</button>
           <button id="btn-fac-refresh" class="btn btn--secondary" title="ping 없이 최신 MAC 테이블 기준으로 연결 스위치/포트 재대조">↻ 새로고침(재매칭)</button>
           <button id="btn-fac-export-xlsx" class="btn btn--secondary" title="설비 현황 전체를 엑셀로 저장">엑셀 추출</button>
           <button id="btn-fac-export-txt" class="btn btn--secondary" title="설비 현황 전체를 TXT로 저장">TXT 추출</button>
@@ -391,9 +393,11 @@
         <div class="pane-toolbar__actions">
           <button id="btn-add-firewall" class="btn btn--primary">+ 방화벽 추가</button>
           <button id="btn-firewall-import" class="btn btn--primary" title="이름·벤더·호스트IP·포트가 담긴 엑셀(.xlsx)로 방화벽을 일괄 등록">📥 엑셀 가져오기</button>
+          <button id="btn-firewall-collect-all" class="btn btn--secondary" title="등록된 전 방화벽을 저장된 계정으로 일괄 수집">전체 수집</button>
           <input id="firewall-import-file" type="file" accept=".xlsx" style="display:none">
         </div>
       </div>
+      <div id="firewall-progress" style="margin:6px 0"></div>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
@@ -418,6 +422,7 @@
           <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·모델·버전·위치...)" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:230px">
         </div>
       </div>
+      <div id="diag-progress" style="margin:6px 0"></div>
       <div id="switch-table-wrap" class="table-wrap">
         <table class="data-table">
           <thead>

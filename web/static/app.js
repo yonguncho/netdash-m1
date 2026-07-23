@@ -581,12 +581,24 @@ function _updateStatusCounts(list) {
   br.addEventListener("click", function () { setMode("rack"); });
 })();
 
+// hostname에서 구역(zone) 추출 — 사이트코드_<구역>_SW<n> 형식.
+//  SKBA_RC_4F_SW1 → "RC_4F", SKBA_DETROIT_SW1 → "DETROIT", SKBA_F1_DMZ_SW_1 → "F1_DMZ".
+// TPS·서버실이 아닌 스위치를 '위치 미상' 대신 구역으로 묶기 위함.
+function _hostnameZone(hostname) {
+  if (!hostname) return "";
+  var m = String(hostname).toUpperCase().match(/^[A-Z0-9]+_(.+?)_SW(?:ITCH)?[\d_-]*$/);
+  return m ? m[1].replace(/_+$/, "") : "";
+}
+
 // 장비(스위치/방화벽)의 랙뷰 그룹/랙 키 결정.
-// TPS 호스트네임 → 공장/건물/층. 아니면 서버실 랙(A09U27). 아니면 위치 텍스트. 없으면 미지정.
+// TPS 호스트네임 → 공장/건물/층. 아니면 서버실 랙(A09U27). 아니면 위치 텍스트.
+// 그 다음 hostname 구역(RC_4F/DETROIT 등). 없으면 미지정.
 function _deviceRackKeys(dev) {
   if (dev.tps_group) return { group: dev.tps_group, rack: dev.tps_num || "기타" };
   if (dev.room_rack) return { group: "서버실", rack: dev.room_rack + " 랙" };
   if (dev.location) return { group: dev.location, rack: "기타" };
+  var z = _hostnameZone(dev.hostname || dev.name);
+  if (z) return { group: z, rack: "기타" };
   return { group: "위치 미상(미지정)", rack: "기타" };
 }
 
@@ -620,8 +632,12 @@ function renderRackView(switches) {
     var rkeys = Object.keys(racks).sort();
     // 구역 내 스위치 id 목록(방화벽 제외) — 구역 전체 선택→'정보 수집(N)'용
     var gIds = [];
+    var zoneDown = false;   // 구역 전원다운 의심(백엔드 zone_outage 플래그)
     rkeys.forEach(function (t) {
-      racks[t].forEach(function (d) { if (d.k !== "fw") gIds.push(d.o.id); });
+      racks[t].forEach(function (d) {
+        if (d.k !== "fw") gIds.push(d.o.id);
+        if (d.o.zone_outage) zoneDown = true;
+      });
     });
     var allSel = gIds.length > 0 && gIds.every(function (id) { return _bulkSel[id]; });
     var selBtn = gIds.length
@@ -647,7 +663,11 @@ function renderRackView(switches) {
       return "<div class='rack'><div class='rack__label'>" + escHtml(t) + "</div>" +
         "<div class='rack__units'>" + units + "</div></div>";
     }).join("");
-    return "<div class='rack-group'><div class='rack-group__title'>📍 " + escHtml(g) + selBtn + "</div>" +
+    var titleCls = zoneDown ? " rack-group__title--outage" : "";
+    var outageBadge = zoneDown
+      ? " <span class='zone-outage-badge'>⚡ 구역 전원 다운 의심</span>" : "";
+    return "<div class='rack-group" + (zoneDown ? " rack-group--outage" : "") + "'>" +
+      "<div class='rack-group__title" + titleCls + "'>📍 " + escHtml(g) + outageBadge + selBtn + "</div>" +
       "<div class='rack-row'>" + racksHtml + "</div></div>";
   }).join("");
 
@@ -942,7 +962,9 @@ function swCardHTML(sw, withCheck) {
     "<span>" + escHtml(sw.ip) + "</span>" +
     (sw.hostname ? "<span>" + escHtml(sw.hostname) + "</span>" : "") +
     (sw.tps_location ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" : "") +
-    (sw.location ? "<span style='font-size:10px'>" + escHtml(sw.location) + "</span>" : "") +
+    (sw.location ? "<span style='font-size:10px'>" + escHtml(sw.location) + "</span>"
+      : (!sw.tps_location && _hostnameZone(sw.hostname || sw.name)
+         ? "<span style='font-size:10px;color:#64748b'>🗂 " + escHtml(_hostnameZone(sw.hostname || sw.name)) + "</span>" : "")) +
     (sw.note ? "<span style='font-size:10px;color:#9a3412'>📝 " + escHtml(sw.note) + "</span>" : "") +
     (sw.status === "failed" && sw.last_error
       ? "<span style='font-size:10px;color:#991b1b' title='" + escHtml(sw.last_error) + "'>⚠ " +
@@ -1317,14 +1339,42 @@ function loadFacility() {
   }).catch(function (e) { console.error("facility:", e); });
 }
 
+// ─── 재사용 진행바(수집/진단/스캔 공통) ─────────────────────────
+function renderProgressBar(el, st) {
+  if (!el) return;
+  if (!st || (!st.running && !st.message)) { el.innerHTML = ""; return; }
+  var total = st.total || 0, done = st.done || 0;
+  var pct = total ? Math.round(done / total * 100) : (st.running ? 0 : 100);
+  var barCls = st.running ? "" : " np-progress__bar--done";
+  el.innerHTML =
+    "<div class='np-progress'>" +
+      "<div class='np-progress__track'><div class='np-progress__bar" + barCls +
+        "' style='width:" + pct + "%'></div></div>" +
+      "<span class='np-progress__label'>" + (st.running ? "⏳ " : "✅ ") +
+        (total ? done + "/" + total + " (" + pct + "%)" : "") +
+        (st.message ? " · " + escHtml(st.message) : "") + "</span>" +
+    "</div>";
+}
+
+// 진행 상태 폴링: url을 1.5초마다 조회 → el에 진행바. running=false면 종료 후 onDone().
+function pollProgress(url, elId, onDone) {
+  var el = document.getElementById(elId);
+  var timer = setInterval(function () {
+    fetch(url).then(function (r) { return r.json(); }).then(function (st) {
+      renderProgressBar(el, st);
+      if (!st.running) { clearInterval(timer); if (typeof onDone === "function") onDone(st); }
+    }).catch(function () { clearInterval(timer); });
+  }, 1500);
+}
+
 function renderFacilityProgress(st) {
   var el = document.getElementById("fac-progress");
   if (!el) return;
-  if (!st || (!st.running && !st.message)) { el.textContent = ""; return; }
+  if (!st || (!st.running && !st.message)) { el.innerHTML = ""; return; }
   if (st.running) {
-    var pct = st.total ? Math.round(st.done / st.total * 100) : 0;
-    el.innerHTML = "<strong>수집 중</strong> — " + escHtml(st.subnet || "") + " · " +
-      st.done + "/" + st.total + " (" + pct + "%) · " + escHtml(st.message || "");
+    // 진행바 + 대역/메시지
+    renderProgressBar(el, {running: true, done: st.done, total: st.total,
+      message: (st.subnet ? st.subnet + " · " : "") + (st.message || "")});
   } else {
     var html = st.message ? "<span>" + escHtml(st.message) + "</span>" : "";
     // 완료 diff 배너 — 직전 스캔에서 새로 추가되거나 끊긴 설비를 한눈에(대상 대역 라벨 포함)
@@ -2009,6 +2059,9 @@ document.addEventListener("change", function (e) {
       .then(function (r) { return r.json(); })
       .then(function (s) {
         if (diagAllBtn) diagAllBtn.textContent = "진단 중 " + s.done + "/" + s.total;
+        renderProgressBar(document.getElementById("diag-progress"),
+          {running: s.running, done: s.done, total: s.total,
+           message: "벤더 교정 " + (s.corrected || 0) + "대"});
         if (s.running) return;                    // 계속 폴링
         clearInterval(_diagAllPoll); _diagAllPoll = null;
         if (diagAllBtn) { diagAllBtn.disabled = false; diagAllBtn.textContent = "전체 진단"; }
@@ -4725,11 +4778,35 @@ function renderServers() {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); })
       .then(function () {
-        alert("전체 수집을 시작했습니다. 잠시 후 목록에 반영됩니다.");
         // 비밀번호 입력란은 비워 화면 잔류 방지
         var pw = document.getElementById("server-common-pass"); if (pw) pw.value = "";
-        setTimeout(loadServers, 8000);
+        // 진행바 폴링 → 완료 시 목록 새로고침
+        pollProgress("/api/servers/collect-all/status", "server-progress", loadServers);
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
+  });
+
+  // 방화벽 전체 수집 — 진행바 폴링
+  var fwAllBtn = document.getElementById("btn-firewall-collect-all");
+  if (fwAllBtn) fwAllBtn.addEventListener("click", function () {
+    if (!confirm("등록된 전 방화벽을 저장된 계정으로 일괄 수집합니다.\n계속할까요?")) return;
+    fetch("/api/firewalls/collect-all", { method: "POST" })
+      .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+      .then(function (res) {
+        if (!res.ok) { alert((res.b && res.b.error) || "일괄 수집 시작 실패"); return; }
+        pollProgress("/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls);
+      }).catch(function (e) { console.error(e); alert("수집 오류"); });
+  });
+
+  // 설비 전체 대역 수집 — 시작 후 loadFacility가 fac-progress 폴링
+  var facScanAll = document.getElementById("btn-fac-scan-all");
+  if (facScanAll) facScanAll.addEventListener("click", function () {
+    if (!confirm("기억된 모든 대역을 순차로 일괄 스캔합니다(동시 1개 대역만).\n계속할까요?")) return;
+    fetch("/api/facility/scan-all", { method: "POST" })
+      .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+      .then(function (res) {
+        if (!res.ok) { alert((res.b && res.b.error) || "전체 스캔 시작 실패"); return; }
+        if (typeof loadFacility === "function") loadFacility();
+      }).catch(function (e) { console.error(e); alert("스캔 오류"); });
   });
 
   // 수집(계정 입력) / 삭제 위임
@@ -4945,8 +5022,27 @@ function pollState() {
       }
       document.getElementById("last-updated").textContent = "갱신: " + new Date().toLocaleTimeString("ko-KR");
       loadAlerts(false);  // 알람 배지 갱신(준실시간)
+      _notifyZoneOutages(data.zone_outages || []);
     })
     .catch(function(e) { console.error("poll error:", e); });
+}
+
+// TPS 구역 전원다운 감지 팝업 — 새로 발생한 구역만 1회 알림(반복 방지)
+var _zoneOutageSeen = {};
+function _notifyZoneOutages(list) {
+  var cur = {};
+  var fresh = [];
+  (list || []).forEach(function (z) {
+    cur[z.group] = true;
+    if (!_zoneOutageSeen[z.group]) fresh.push(z);
+  });
+  _zoneOutageSeen = cur;   // 복구된 구역은 목록에서 빠져 다음 발생 시 재알림
+  if (fresh.length) {
+    var msg = "⚡ 구역 전원 다운 의심\n\n" + fresh.map(function (z) {
+      return "· " + z.group + " — 스위치 " + z.total + "대 전부 도달불가";
+    }).join("\n") + "\n\n해당 구역의 정전/전원을 확인하세요.";
+    try { alert(msg); } catch (e) {}
+  }
 }
 
 // ─── M4: 진단 화면 표시 ──────────────────────────────────────────

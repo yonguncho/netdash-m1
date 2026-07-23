@@ -371,6 +371,21 @@ def collect_server(db_path, server_id, username=None, password=None):
     return {"status": fields["status"], **fields}
 
 
+_progress = {"running": False, "done": 0, "total": 0, "message": ""}
+_prog_lock = threading.Lock()
+
+
+def get_progress():
+    """서버 전체 수집 진행 상태 스냅샷 {running, done, total, message}."""
+    with _prog_lock:
+        return dict(_progress)
+
+
+def _set_progress(**kw):
+    with _prog_lock:
+        _progress.update(kw)
+
+
 def collect_all_servers(db_path, max_workers=8, common_user=None,
                         common_pass=None, persist=False):
     """등록된 전 서버 일괄 (재)수집(스레드풀).
@@ -381,6 +396,7 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
     import concurrent.futures as _cf
     servers = db.list_servers(db_path)
     done = failed = 0
+    _set_progress(running=True, done=0, total=len(servers), message="서버 수집 중")
     common = bool(common_user and common_pass)
     if common and persist:
         blob = credentials.encrypt_credential(common_user, common_pass)
@@ -403,11 +419,17 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
                     username, password = dec.split("|", 1)
         return collect_server(db_path, sv["id"], username, password)
 
-    with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for res in ex.map(_one, servers):
-            if res.get("status") == "done":
-                done += 1
-            else:
-                failed += 1
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            for res in ex.map(_one, servers):
+                if res.get("status") == "done":
+                    done += 1
+                else:
+                    failed += 1
+                _set_progress(done=done + failed,
+                              message="서버 수집 중 (%d/%d)" % (done + failed, len(servers)))
+    finally:
+        _set_progress(running=False,
+                      message="완료(성공 %d · 실패 %d)" % (done, failed))
     utils.log_event("info", "server_collect_all_done", done=done, failed=failed)
     return {"done": done, "failed": failed, "total": len(servers)}

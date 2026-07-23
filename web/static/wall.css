@@ -65,6 +65,12 @@ body {
 .pcard__name { font-size: 20px; font-weight: 700; }
 .pcard__ip { color: #94a3b8; margin-top: 4px; font-size: 14px; }
 .pcard__why { margin-top: 8px; color: #f87171; font-weight: 700; font-size: 15px; }
+.pcard__recollect {
+  margin-top: 8px; font-size: 13px; padding: 3px 10px; cursor: pointer;
+  background: #1e293b; color: #e2e8f0; border: 1px solid #475569; border-radius: 6px;
+}
+.pcard__recollect:hover { background: #334155; }
+.pcard__recollect:disabled { opacity: .6; cursor: default; }
 
 .wall-ticker {
   border-top: 1px solid #1e293b; padding: 10px 32px;

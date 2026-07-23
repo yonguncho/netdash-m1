@@ -143,6 +143,64 @@ def _run_diagnose_all(db_path, source_ip):
               corrected=_diag_all["corrected"])
 
 
+# ─── 방화벽 전체 수집 — 백그라운드 스레드 + 상태 폴링 ───────────────
+_fw_all_lock = threading.Lock()
+_fw_all = {"running": False, "total": 0, "done": 0, "ok": 0, "message": ""}
+
+
+def _run_collect_all_firewalls(db_path, source_ip):
+    """등록된 전 방화벽을 저장된 자격증명으로 순차 수집. 진행은 _fw_all에 누적."""
+    import json as _json
+    try:
+        firewalls = db.list_firewalls(db_path)
+    except Exception as e:
+        with _fw_all_lock:
+            _fw_all.update(running=False, message=collector._sanitize_error_msg(str(e)))
+        return
+    ok = 0
+    for i, fw in enumerate(firewalls):
+        fid = fw["id"]
+        token = username = password = ""
+        try:
+            blob = db.get_firewall_credential(db_path, fid)
+            if blob:
+                dec = credentials.decrypt_text(blob)
+                if dec:
+                    saved = _json.loads(dec)
+                    token = saved.get("token", "")
+                    username = saved.get("username", "")
+                    password = saved.get("password", "")
+        except Exception:
+            pass
+        db.set_firewall_status(db_path, fid, "collecting")
+        try:
+            result = firewall_mod.collect_firewall(
+                fw["vendor"], fw["host"], fw.get("port"),
+                token=token, username=username, password=password,
+                verify_ssl=False, source_ip=source_ip)
+            db.save_firewall_interfaces(db_path, fid, result["interfaces"])
+            db.save_firewall_arp(db_path, fid, result["arp"])
+            if result.get("ha"):
+                try:
+                    db.set_firewall_ha_info(db_path, fid, _json.dumps(result["ha"]))
+                except Exception:
+                    pass
+            db.set_firewall_status(db_path, fid, "done")
+            ok += 1
+        except Exception as e:
+            db.set_firewall_status(db_path, fid, "failed")
+            log_event("warning", "firewall_collect_all_item_error",
+                      firewall_id=fid, error=collector._sanitize_error_msg(str(e)))
+        finally:
+            token = username = password = None
+            with _fw_all_lock:
+                _fw_all.update(done=i + 1, ok=ok,
+                               message="방화벽 수집 중 (%d/%d)" % (i + 1, len(firewalls)))
+    with _fw_all_lock:
+        _fw_all.update(running=False, message="완료(성공 %d/%d)" % (ok, len(firewalls)))
+    log_event("info", "firewall_collect_all_done", total=len(firewalls), ok=ok)
+
+
 def validate_credential(value, max_length=256):
     """CRITICAL FIX (CWE-20): Validate credential string length and printable ASCII only.
 
@@ -635,6 +693,31 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         sw["reachable"] = reach[sw["id"]]
             except Exception:
                 pass
+
+            # TPS 구역 전원다운 의심: 한 구역(tps_group)의 스위치가 2대 이상이고
+            # 전부 도달불가면 정전/전원다운으로 본다(개별 장애와 구분해 즉시 식별).
+            zone_outages = []
+            try:
+                _zg = {}
+                for sw in switches:
+                    g = sw.get("tps_group")
+                    if not g:
+                        continue
+                    z = _zg.setdefault(g, {"total": 0, "down": 0, "sample": sw.get("tps_num")})
+                    z["total"] += 1
+                    if sw.get("reachable") is False:
+                        z["down"] += 1
+                _outage_groups = set()
+                for g, z in _zg.items():
+                    if z["total"] >= 2 and z["down"] == z["total"]:
+                        zone_outages.append({"group": g, "total": z["total"], "down": z["down"]})
+                        _outage_groups.add(g)
+                # 해당 구역 스위치에 플래그(랙뷰 빨간 점등용)
+                for sw in switches:
+                    if sw.get("tps_group") in _outage_groups:
+                        sw["zone_outage"] = True
+            except Exception:
+                zone_outages = []
             # 이웃 수집 방식(cdp/lldp/disabled) 주입 — 어느 장비가 추론인지 표시
             try:
                 for sw in switches:
@@ -651,6 +734,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "switches": switches,
                 "snapshots": snapshots,
                 "demo": config.app.get("demo_mode", False),
+                "zone_outages": zone_outages,   # TPS 구역 전원다운 의심 목록
                 # 승격되면 실시간으로 False가 되어 UI 배너가 해제된다
                 "readonly": bool(app.config.get("IS_READONLY")),
                 "primary_host": app.config.get("READONLY_PRIMARY"),
@@ -1355,6 +1439,27 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             fac = db.get_facility_hosts(db_path)
             fac_off = [h for h in fac if not h.get("online")]
 
+            # TPS 구역 전원다운 의심: 한 구역의 스위치가 2대 이상이고 전부 도달불가면 정전 의심
+            zone_out = []
+            try:
+                from core import tps_location as _tpsloc
+                _zg = {}
+                for s in switches:
+                    info = _tpsloc.parse(s.get("hostname"))
+                    if not info:
+                        continue
+                    g = "%d공장 %s(%s) %d층" % (info["phase"], info["building_name"],
+                                                info["building_code"], info["floor"])
+                    z = _zg.setdefault(g, {"total": 0, "down": 0})
+                    z["total"] += 1
+                    if reach.get(s["id"]) is False:
+                        z["down"] += 1
+                zone_out = [{"group": g, "total": z["total"], "down": z["down"]}
+                            for g, z in _zg.items()
+                            if z["total"] >= 2 and z["down"] == z["total"]]
+            except Exception:
+                zone_out = []
+
             # 대역별 게이트웨이(수집에 쓴 TPS 스위치) 이름 — '위치 미확인'을 조치 가능하게 안내
             _gw_by_subnet = {}
             try:
@@ -1420,6 +1525,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
             # 카테고리별 정돈된 문제 목록(관제 화면 섹션 렌더용)
             categories = [
+                {"key": "zone", "title": "⚡ 구역 전원 다운(의심)", "severity": "bad",
+                 "items": [{"name": z["group"], "ip": "",
+                            "detail": "구역 스위치 %d대 전부 도달불가 — 전원/정전 의심"
+                                      % z["total"]} for z in zone_out]},
                 {"key": "unreach", "title": "도달 불가", "severity": "bad",
                  "items": [{"name": s.get("name"), "ip": s.get("ip"),
                             "detail": "TCP-22 응답 없음"} for s in unreach[:30]]},
@@ -1432,6 +1541,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                             "detail": _alert_detail(s)} for s in alerts_sw[:30]]},
                 {"key": "facility", "title": "설비 연결 실패", "severity": "warn",
                  "items": [{"name": h.get("ip"), "ip": h.get("mac") or "",
+                            "fip": h.get("ip"), "subnet": h.get("subnet") or "",
+                            "recollect": True,
                             "detail": _facility_detail(h)}
                            for h in fac_off[:30]]},
             ]
@@ -2034,6 +2145,70 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify({"ok": True, "subnet": subnet})
         except Exception as e:
             log_event("error", "facility_collect_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    def _facility_start_subnet(subnet):
+        """대역을 그 대역의 기억된 게이트웨이 스위치·저장 계정으로 재수집 시작.
+        반환: (ok, http_status, payload). 관제 재수집·전체 스캔 공용."""
+        band_map = facility_mod.get_band_map(db_path)
+        sid = band_map.get(subnet)
+        if not sid:
+            return False, 400, {"error": "이 대역의 게이트웨이 스위치가 기억되지 않았습니다. "
+                                          "설비 현황에서 한 번 '대역 수집'을 실행하세요."}
+        blob = db.get_switch_credential(db_path, sid)
+        username = password = ""
+        if blob:
+            dec = credentials.decrypt_credential(blob)
+            if dec and "|" in dec:
+                username, password = dec.split("|", 1)
+        if not (username and password):
+            cred = pcprofile.get_credential(db_path)
+            if cred:
+                username, password = cred
+        if not (username and password):
+            return False, 400, {"error": "게이트웨이 스위치의 저장된 계정이 없습니다."}
+        src = pcprofile.get_source_ip(db_path)
+        started = facility_mod.start_collect_band(db_path, sid, subnet, username, password, src)
+        if not started:
+            return False, 409, {"error": "이미 수집 중입니다"}
+        return True, 202, {"ok": True, "subnet": subnet}
+
+    @app.route("/api/facility/recollect", methods=["POST"])
+    @rate_limit("facility_recollect", max_requests=20, window_seconds=60)
+    def facility_recollect():
+        """관제/설비에서 특정 설비(IP)의 대역을 연결 게이트웨이에서 재수집."""
+        try:
+            data = request.get_json(silent=True) or {}
+            ip = (data.get("ip") or "").strip()
+            subnet = (data.get("subnet") or "").strip()
+            if not subnet and ip:
+                for h in db.get_facility_hosts(db_path):
+                    if h.get("ip") == ip:
+                        subnet = h.get("subnet") or ""
+                        break
+            if not subnet:
+                return jsonify({"error": "대역을 찾을 수 없습니다(IP 미등록)"}), 400
+            ok, status, payload = _facility_start_subnet(subnet)
+            return jsonify(payload), status
+        except Exception as e:
+            log_event("error", "facility_recollect_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/facility/scan-all", methods=["POST"])
+    @rate_limit("facility_scan_all", max_requests=4, window_seconds=60)
+    def facility_scan_all():
+        """기억된 전 대역을 순차 스캔(백그라운드) — 동시 1개 대역만."""
+        try:
+            if facility_mod.get_status().get("running"):
+                return jsonify({"error": "이미 수집 중입니다"}), 409
+            bands = facility_mod.get_band_map(db_path)
+            if not bands:
+                return jsonify({"error": "기억된 대역이 없습니다. 설비 현황에서 대역 수집을 먼저 실행하세요."}), 400
+            threading.Thread(target=facility_mod.run_auto_scan,
+                             args=(db_path,), daemon=True).start()
+            return jsonify({"ok": True, "bands": len(bands)}), 202
+        except Exception as e:
+            log_event("error", "facility_scan_all_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/vlans", methods=["GET"])
@@ -2653,6 +2828,33 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         finally:
             token = username = password = None
             _collecting_firewalls.discard(fid)
+
+    @app.route("/api/firewalls/collect-all", methods=["POST"])
+    @rate_limit("collect_all_firewalls", max_requests=6, window_seconds=60)
+    def collect_all_firewalls_endpoint():
+        """등록된 전 방화벽을 저장된 자격증명으로 일괄 수집(백그라운드)."""
+        with _fw_all_lock:
+            if _fw_all["running"]:
+                return jsonify({"error": "이미 수집 중입니다", "status": dict(_fw_all)}), 409
+            try:
+                total = len(db.list_firewalls(db_path))
+            except Exception:
+                total = 0
+            _fw_all.update(running=True, total=total, done=0, ok=0, message="시작 중")
+        src = pcprofile.get_source_ip(db_path)
+        threading.Thread(target=_run_collect_all_firewalls,
+                         args=(db_path, src), daemon=True).start()
+        return jsonify({"ok": True, "total": total}), 202
+
+    @app.route("/api/firewalls/collect-all/status", methods=["GET"])
+    def collect_all_firewalls_status():
+        with _fw_all_lock:
+            return jsonify(dict(_fw_all))
+
+    @app.route("/api/servers/collect-all/status", methods=["GET"])
+    def collect_all_servers_status():
+        from core import server_collector
+        return jsonify(server_collector.get_progress())
 
     @app.route("/api/switches/<int:switch_id>/events", methods=["GET"])
     def get_switch_events(switch_id):

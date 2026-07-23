@@ -88,9 +88,9 @@ def test_wall_data_api(client):
     for key in ("total_switches", "unreachable", "failed", "problems", "recent_events",
                 "unacked_alerts", "categories"):
         assert key in b
-    # 카테고리 4종(도달 불가/수집 실패/경보/설비) — 관제 화면 섹션 렌더용
+    # 카테고리 5종(구역 전원다운/도달 불가/수집 실패/경보/설비) — 관제 화면 섹션 렌더용
     keys = [c["key"] for c in b["categories"]]
-    assert keys == ["unreach", "failed", "alert", "facility"]
+    assert keys == ["zone", "unreach", "failed", "alert", "facility"]
 
 
 def test_wall_alert_category_includes_ports(client):
