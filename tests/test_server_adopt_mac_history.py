@@ -46,12 +46,14 @@ def test_wall_facility_shows_past_location(tmp_path, monkeypatch):
 # ── 서버 편입 ───────────────────────────────────────────────────
 def test_adopt_server_switches(temp_db):
     sid = db.save_switch(temp_db, "SRV-01", "10.5.5.5", "unknown")
-    db.update_switch(temp_db, sid, device_type="Server")
+    db.update_switch(temp_db, sid, device_type="Server", hostname="srv01.local")
     n = db.adopt_server_switches(temp_db)
     assert n == 1
     # 서버 테이블에 나타나고, 스위치 목록에서는 사라짐
-    servers = {s["ip"] for s in db.list_servers(temp_db)}
+    servers = {s["ip"]: s for s in db.list_servers(temp_db)}
     assert "10.5.5.5" in servers
+    # 스위치가 알던 hostname을 서버로 승계(편입 시 유실 방지)
+    assert servers["10.5.5.5"]["hostname"] == "srv01.local"
     sw_ips = {s["ip"] for s in db.get_switches(temp_db)}
     assert "10.5.5.5" not in sw_ips
     # 멱등 — 다시 호출해도 0

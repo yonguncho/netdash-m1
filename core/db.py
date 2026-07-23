@@ -2476,8 +2476,14 @@ def adopt_server_switches(db_path):
         if not ip:
             continue
         try:
-            save_server(db_path, sw.get("name") or ip, ip,
-                        os_type="auto", location=sw.get("location") or None)
+            sid = save_server(db_path, sw.get("name") or ip, ip,
+                              os_type="auto", location=sw.get("location") or None)
+            # 스위치가 알던 hostname을 서버로 승계(편입 시 유실 방지)
+            if sw.get("hostname"):
+                try:
+                    update_server(db_path, sid, hostname=sw.get("hostname"))
+                except Exception:
+                    pass
             delete_switch(db_path, sw["id"])
             adopted += 1
             log_event("info", "server_switch_adopted", ip=ip, name=sw.get("name") or ip)

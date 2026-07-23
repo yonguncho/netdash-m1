@@ -148,3 +148,24 @@ def test_zone_outage_ui_present():
     assert "_notifyZoneOutages" in js and "zone_outage" in js
     css = (ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert "rack-group--outage" in css and "zone-outage-badge" in css
+
+
+# ── 행별/서버실 수집 + 진행바 자동숨김(소스 가드) ────────────────
+def test_switch_row_collect_button():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "data-action='collect-switch'" in js
+    assert 'case "collect-switch"' in js
+
+
+def test_serverroom_cards_collectable():
+    js = APP_JS.read_text(encoding="utf-8")
+    # 방화벽/서버 카드에 id 부여 + 서버실 그리드에서 클릭 수집 배선
+    assert "id='fwcard-" in js and "id='srvcard-" in js
+    assert "_openServerCollect" in js
+    assert "collectFirewallDirect(f.id)" in js
+
+
+def test_progress_autohide_present():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "_autoHideProgress" in js
+    assert "_hideTimer" in js

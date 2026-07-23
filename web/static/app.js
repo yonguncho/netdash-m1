@@ -68,6 +68,7 @@ document.addEventListener("click", function (e) {
   var nid = id != null ? parseInt(id, 10) : null;
   switch (action) {
     case "detail-switch": e.stopPropagation(); openDetailPanel(obj); break;
+    case "collect-switch": e.stopPropagation(); openCredentialModal(obj); break;
     case "edit-switch": editSwitch(obj); break;
     case "diagnose-switch": diagnoseSwitch(nid); break;
     case "terminal-switch": openTerminal(nid); break;
@@ -730,7 +731,7 @@ function _fwCardHTML(f) {
   var locLine = f.tps_location ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>📍 " + escHtml(f.tps_location) + "</span>"
     : f.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
     : f.location ? "<span style='font-size:10px'>" + escHtml(f.location) + "</span>" : "";
-  return "<div class='sw-card sw-card--" + sc + "'>" + reachBadge +
+  return "<div id='fwcard-" + f.id + "' class='sw-card sw-card--" + sc + "' title='클릭하면 이 방화벽 재수집'>" + reachBadge +
     "<div class='sw-card__icon'><div class='sw-icon'><div class='sw-icon__ports'>" +
     renderMiniPorts({ status: f.status }) +
     "</div></div></div>" +
@@ -751,7 +752,7 @@ function _fwCardHTML(f) {
 function _srvCardHTML(s) {
   var sc = s.reachable === false ? "critical" : (s.status === "failed" ? "critical" : "done");
   var loc = s.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(s.room_label) + "</span>" : "";
-  return "<div class='sw-card sw-card--" + sc + "'>" +
+  return "<div id='srvcard-" + s.id + "' class='sw-card sw-card--" + sc + "' title='클릭하면 이 서버 재수집'>" +
     "<div class='sw-card__icon'><div class='sw-icon'>🖥</div></div>" +
     "<div class='sw-card__name'>🖥 " + escHtml(s.name) + "</div>" +
     "<div class='sw-card__meta'><span>" + escHtml(s.ip) + "</span>" + loc +
@@ -786,7 +787,25 @@ function renderRoomGrid(switches, firewalls, servers) {
     if (!card) return;
     card.addEventListener("click", function (e) {
       if (e.target.closest("[data-action]")) return;
-      openCredentialModal(sw);
+      openCredentialModal(sw);   // 스위치 재수집(계정 입력)
+    });
+  });
+  // 서버실 방화벽 카드 클릭 → 재수집(저장 계정 있으면 바로, 없으면 모달)
+  firewalls.forEach(function (f) {
+    var card = grid.querySelector('[id="fwcard-' + f.id + '"]');
+    if (!card) return;
+    card.addEventListener("click", function (e) {
+      if (e.target.closest("[data-action]")) return;
+      if (f.has_credential) collectFirewallDirect(f.id); else openFwCollect(f);
+    });
+  });
+  // 서버실 서버 카드 클릭 → 재수집(계정 입력 모달)
+  servers.forEach(function (s) {
+    var card = grid.querySelector('[id="srvcard-' + s.id + '"]');
+    if (!card) return;
+    card.addEventListener("click", function (e) {
+      if (e.target.closest("[data-action]")) return;
+      _openServerCollect(s.id);
     });
   });
 }
@@ -1106,6 +1125,8 @@ function renderSwitchTable(switches) {
       (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "<span title='정상 — 포트 flapping/loop 이벤트 없음'>-</span>") +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +
+      "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
+      "title='계정을 입력해 이 스위치를 재수집' data-action='collect-switch' data-payload='" + payloadAttr((sw)) + "'>수집</button> " +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
       "data-action='edit-switch' data-payload='" + payloadAttr((sw)) + "'>수정</button> " +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
@@ -1340,8 +1361,15 @@ function loadFacility() {
 }
 
 // ─── 재사용 진행바(수집/진단/스캔 공통) ─────────────────────────
+// 완료(running=false) 후 일정 시간 뒤 자동으로 사라지게 함
+function _autoHideProgress(el, ms) {
+  if (!el) return;
+  if (el._hideTimer) clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(function () { el.innerHTML = ""; el._hideTimer = null; }, ms || 6000);
+}
 function renderProgressBar(el, st) {
   if (!el) return;
+  if (el._hideTimer) { clearTimeout(el._hideTimer); el._hideTimer = null; }  // 새 진행 시 숨김 취소
   if (!st || (!st.running && !st.message)) { el.innerHTML = ""; return; }
   var total = st.total || 0, done = st.done || 0;
   var pct = total ? Math.round(done / total * 100) : (st.running ? 0 : 100);
@@ -1362,7 +1390,11 @@ function pollProgress(url, elId, onDone) {
   var timer = setInterval(function () {
     fetch(url).then(function (r) { return r.json(); }).then(function (st) {
       renderProgressBar(el, st);
-      if (!st.running) { clearInterval(timer); if (typeof onDone === "function") onDone(st); }
+      if (!st.running) {
+        clearInterval(timer);
+        if (typeof onDone === "function") onDone(st);
+        _autoHideProgress(el);   // 100% 완료 후 몇 초 뒤 자동 숨김
+      }
     }).catch(function () { clearInterval(timer); });
   }, 1500);
 }
@@ -2064,6 +2096,7 @@ document.addEventListener("change", function (e) {
            message: "벤더 교정 " + (s.corrected || 0) + "대"});
         if (s.running) return;                    // 계속 폴링
         clearInterval(_diagAllPoll); _diagAllPoll = null;
+        _autoHideProgress(document.getElementById("diag-progress"));
         if (diagAllBtn) { diagAllBtn.disabled = false; diagAllBtn.textContent = "전체 진단"; }
         var errs = (s.results || []).filter(function (x) { return x.error; });
         var msg = "일괄 진단 완료: " + s.total + "대 중 벤더 교정 " + s.corrected + "대.";
@@ -4675,6 +4708,18 @@ function loadCreds() {
 var _srvCollectId = null;
 var _srvEditId = null;   // 서버 수정 대상 id(null=신규 등록)
 
+// 서버 수집 모달 오픈(서버 현황 테이블 + 서버실 카드 공용)
+function _openServerCollect(id) {
+  _srvCollectId = id;
+  var s = _servers.find(function (x) { return x.id === id; });
+  var t = document.getElementById("srv-collect-title");
+  if (t) t.textContent = "서버 수집 — " + (s ? s.name : id);
+  var u = document.getElementById("srv-username"); if (u) u.value = "";
+  var p = document.getElementById("srv-password"); if (p) p.value = "";
+  var pe = document.getElementById("srv-persist"); if (pe) pe.checked = false;
+  openModal("modal-server-collect");
+}
+
 function loadServers() {
   return fetch("/api/servers").then(function (r) { return r.json(); }).then(function (d) {
     _servers = d.servers || [];
@@ -4816,13 +4861,7 @@ function renderServers() {
     var id = parseInt(t.getAttribute("data-id"), 10);
     var action = t.getAttribute("data-action");
     if (action === "collect-server") {
-      _srvCollectId = id;
-      var s = _servers.find(function (x) { return x.id === id; });
-      document.getElementById("srv-collect-title").textContent = "서버 수집 — " + (s ? s.name : id);
-      document.getElementById("srv-username").value = "";
-      document.getElementById("srv-password").value = "";
-      document.getElementById("srv-persist").checked = false;
-      openModal("modal-server-collect");
+      _openServerCollect(id);
     } else if (action === "edit-server") {
       var sv = _servers.find(function (x) { return x.id === id; });
       if (!sv) return;
