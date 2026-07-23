@@ -42,9 +42,21 @@ function refresh() {
         (d.total_switches || 0) + "대 감시 중</small></div>";
     } else {
       host.innerHTML = cats.map(function (c) {
+        var count = (c.total != null) ? c.total : c.items.length;
+        // 대역별 요약 칩(설비 실패 다수일 때 한눈에)
+        var summaryHtml = (c.summary && c.summary.length)
+          ? "<div class='wall-cat__summary'>" + c.summary.map(function (s) {
+              return "<span class='wall-sumchip'>" + esc(s.subnet) + " <b>" + s.count + "</b></span>";
+            }).join("") + "</div>"
+          : "";
+        var moreHtml = (c.total != null && c.total > c.items.length)
+          ? "<div class='wall-cat__more'>외 " + (c.total - c.items.length) +
+            "건 — 설비 현황에서 전체 확인</div>"
+          : "";
         return "<div class='wall-cat wall-cat--" + esc(c.severity || "warn") + "'>" +
           "<div class='wall-cat__title'>" + esc(c.title) +
-          " <span class='wall-cat__count'>" + c.items.length + "</span></div>" +
+          " <span class='wall-cat__count'>" + count + "</span></div>" +
+          summaryHtml +
           "<div class='wall-cat__grid'>" +
           c.items.map(function (p) {
             var rc = p.recollect
@@ -56,7 +68,7 @@ function refresh() {
               (p.detail ? "<div class='pcard__why'>" + esc(p.detail) + "</div>" : "") +
               rc + "</div>";
           }).join("") +
-          "</div></div>";
+          "</div>" + moreHtml + "</div>";
       }).join("");
     }
 

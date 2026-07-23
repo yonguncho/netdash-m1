@@ -408,53 +408,79 @@ def _restrict_db_permissions(db_path):
             utils.log_event("warning", "db_chmod_failed", path=db_path_str, error=str(e))
 
 
+def _open_conn(db_path):
+    """SQLite 연결 + PRAGMA 설정을 열어 반환. 실패 시 예외(호출부에서 재시도)."""
+    conn = None
+    try:
+        # 부모 디렉터리 확보 — 네트워크 순단으로 폴더가 잠깐 사라졌다 복구되는 경우
+        # 'unable to open database file'이 나므로 열기 전에 보장한다.
+        try:
+            _d = os.path.dirname(str(db_path))
+            if _d and not os.path.isdir(_d):
+                os.makedirs(_d, exist_ok=True)
+        except Exception:
+            pass
+        # timeout=30: 락 경합 시 즉시 'database is locked'로 터지지 않고 최대 30초 대기.
+        conn = sqlite3.connect(str(db_path), timeout=30)
+        _restrict_db_permissions(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        # 저널 모드: 로컬=WAL, 네트워크 경로(UNC/원격 드라이브)=DELETE(SMB에서 -shm 불가).
+        if READONLY:
+            conn.execute("PRAGMA query_only=ON")
+        elif utils.is_network_path(db_path):
+            conn.execute("PRAGMA journal_mode=DELETE")
+        else:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+    except Exception:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise
+
+
 @contextmanager
 def get_db(db_path):
     conn = None
     try:
-        # timeout=30: 락 경합 시 즉시 'database is locked'로 터지지 않고 최대 30초 대기.
-        # (기본 5초 — 수집 워커·설비 수집·도달성 체크 동시 쓰기 환경에서 부족했음)
-        conn = sqlite3.connect(str(db_path), timeout=30)
-        # HARDENING (CWE-276): Restrict database file permissions to owner-only
-        # Prevents unauthorized access to sensitive network topology data
-        _restrict_db_permissions(db_path)
-        conn.row_factory = sqlite3.Row
-        # Enable FOREIGN KEY constraints: SQLite defaults to OFF, explicit ON required (data integrity fix)
-        conn.execute("PRAGMA foreign_keys = ON")
-        # 저널 모드 선택:
-        # - 로컬: WAL — 읽기/쓰기가 서로 차단하지 않아 락 경합 대폭 감소.
-        # - 네트워크 경로(UNC/원격 드라이브): DELETE(롤백 저널) — WAL은 -shm
-        #   공유메모리 매핑이 필요해 SMB 너머에서 동작하지 않는다(SQLite 공식 제약).
-        #   WAL 모드는 DB 파일에 영구 저장되므로, 공유폴더 호스트 PC(로컬 접근)가
-        #   WAL로 만든 DB를 다른 PC(원격 접근)가 열지 못해 db_error가 나던 원인.
-        #   DELETE 전환은 파일에 영구 반영돼 이후 모든 PC에서 열린다.
-        #   (단일 서버는 instance_lock이 보장 — WAL의 동시성 이점이 필수는 아님)
-        try:
-            if READONLY:
-                # 읽기 전용 인스턴스: 저널 모드를 건드리지 않고(주 서버 소유)
-                # 연결 자체를 쓰기 불가로 잠근다(안전벨트 — 엔드포인트 차단과 이중).
-                conn.execute("PRAGMA query_only=ON")
-            elif utils.is_network_path(db_path):
-                mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
-                if str(mode).lower() != "delete":
-                    utils.log_event("warning", "db_journal_mode_unexpected",
-                                    path=str(db_path), mode=str(mode))
-            else:
-                conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=30000")
-            conn.execute("PRAGMA synchronous=NORMAL")
-        except Exception:
-            pass
+        # 일시적 'unable to open database file'/locked(공유폴더 순단·AV 잠금 등)에
+        # 대비해 짧은 backoff로 재시도. 진짜 오류(경로·권한 영구 문제)면 재시도 후 raise.
+        import time as _t
+        last = None
+        for _i in range(4):
+            try:
+                conn = _open_conn(db_path)
+                break
+            except sqlite3.OperationalError as e:
+                last = e
+                _m = str(e).lower()
+                if _i < 3 and ("unable to open" in _m or "locked" in _m or "busy" in _m):
+                    _t.sleep(0.25 * (_i + 1))
+                    continue
+                raise
+        if conn is None and last is not None:
+            raise last
         yield conn
         conn.commit()
     except Exception as e:
         if conn:
-            conn.rollback()
-        utils.log_event("error", "db_error", error=str(e))
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        utils.log_event("error", "db_error", error=str(e), path=str(db_path))
         raise
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def init_schema(db_path):

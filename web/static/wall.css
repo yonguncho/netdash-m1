@@ -50,9 +50,24 @@ body {
   font-size: 14px; font-weight: 700; color: #e2e8f0;
   background: #1e293b; border-radius: 10px; padding: 1px 10px;
 }
-.wall-cat__grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.wall-cat__grid {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  max-height: 42vh; overflow-y: auto;   /* 실패가 많아도 레이아웃을 밀지 않고 스크롤 */
+}
 .wall-cat--warn .pcard { border-color: #f59e0b; background: #1a1607; }
 .wall-cat--warn .pcard__why { color: #fbbf24; }
+/* 대역별 요약 칩(설비 실패 다수일 때 한눈에) */
+.wall-cat__summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 12px; }
+.wall-sumchip {
+  background: #1e293b; border: 1px solid #475569; border-radius: 99px;
+  padding: 5px 14px; font-size: 17px; color: #e2e8f0;
+}
+.wall-sumchip b { color: #fbbf24; margin-left: 4px; }
+.wall-cat__more { margin-top: 10px; color: #94a3b8; font-size: 14px; }
+/* 설비 카드는 다수일 때 더 컴팩트하게 */
+.wall-cat .pcard { min-width: 190px; padding: 12px 14px; }
+.wall-cat .pcard__name { font-size: 17px; }
+.wall-cat .pcard__why { font-size: 13px; margin-top: 6px; }
 .wall-ok {
   width: 100%; text-align: center; margin-top: 8vh;
   font-size: 44px; color: #22c55e; font-weight: 700;

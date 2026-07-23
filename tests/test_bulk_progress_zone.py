@@ -169,3 +169,53 @@ def test_progress_autohide_present():
     js = APP_JS.read_text(encoding="utf-8")
     assert "_autoHideProgress" in js
     assert "_hideTimer" in js
+
+
+# ── DB 회복력(재시도) ───────────────────────────────────────────
+def test_get_db_retries_transient_open_error(temp_db, monkeypatch):
+    import sqlite3
+    real = db._open_conn
+    calls = {"n": 0}
+
+    def flaky(p):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("unable to open database file")
+        return real(p)
+
+    monkeypatch.setattr(db, "_open_conn", flaky)
+    with db.get_db(temp_db) as conn:      # 첫 시도 실패 → 재시도 성공
+        conn.execute("SELECT 1")
+    assert calls["n"] >= 2
+
+
+# ── 관제 설비 실패 대역별 요약 ──────────────────────────────────
+def test_wall_facility_subnet_summary(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    import app as app_module
+    application = app_module.create_app(demo_mode=True)
+    from core import collector
+    collector.shutdown_workers()
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+    hosts = []
+    for i in range(5):
+        hosts.append({"subnet": "10.1.0.0/24", "ip": "10.1.0.%d" % (i + 1),
+                      "mac": "AA:00:00:00:01:%02d" % i, "switch_name": "", "port": "", "online": 0})
+    for i in range(3):
+        hosts.append({"subnet": "10.2.0.0/24", "ip": "10.2.0.%d" % (i + 1),
+                      "mac": "BB:00:00:00:02:%02d" % i, "switch_name": "", "port": "", "online": 0})
+    db.save_facility_hosts(dbp, hosts)
+    cats = application.test_client().get("/api/wall").get_json()["categories"]
+    fac = [c for c in cats if c["key"] == "facility"][0]
+    assert fac["total"] == 8
+    summ = {s["subnet"]: s["count"] for s in fac["summary"]}
+    assert summ["10.1.0.0/24"] == 5 and summ["10.2.0.0/24"] == 3
+    assert fac["summary"][0]["count"] >= fac["summary"][-1]["count"]   # 내림차순
+
+
+def test_wall_summary_ui_present():
+    wall = WALL_JS.read_text(encoding="utf-8")
+    assert "wall-sumchip" in wall and "wall-cat__summary" in wall
+    css = (ROOT / "web" / "static" / "wall.css").read_text(encoding="utf-8")
+    assert "overflow-y: auto" in css and "wall-sumchip" in css

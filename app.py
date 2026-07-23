@@ -1523,6 +1523,15 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 base = "LOOP 경보" if crit else "FLAP 경보"
                 return base + ((" [" + ", ".join(ports) + "]") if ports else "")
 
+            # 설비 실패가 많을 때 대역별 요약(개수 내림차순) — 관제 가독성
+            _fac_cnt = {}
+            for h in fac_off:
+                _k = h.get("subnet") or "대역미상"
+                _fac_cnt[_k] = _fac_cnt.get(_k, 0) + 1
+            _fac_subnet_summary = sorted(
+                [{"subnet": k, "count": v} for k, v in _fac_cnt.items()],
+                key=lambda x: -x["count"])
+
             # 카테고리별 정돈된 문제 목록(관제 화면 섹션 렌더용)
             categories = [
                 {"key": "zone", "title": "⚡ 구역 전원 다운(의심)", "severity": "bad",
@@ -1540,6 +1549,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                  "items": [{"name": s.get("name"), "ip": s.get("ip"),
                             "detail": _alert_detail(s)} for s in alerts_sw[:30]]},
                 {"key": "facility", "title": "설비 연결 실패", "severity": "warn",
+                 "total": len(fac_off),
+                 "summary": _fac_subnet_summary,   # 대역별 실패 수(많을 때 한눈에)
                  "items": [{"name": h.get("ip"), "ip": h.get("mac") or "",
                             "fip": h.get("ip"), "subnet": h.get("subnet") or "",
                             "recollect": True,
