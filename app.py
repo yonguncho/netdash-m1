@@ -1204,6 +1204,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         (서버실 현황 탭 포함용 — VM은 물리 위치가 없으므로 제외)."""
         try:
             from core import serverroom
+            # 구분=Server로 분류된 스위치 행을 서버로 편입(멱등) — 서버 현황에 노출
+            try:
+                db.adopt_server_switches(db_path)
+            except Exception:
+                pass
             servers = db.list_servers(db_path)
             for sv in servers:
                 if not sv.get("is_vm"):
@@ -1350,9 +1355,23 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             fac = db.get_facility_hosts(db_path)
             fac_off = [h for h in fac if not h.get("online")]
 
+            # 대역별 게이트웨이(수집에 쓴 TPS 스위치) 이름 — '위치 미확인'을 조치 가능하게 안내
+            _gw_by_subnet = {}
+            try:
+                from core import facility as _facmod
+                _swname = {s["id"]: s.get("name") for s in switches}
+                for _sn, _sid in _facmod.get_band_map(db_path).items():
+                    _gw_by_subnet[_sn] = _swname.get(_sid)
+            except Exception:
+                _gw_by_subnet = {}
+
             def _facility_detail(h):
                 """오프라인 설비의 위치 표기 — 오프라인이면 MAC이 테이블에서
-                빠져 포트가 비므로, 마지막 확인 위치/경유/대역으로 상황을 명확히 한다."""
+                빠져 포트가 비므로, 마지막 확인 위치/경유/대역으로 상황을 명확히 한다.
+
+                '위치 미확인'은 이 설비 MAC이 등록 스위치 MAC 테이블 어디에도 매칭되지
+                않았다는 뜻(=연결 액세스 스위치 미수집). 대역 게이트웨이와 조치를 함께 안내.
+                """
                 sw = h.get("switch_name")
                 port = h.get("port")
                 if sw and port:
@@ -1362,7 +1381,20 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     return "경유 %s" % h["via"]
                 if sw:
                     return "%s (포트 미확인)" % sw
-                return "위치 미확인 · %s" % (h.get("subnet") or "대역 미상")
+                # 과거 연결 이력: 현재 위치를 몰라도, 이 MAC이 과거 스냅샷에서 학습된
+                # '마지막 위치'가 있으면 그걸 보여준다(사용자 요청 — 이전 이력 비교).
+                hist = db.find_mac_history(db_path, h.get("mac"))
+                if hist and hist.get("switch_name"):
+                    when = (hist.get("ts") or "")[:16]
+                    return "과거 확인: %s · %s%s (현재 끊김)" % (
+                        hist["switch_name"], hist.get("port") or "포트?",
+                        (" · " + when) if when else "")
+                subnet = h.get("subnet") or "대역 미상"
+                gw = _gw_by_subnet.get(h.get("subnet"))
+                if gw:
+                    return ("위치 미확인 · %s (게이트웨이 %s에서만 관측 — 연결 액세스 스위치를 "
+                            "수집 후 설비 '새로고침')" % (subnet, gw))
+                return "위치 미확인 · %s (연결 스위치 미수집 — 해당 스위치 수집 후 설비 '새로고침')" % subnet
 
             # 오프라인 설비는 '위치 확인된 것'(직접 포트) 먼저 노출 — 미확인 노이즈는 뒤로
             fac_off = sorted(

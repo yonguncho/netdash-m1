@@ -1052,13 +1052,16 @@ function renderSwitchTable(switches) {
       ? "<span style='color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" +
         (sw.location ? "<br><span style='font-size:11px;color:#64748b'>" + escHtml(sw.location) + "</span>" : "")
       : escHtml(sw.location || "-");
-    // 구분 자동 분류(L2/L3/L4) — running-config·벤더로 판정(수동 지정 불필요).
-    // 미수집이면 'SWITCH'로 표기(수집하면 자동 확정).
-    var kind = sw.kind_auto ||
-      (sw.device_type && sw.device_type.indexOf("Switch") >= 0 ? sw.device_type : "");
+    // 구분: 수동 지정(수정에서 L2/L3/L4·BackBone 선택)이 있으면 그걸 우선,
+    // 없으면 running-config·벤더로 자동 분류(kind_auto). 둘 다 없으면 'SWITCH'.
+    var _manual = ["BackBone", "L2 Switch", "L3 Switch", "L4 Switch"].indexOf(sw.device_type) >= 0
+      ? sw.device_type : "";
+    var kind = _manual || sw.kind_auto || "";
     var kindLabel = kind
-      ? "<span class='status-badge' style='background:#e0e7ff;color:#3730a3'>" + escHtml(kind) + "</span>"
-      : "<span class='status-badge' style='background:#f1f5f9;color:#475569' title='running-config를 수집하면 L2/L3/L4로 자동 분류됩니다'>SWITCH</span>";
+      ? "<span class='status-badge' style='background:#e0e7ff;color:#3730a3'" +
+        (_manual ? " title='수동 지정'" : " title='자동 분류(running-config 기준). 틀리면 수정에서 변경'") +
+        ">" + escHtml(kind) + "</span>"
+      : "<span class='status-badge' style='background:#f1f5f9;color:#475569' title='running-config를 수집하면 L2/L3/L4로 자동 분류됩니다. 수정에서 수동 지정도 가능합니다'>SWITCH</span>";
     // 모델·버전(수집 시 show version에서 자동 추출) — 별도 컬럼
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'" +

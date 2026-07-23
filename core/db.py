@@ -860,8 +860,11 @@ def search_everywhere(db_path, query):
         _try("SELECT ip, mac, switch_name, port, subnet FROM facility_hosts "
              "WHERE ip LIKE ? OR IFNULL(mac,'') LIKE ?" + mc + " LIMIT 100",
              [like, like] + mp,
-             lambda r: {"source": "설비 현황", "ip": r["ip"], "label": r["switch_name"] or "-",
-                        "detail": "MAC " + (r["mac"] or "-") + " · 포트 " + (r["port"] or "-") +
+             lambda r: {"source": "설비 현황", "ip": r["ip"],
+                        "label": r["switch_name"] or "설비(연결 스위치 미확인)",
+                        "detail": "MAC " + (r["mac"] or "-") +
+                                  (" · 포트 " + r["port"] if r["port"] else
+                                   " · 연결 스위치 미수집(해당 스위치 수집 후 새로고침)") +
                                   " · 대역 " + (r["subnet"] or "-")})
         # 7) 장부 호스트 (대조 위치)
         _try("SELECT h.ip, h.hostname, h.port, s.name AS sw FROM hosts h "
@@ -871,6 +874,34 @@ def search_everywhere(db_path, query):
              lambda r: {"source": "장부 호스트", "ip": r["ip"], "label": r["hostname"] or "-",
                         "detail": "스위치 " + (r["sw"] or "-") + " · 포트 " + (r["port"] or "-")})
     return results
+
+
+def find_mac_history(db_path, mac):
+    """MAC을 전체 스냅샷(과거 포함)에서 찾아 '가장 최근 확인 위치'를 반환.
+
+    설비가 현재 오프라인이라 최신 MAC 테이블에는 없어도, 과거에 어느 스위치/포트에서
+    학습됐는지(=이전 연결 이력)를 알려준다. 최신만 보는 get_mac_to_switchport의 보완.
+    Returns: {switch_name, port, ts} | None.
+    """
+    import re as _re
+    h = _re.sub(r"[^0-9a-f]", "", (mac or "").lower())
+    if len(h) < 12:
+        return None
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT s.name AS sw, m.port AS port, snap.collected_at AS ts "
+                "FROM mac_entries m JOIN switches s ON m.switch_id = s.id "
+                "JOIN snapshots snap ON m.snapshot_id = snap.id "
+                "WHERE REPLACE(REPLACE(REPLACE(LOWER(IFNULL(m.mac,'')),':',''),'.',''),'-','') = ? "
+                "ORDER BY snap.id DESC LIMIT 1", (h,))
+            r = cur.fetchone()
+            if r:
+                return {"switch_name": r["sw"], "port": r["port"], "ts": r["ts"]}
+        except Exception:
+            pass
+    return None
 
 
 def get_mac_to_switchport(db_path):
@@ -2429,6 +2460,30 @@ def get_server(db_path, server_id):
         cur.execute("SELECT * FROM servers WHERE id=?", (server_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def adopt_server_switches(db_path):
+    """구분(device_type)='Server'로 분류된 스위치 행을 servers 테이블로 편입(멱등).
+
+    사용자가 스위치를 'Server'로 분류하면 실제로는 서버이므로 서버 현황에 있어야 한다.
+    같은 IP의 서버가 이미 있으면 스위치 행만 제거한다. 반환: 편입한 수.
+    """
+    adopted = 0
+    for sw in get_switches(db_path):
+        if (sw.get("device_type") or "") != "Server":
+            continue
+        ip = sw.get("ip")
+        if not ip:
+            continue
+        try:
+            save_server(db_path, sw.get("name") or ip, ip,
+                        os_type="auto", location=sw.get("location") or None)
+            delete_switch(db_path, sw["id"])
+            adopted += 1
+            log_event("info", "server_switch_adopted", ip=ip, name=sw.get("name") or ip)
+        except Exception as e:
+            log_event("warning", "server_switch_adopt_skip", ip=ip, error=str(e))
+    return adopted
 
 
 def save_server(db_path, name, ip, os_type="linux", location=None, is_vm=0):

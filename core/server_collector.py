@@ -17,7 +17,19 @@ from . import db, utils, credentials
 
 # 스캔 대상 공통 포트(서버 용도 파악용 — 과도한 스캔 금지)
 COMMON_PORTS = [21, 22, 23, 25, 53, 80, 111, 135, 139, 443, 445, 1433, 1521,
-                2049, 3128, 3306, 3389, 5432, 5900, 8080, 8443, 9090]
+                2049, 2222, 3128, 3306, 3389, 5432, 5900, 5985, 5986,
+                8080, 8443, 9090]
+# SSH가 열려 있을 수 있는 포트 후보(22 우선, 대체 포트 폴백)
+SSH_PORT_CANDIDATES = [22, 2222]
+
+
+def pick_ssh_port(open_ports):
+    """열린 포트 중 SSH로 쓸 포트 선택(22 우선, 없으면 2222 등). 없으면 None."""
+    op = set(open_ports or [])
+    for p in SSH_PORT_CANDIDATES:
+        if p in op:
+            return p
+    return None
 _SCAN_TIMEOUT = 1.0
 _SCAN_CONCURRENCY = 12
 
@@ -129,14 +141,14 @@ def netbios_name(ip, timeout=2):
                 pass
 
 
-def _ssh_exec(ip, username, password, commands, timeout=15):
+def _ssh_exec(ip, username, password, commands, timeout=15, port=22):
     """paramiko로 명령 목록 실행 → {cmd: output}. 연결 실패 시 예외."""
     import paramiko
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     out = {}
     try:
-        cli.connect(ip, port=22, username=username, password=password,
+        cli.connect(ip, port=port, username=username, password=password,
                     timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
                     look_for_keys=False, allow_agent=False)
         for cmd in commands:
@@ -150,10 +162,10 @@ def _ssh_exec(ip, username, password, commands, timeout=15):
     return out
 
 
-def _ssh_detail_linux(ip, username, password):
+def _ssh_detail_linux(ip, username, password, port=22):
     """리눅스 SSH 상세: hostname, OS, 첫 물리 인터페이스 MAC, 리스닝 포트."""
     o = _ssh_exec(ip, username, password,
-                  ["hostname", "uname -sr", "ip -o link", "ss -tln"])
+                  ["hostname", "uname -sr", "ip -o link", "ss -tln"], port=port)
     detail = {}
     if o.get("hostname", "").strip():
         detail["hostname"] = o["hostname"].strip().splitlines()[0][:100]
@@ -177,9 +189,9 @@ def _ssh_detail_linux(ip, username, password):
     return detail
 
 
-def _ssh_detail_windows(ip, username, password):
+def _ssh_detail_windows(ip, username, password, port=22):
     """윈도우 SSH 상세(OpenSSH 서버 설치 시): hostname, OS 버전."""
-    o = _ssh_exec(ip, username, password, ["hostname", "ver"])
+    o = _ssh_exec(ip, username, password, ["hostname", "ver"], port=port)
     detail = {}
     if o.get("hostname", "").strip():
         detail["hostname"] = o["hostname"].strip().splitlines()[0][:100]
@@ -206,7 +218,7 @@ def infer_os_from_scan(open_ports, netbios_hit=False):
     return None
 
 
-def detect_os(ip, username, password, timeout=15):
+def detect_os(ip, username, password, timeout=15, port=22):
     """SSH 접속 후 OS 자동 인식: 'linux' | 'windows' | None(접속 실패).
 
     ① SSH 배너(transport.remote_version)에 'windows'가 있으면 윈도우 OpenSSH.
@@ -217,7 +229,7 @@ def detect_os(ip, username, password, timeout=15):
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        cli.connect(ip, port=22, username=username, password=password,
+        cli.connect(ip, port=port, username=username, password=password,
                     timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
                     look_for_keys=False, allow_agent=False)
         banner = ""
@@ -304,26 +316,31 @@ def collect_server(db_path, server_id, username=None, password=None):
                 pass
         fields["switch_port"] = port
 
-    # ② SSH 상세(자격증명 시) — 실패해도 무자격 결과는 유지
+    # ② SSH 상세(자격증명 시) — 22 고정이 아니라 스캔에서 열린 SSH 포트(22/2222)로 접속.
+    #    SSH 포트가 안 열렸으면 상세는 생략하되 무자격 결과(포트·hostname·MAC·OS추정)는 유지.
     if username and password:
-        os_type = (sv.get("os_type") or "auto").lower()
-        # OS 자동 인식: 'auto'이거나 미설정이면 접속해서 판별 후 os_type 확정
-        if os_type not in ("linux", "windows"):
-            detected = detect_os(ip, username, password)
-            if detected:
-                os_type = detected
-                fields["os_type"] = detected
-                utils.log_event("info", "server_os_detected",
-                                server_id=server_id, os_type=detected)
-            else:
-                os_type = "linux"   # 접속 실패 시 기본값(상세는 아래서 다시 시도)
-        try:
-            if os_type == "windows":
-                fields.update(_ssh_detail_windows(ip, username, password))
-            else:
-                fields.update(_ssh_detail_linux(ip, username, password))
-        except Exception as e:
-            errors.append("SSH: %s" % str(e)[:120])
+        ssh_port = pick_ssh_port(open_ports)
+        if ssh_port is None:
+            errors.append("SSH 포트(22/2222) 미개방 — 상세 수집 생략(포트/hostname/MAC로 식별)")
+        else:
+            os_type = (sv.get("os_type") or "auto").lower()
+            # OS 자동 인식: 'auto'이거나 미설정이면 접속해서 판별 후 os_type 확정
+            if os_type not in ("linux", "windows"):
+                detected = detect_os(ip, username, password, port=ssh_port)
+                if detected:
+                    os_type = detected
+                    fields["os_type"] = detected
+                    utils.log_event("info", "server_os_detected",
+                                    server_id=server_id, os_type=detected, port=ssh_port)
+                else:
+                    os_type = "linux"   # 접속 실패 시 기본값
+            try:
+                if os_type == "windows":
+                    fields.update(_ssh_detail_windows(ip, username, password, port=ssh_port))
+                else:
+                    fields.update(_ssh_detail_linux(ip, username, password, port=ssh_port))
+            except Exception as e:
+                errors.append("SSH(:%d): %s" % (ssh_port, str(e)[:110]))
 
     # VM 자동 추정(MAC 확보 시) — 사용자가 이미 VM으로 지정했으면 유지
     mac = fields.get("mac") or sv.get("mac")

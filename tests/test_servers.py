@@ -132,9 +132,9 @@ def test_os_auto_detect(temp_db, monkeypatch):
     monkeypatch.setattr(server_collector, "reverse_dns", lambda ip: "")
     monkeypatch.setattr(server_collector, "netbios_name", lambda ip, **k: "")
     monkeypatch.setattr(db, "find_mac_location", lambda dbp, ip: {})
-    monkeypatch.setattr(server_collector, "detect_os", lambda ip, u, p: "linux")
+    monkeypatch.setattr(server_collector, "detect_os", lambda ip, u, p, **k: "linux")
     monkeypatch.setattr(server_collector, "_ssh_detail_linux",
-                        lambda ip, u, p: {"os_info": "Linux 5.15"})
+                        lambda ip, u, p, **k: {"os_info": "Linux 5.15"})
     server_collector.collect_server(temp_db, sid, "admin", "pw123")
     sv = db.get_server(temp_db, sid)
     assert sv["os_type"] == "linux" and sv["os_info"] == "Linux 5.15"

@@ -479,6 +479,10 @@ def classify_l3(cfg):
         return None
     if re.search(r"^\s*ip routing\b", cfg, re.M):
         return "L3"
+    # 라우팅 프로토콜/기능이 설정돼 있으면 L3 (NX-OS는 'ip routing' 대신 feature 기반)
+    if re.search(r"^\s*(router\s+(ospf|bgp|eigrp|rip|isis)|feature\s+(ospf|bgp|eigrp))\b",
+                 cfg, re.M | re.I):
+        return "L3"
     if len(parse_svi_subnets(cfg)) >= 2:
         return "L3"
     routes = re.findall(r"^\s*ip route\s+(\S+)\s+\S+", cfg, re.M)

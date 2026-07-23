@@ -34,10 +34,37 @@ def test_wall_facility_detail_variants(tmp_path, monkeypatch):
     assert by_ip["10.0.0.1"] == "SW-A · Gi1/0/1"          # 직접 연결
     assert by_ip["10.0.0.2"] == "경유 SW-CORE Po1"          # 경유(via)
     assert by_ip["10.0.0.3"] == "SW-C (포트 미확인)"         # 스위치만 알고 포트 미상
-    assert by_ip["10.0.0.4"] == "위치 미확인 · 10.0.0.0/24"  # 아무 매칭 없음
+    # 아무 매칭 없음 → '위치 미확인'에 조치 안내가 덧붙는다(게이트웨이 미등록 변형)
+    assert by_ip["10.0.0.4"].startswith("위치 미확인 · 10.0.0.0/24")
+    assert "새로고침" in by_ip["10.0.0.4"]
     # 정렬: 직접 포트 확인된 것이 맨 앞(미확인은 뒤)
     assert fac[0]["name"] == "10.0.0.1"
     assert fac[-1]["name"] == "10.0.0.4"
+
+
+def test_wall_unlocated_shows_gateway_hint(tmp_path, monkeypatch):
+    """위치 미확인 설비: 대역 게이트웨이(TPS)가 등록돼 있으면 그 이름과 조치를 안내."""
+    monkeypatch.chdir(tmp_path)
+    import app as app_module
+    application = app_module.create_app(demo_mode=True)
+    from core import collector, facility
+    collector.shutdown_workers()
+    from config import get_config
+    dbp = get_config(demo_mode=True).get_db_path()
+
+    # 대역 게이트웨이 스위치 등록 + 대역→게이트웨이 매핑 기억
+    gw_id = db.save_switch(dbp, "TPS-GW-11", "10.3.0.11", "cisco_ios")
+    facility.remember_band(dbp, "10.3.0.0/24", gw_id)
+    # 스위치 매칭이 전혀 없는(위치 미확인) 오프라인 설비 1건
+    db.save_facility_hosts(dbp, [
+        {"subnet": "10.3.0.0/24", "ip": "10.3.0.50", "mac": "DD:EE:FF:00:00:50",
+         "switch_name": "", "port": "", "online": 0}])
+    cats = application.test_client().get("/api/wall").get_json()["categories"]
+    fac = [c for c in cats if c["key"] == "facility"][0]["items"]
+    detail = {i["name"]: i["detail"] for i in fac}["10.3.0.50"]
+    assert "위치 미확인 · 10.3.0.0/24" in detail
+    assert "TPS-GW-11" in detail            # 게이트웨이 이름 안내
+    assert "새로고침" in detail             # 조치 안내
 
 
 def test_mac_alive_keeps_online_when_arp_missing(temp_db, monkeypatch):

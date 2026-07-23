@@ -58,6 +58,16 @@ def test_infer_os_from_scan():
     assert server_collector.infer_os_from_scan([]) is None
 
 
+def test_pick_ssh_port():
+    # 22 우선, 없으면 2222, 둘 다 없으면 None(22 고정 안 함)
+    assert server_collector.pick_ssh_port([22, 80, 443]) == 22
+    assert server_collector.pick_ssh_port([80, 2222]) == 2222
+    assert server_collector.pick_ssh_port([80, 443, 3389]) is None
+    # 스캔 대상에 2222/WinRM 포트가 포함됨
+    assert 2222 in server_collector.COMMON_PORTS
+    assert 5985 in server_collector.COMMON_PORTS
+
+
 # ── 엑셀 파서 ───────────────────────────────────────────────────
 def test_parse_server_inventory():
     src = _xlsx([["이름", "IP", "위치"],
