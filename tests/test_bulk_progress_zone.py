@@ -210,6 +210,34 @@ def test_stop_endpoints(client):
     assert r3.status_code == 400   # 진행 중 없음
 
 
+def test_import_invalid_xlsx_korean_error(client):
+    """비-xlsx(zip 아님) 업로드 시 한국어 안내 오류(500 HTML 아님)."""
+    import io as _io
+    r = client.post("/api/servers/import",
+                    data={"file": (_io.BytesIO(b"this is not a zip"), "servers.xlsx")},
+                    content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert "xlsx" in r.get_json()["error"]  # 안내 메시지 포함
+
+
+def test_server_collect_all_ids_filter(temp_db, monkeypatch):
+    from core import server_collector as sc
+    a = db.save_server(temp_db, "S1", "10.40.0.1", os_type="auto")
+    b = db.save_server(temp_db, "S2", "10.40.0.2", os_type="auto")
+    called = []
+    monkeypatch.setattr(sc, "collect_server",
+                        lambda dbp, sid, u=None, p=None: (called.append(sid), {"status": "done"})[1])
+    sc.collect_all_servers(temp_db, ids=[a])   # a만 수집
+    assert called == [a]
+
+
+def test_server_checkbox_and_switch_collect_ui():
+    html = HTML.read_text(encoding="utf-8")
+    assert 'id="srv-check-all"' in html and 'id="btn-sw-collect"' in html
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "srv-check" in js and "_swCollectIds" in js
+
+
 def test_facility_remark_column_and_settings_button():
     html = HTML.read_text(encoding="utf-8")
     assert "<th>비고</th>" in html                 # 설비 비고 컬럼 신설

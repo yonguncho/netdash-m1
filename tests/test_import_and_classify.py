@@ -81,6 +81,19 @@ def test_parse_server_inventory():
     assert rows[0]["os_type"] == "auto"
 
 
+def test_parse_server_inventory_korean_columns():
+    """실제 사용자 엑셀 컬럼(관리번호·용도상세·호스트명·대표 IP·OS Version) 매핑."""
+    src = _xlsx([["관리번호", "용도상세", "호스트명", "대표 IP", "OS Version"],
+                 ["A-001", "웹서버", "WEB01", "10.92.10.5", "Ubuntu 22.04"],
+                 ["A-002", "DB", "DB01", "10.92.10.6", "Windows 2019"]])
+    rows = excel_loader.parse_server_inventory(src)
+    assert len(rows) == 2
+    r = {x["name"]: x for x in rows}
+    assert r["WEB01"]["ip"] == "10.92.10.5"           # 대표 IP → ip
+    assert r["WEB01"]["os_type"] == "Ubuntu 22.04"    # OS Version → os_type
+    assert r["DB01"]["location"] == "DB"              # 용도상세 → 위치(참고)
+
+
 def test_parse_firewall_inventory():
     src = _xlsx([["이름", "벤더", "IP", "포트"],
                  ["FW-A", "fortigate", "10.0.0.1", "443"],

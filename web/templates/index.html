@@ -328,7 +328,7 @@
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer" title="입력한 공통 계정을 각 서버에 저장(다음부터 자동 사용)"><input type="checkbox" id="server-common-persist"> 계정 저장</label>
           <button id="btn-server-add" class="btn btn--primary" style="font-size:12px">+ 서버 추가</button>
           <button id="btn-server-import" class="btn btn--primary" style="font-size:12px" title="이름·IP가 담긴 엑셀(.xlsx)로 서버를 일괄 등록. 계정·OS·상세는 이후 '수집'에서 자동 채웁니다.">📥 엑셀 가져오기</button>
-          <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="등록된 전 서버를 일괄 (재)수집. 공통 계정을 입력하면 그 계정으로 접속해 OS를 자동 인식하고 상세까지 수집합니다.">전체 수집</button>
+          <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="체크한 서버를 수집(아무것도 체크 안 하면 전체). 공통 계정을 입력하면 그 계정으로 접속해 OS 자동 인식·상세까지 수집합니다.">정보 수집</button>
           <input id="server-import-file" type="file" accept=".xlsx" style="display:none">
         </div>
       </div>
@@ -341,11 +341,12 @@
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th>이름</th><th>IP</th><th>hostname</th><th>MAC</th><th>OS</th><th>구분</th>
+            <tr><th style="width:34px;text-align:center"><input type="checkbox" id="srv-check-all" title="전체 선택"></th>
+                <th>이름</th><th>IP</th><th>hostname</th><th>MAC</th><th>OS</th><th>구분</th>
                 <th>열린 포트</th><th>연결 스위치</th><th>포트</th><th>위치</th><th>상태</th><th>수집</th><th></th></tr>
           </thead>
           <tbody id="server-table-body">
-            <tr><td colspan="13" style="color:#64748b">등록된 서버가 없습니다. [+ 서버 등록]으로 추가하세요.</td></tr>
+            <tr><td colspan="14" style="color:#64748b">등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.</td></tr>
           </tbody>
         </table>
       </div>
@@ -416,6 +417,7 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">스위치 현황</span>
         <div class="pane-toolbar__actions">
+          <button id="btn-sw-collect" class="btn btn--primary" style="font-size:12px" title="체크한 스위치를 계정 입력 후 일괄 수집" disabled>정보 수집 (0)</button>
           <button id="btn-sw-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
           <button id="btn-diagnose-all" class="btn btn--secondary" style="font-size:12px" title="등록된 전 스위치를 저장된 계정으로 일괄 진단해 벤더·OS·버전·시리얼 미지정/누락을 자동 채웁니다">전체 진단</button>
           <button id="btn-configs-export" class="btn btn--secondary" style="font-size:12px" title="체크한 스위치의 최신 running-config 백업을 ZIP으로 다운로드(선택 필요)">config 다운로드</button>

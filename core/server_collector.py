@@ -404,8 +404,8 @@ def _is_stop():
 
 
 def collect_all_servers(db_path, max_workers=8, common_user=None,
-                        common_pass=None, persist=False):
-    """등록된 전 서버 일괄 (재)수집(스레드풀).
+                        common_pass=None, persist=False, ids=None):
+    """등록된 서버 일괄 (재)수집(스레드풀). ids 주면 그 서버들만.
 
     계정 우선순위: 공통 계정(common_user/pass) > 서버별 저장 계정 > 무자격.
     공통 계정 + persist=True면 각 서버에 그 계정을 저장한다.
@@ -413,6 +413,9 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
     import concurrent.futures as _cf
     global _stop
     servers = db.list_servers(db_path)
+    if ids:
+        _idset = set(int(x) for x in ids)
+        servers = [s for s in servers if s.get("id") in _idset]
     done = failed = 0
     with _prog_lock:
         _stop = False   # 새 수집 시작 — 중지 플래그 초기화

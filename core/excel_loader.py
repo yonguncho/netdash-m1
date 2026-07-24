@@ -28,11 +28,13 @@ MIN_MATCHED_COLS = 2
 
 # 알려진 필드와 별칭 매핑 (모두 정규화된 형태: 공백 제거 + 소문자)
 ALIASES = {
-    'name': {'name', 'switchname', 'devicename', '이름', '장비명', '장비이름'},
-    'ip': {'ip', 'ipv4', 'ipaddress', 'address', '호스트', '호스트ip', '관리ip', 'host'},
-    'hostname': {'hostname', 'dnsname', 'fqdn', '사용서버명', '서버명'},
+    'name': {'name', 'switchname', 'devicename', '이름', '장비명', '장비이름',
+             '호스트명', '호스트이름', '서버이름'},
+    'ip': {'ip', 'ipv4', 'ipaddress', 'address', '호스트', '호스트ip', '관리ip', 'host',
+           '대표ip', '대표아이피', '아이피', 'ip주소', 'ip address'},
+    'hostname': {'hostname', 'dnsname', 'fqdn', '사용서버명', '서버명', '호스트명', '호스트네임'},
     'vendor': {'vendor', 'manufacturer', 'os', 'platform', '벤더', '제조사'},
-    'location': {'location', 'site', 'datacenter', 'dc', '랙위치', '위치', '랙'},
+    'location': {'location', 'site', 'datacenter', 'dc', '랙위치', '위치', '랙', '용도상세', '용도'},
     'mac': {'mac', 'macaddress', 'hwaddr'},
     # M7: 장부(ledger) 위치 — 호스트 블록에서 기대 연결 위치를 적재
     'ledger_switch': {'연결스위치', 'connectedswitch', 'ledgerswitch', 'uplinkswitch'},
@@ -41,7 +43,7 @@ ALIASES = {
     'subnet': {'subnet', 'ipsubnet', 'cidr', 'network', 'netmask', '서브넷', '대역', '네트워크'},
     # 방화벽/서버 인벤토리용
     'port': {'port', '포트', 'mgmtport', '관리포트'},
-    'os_type': {'ostype', 'osname', '운영체제'},
+    'os_type': {'ostype', 'osname', '운영체제', 'osversion', 'os version', 'os버전', '운영체제버전'},
 }
 
 IP_REGEX = re.compile(

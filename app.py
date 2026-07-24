@@ -975,26 +975,35 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     def _read_xlsx_safe(file):
         """업로드 xlsx 수신 + 크기·zip bomb 검증. 반환: (content_bytes, error_response|None)."""
         if not file or not file.filename:
-            return None, (jsonify({"error": "file required"}), 400)
-        if not file.filename.endswith(".xlsx"):
-            return None, (jsonify({"error": ".xlsx file required"}), 400)
+            return None, (jsonify({"error": "파일이 필요합니다."}), 400)
+        fn = file.filename.lower()
+        if fn.endswith(".xls") and not fn.endswith(".xlsx"):
+            return None, (jsonify({"error": "구형 .xls 형식은 지원하지 않습니다. Excel에서 "
+                                   "'다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 저장해 올려주세요."}), 400)
+        if not fn.endswith(".xlsx"):
+            return None, (jsonify({"error": ".xlsx 파일이 필요합니다."}), 400)
         content = file.read()
         if len(content) / (1024 * 1024) > 16:
-            return None, (jsonify({"error": "file too large (16MB)"}), 413)
+            return None, (jsonify({"error": "파일이 너무 큽니다(16MB 초과)."}), 413)
         import zipfile as _zip
         try:
             with _zip.ZipFile(io.BytesIO(content), "r") as zf:
                 total = 0
                 for info in zf.infolist():
-                    if info.file_size / (1024 * 1024) > 10:
-                        return None, (jsonify({"error": "ZIP entry too large"}), 413)
+                    if info.file_size / (1024 * 1024) > 20:
+                        return None, (jsonify({"error": "ZIP 내부 항목이 너무 큽니다."}), 413)
                     total += info.file_size
-                    if info.compress_size > 0 and info.file_size / info.compress_size > 100:
-                        return None, (jsonify({"error": "compression ratio too high (zip bomb)"}), 413)
-                if total / (1024 * 1024) > 50:
-                    return None, (jsonify({"error": "uncompressed size too large"}), 413)
+                    # zip bomb 방어: 개별 항목이 크면서(>2MB) 압축비가 과도할 때만 차단
+                    # (일반 xlsx의 반복적 XML은 압축비가 높아 오탐 방지 — 총량 상한이 주 방어선)
+                    if (info.file_size > 2 * 1024 * 1024 and info.compress_size > 0
+                            and info.file_size / info.compress_size > 200):
+                        return None, (jsonify({"error": "압축비가 비정상적으로 높습니다(zip bomb 의심)."}), 413)
+                if total / (1024 * 1024) > 80:
+                    return None, (jsonify({"error": "압축 해제 크기가 너무 큽니다."}), 413)
         except _zip.BadZipFile:
-            return None, (jsonify({"error": "invalid xlsx file"}), 400)
+            return None, (jsonify({"error": "올바른 .xlsx 파일이 아닙니다. Excel에서 열어 "
+                                   "'다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 다시 저장해 올려주세요. "
+                                   "(CSV·구형 xls·손상 파일일 수 있습니다)"}), 400)
         return content, None
 
     @app.route("/api/servers/import", methods=["POST"])
@@ -1444,10 +1453,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             cu = (data.get("username") or "").strip() or None
             cp = data.get("password") or None
             persist = bool(data.get("persist"))
+            ids = data.get("ids") or None   # 선택 수집(없으면 전체)
             threading.Thread(
                 target=server_collector.collect_all_servers,
                 kwargs={"db_path": db_path, "common_user": cu,
-                        "common_pass": cp, "persist": persist},
+                        "common_pass": cp, "persist": persist, "ids": ids},
                 daemon=True).start()
             return jsonify({"ok": True, "status": "collecting"}), 202
         except Exception as e:

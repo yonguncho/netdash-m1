@@ -1173,11 +1173,11 @@ function renderSwitchTable(switches) {
 
 // 선택 삭제 버튼 상태(개수) 갱신
 function _updateBulkDeleteBtn() {
-  var btn = document.getElementById("btn-sw-bulk-delete");
-  if (!btn) return;
   var n = document.querySelectorAll("#switch-table-body .sw-check:checked").length;
-  btn.textContent = "선택 삭제 (" + n + ")";
-  btn.disabled = n === 0;
+  var btn = document.getElementById("btn-sw-bulk-delete");
+  if (btn) { btn.textContent = "선택 삭제 (" + n + ")"; btn.disabled = n === 0; }
+  var cbtn = document.getElementById("btn-sw-collect");
+  if (cbtn) { cbtn.textContent = "정보 수집 (" + n + ")"; cbtn.disabled = n === 0; }
 }
 
 (function () {
@@ -2187,6 +2187,8 @@ document.addEventListener("change", function (e) {
       });
   });
 
+  var _swCollectIds = null;   // 스위치 현황 탭에서 선택한 수집 대상(있으면 _bulkSel 대신 사용)
+
   // 일괄 수집 실행(공통) — 성공 시 선택 해제 + 안내
   function _runBulkCollect(ids, username, password, persist, enableSecret) {
     var body = {ids: ids, username: username, password: password, persist: !!persist};
@@ -2213,6 +2215,7 @@ document.addEventListener("change", function (e) {
   // 비어 있으면 기존처럼 계정 입력 팝업.
   var open = document.getElementById("btn-bulk-collect");
   if (open) open.addEventListener("click", function () {
+    _swCollectIds = null;   // 현황판 경로 — 표 선택 컨텍스트 해제
     var ids = Object.keys(_bulkSel);
     if (!ids.length) { alert("먼저 수집할 스위치를 선택하세요."); return; }
     var hu = document.getElementById("dash-cred-user");
@@ -2240,10 +2243,12 @@ document.addEventListener("change", function (e) {
     openModal("modal-bulk-collect");
   });
 
-  // "수집 시작" → 일괄 수집 요청(팝업 경로)
+  // "수집 시작" → 일괄 수집 요청(팝업 경로) — 표 선택(_swCollectIds) 우선, 없으면 현황판 선택
   var start = document.getElementById("btn-bulk-start");
   if (start) start.addEventListener("click", function () {
-    var ids = Object.keys(_bulkSel).map(function (x) { return parseInt(x, 10); });
+    var ids = (_swCollectIds && _swCollectIds.length)
+      ? _swCollectIds.slice()
+      : Object.keys(_bulkSel).map(function (x) { return parseInt(x, 10); });
     if (!ids.length) { closeModal("modal-bulk-collect"); return; }
     var username = document.getElementById("bulk-username").value.trim();
     var password = document.getElementById("bulk-password").value;
@@ -2252,6 +2257,29 @@ document.addEventListener("change", function (e) {
     var be = document.getElementById("bulk-enable");
     _runBulkCollect(ids, username, password, persist && persist.checked,
                     be ? be.value : "");
+    _swCollectIds = null;
+  });
+
+  // 스위치 현황 탭: 체크된 스위치 일괄 수집(계정 입력 팝업 재사용)
+  var swCol = document.getElementById("btn-sw-collect");
+  if (swCol) swCol.addEventListener("click", function () {
+    var ids = Array.prototype.map.call(
+      document.querySelectorAll("#switch-table-body .sw-check:checked"),
+      function (c) { return parseInt(c.value, 10); });
+    if (!ids.length) { alert("먼저 수집할 스위치를 체크하세요."); return; }
+    _swCollectIds = ids;
+    var names = ids.map(function (id) {
+      var s = (_switches || []).find(function (x) { return String(x.id) === String(id); });
+      return s ? (s.name + " (" + s.ip + ")") : ("#" + id);
+    });
+    document.getElementById("bulk-cred-info").innerHTML =
+      "<strong>" + ids.length + "대</strong> 선택됨<br>" +
+      "<span style='font-size:12px;color:#475569'>" + names.map(escHtml).join(", ") + "</span>";
+    document.getElementById("bulk-username").value = "";
+    document.getElementById("bulk-password").value = "";
+    var be2 = document.getElementById("bulk-enable"); if (be2) be2.value = "";
+    var bp2 = document.getElementById("bulk-persist"); if (bp2) bp2.checked = false;
+    openModal("modal-bulk-collect");
   });
 })();
 
@@ -4791,8 +4819,8 @@ function renderServers() {
     });
   });
   if (!rows.length) {
-    body.innerHTML = "<tr><td colspan='13' style='color:#64748b'>" +
-      (_servers.length ? "검색 결과가 없습니다." : "등록된 서버가 없습니다. [+ 서버 등록]으로 추가하세요.") + "</td></tr>";
+    body.innerHTML = "<tr><td colspan='14' style='color:#64748b'>" +
+      (_servers.length ? "검색 결과가 없습니다." : "등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.") + "</td></tr>";
     return;
   }
   body.innerHTML = rows.map(function (s) {
@@ -4801,6 +4829,7 @@ function renderServers() {
     var sc = s.status === "failed" ? "critical" : (s.status === "done" ? "done" : "new");
     var swp = [s.switch_name, s.switch_port].filter(Boolean).join(" ");
     return "<tr>" +
+      "<td style='text-align:center'><input type='checkbox' class='srv-check' value='" + s.id + "'></td>" +
       "<td>" + escHtml(s.name) + "</td>" +
       "<td><code>" + escHtml(s.ip) + "</code></td>" +
       "<td>" + escHtml(s.hostname || "-") + "</td>" +
@@ -4856,18 +4885,31 @@ function renderServers() {
   var searchEl = document.getElementById("server-search");
   if (searchEl) searchEl.addEventListener("input", renderServers);
 
+  // 서버 전체선택 체크박스
+  var srvAll = document.getElementById("srv-check-all");
+  if (srvAll) srvAll.addEventListener("change", function () {
+    Array.prototype.forEach.call(document.querySelectorAll("#server-table-body .srv-check"),
+      function (c) { c.checked = srvAll.checked; });
+  });
+
   var allBtn = document.getElementById("btn-server-collect-all");
   if (allBtn) allBtn.addEventListener("click", function () {
     if (!_servers.length) { alert("등록된 서버가 없습니다."); return; }
+    // 체크된 서버만(없으면 전체)
+    var ids = Array.prototype.map.call(
+      document.querySelectorAll("#server-table-body .srv-check:checked"),
+      function (c) { return parseInt(c.value, 10); });
     var body = {
       username: (document.getElementById("server-common-user") || {}).value || "",
       password: (document.getElementById("server-common-pass") || {}).value || "",
       persist: (document.getElementById("server-common-persist") || {}).checked || false,
     };
+    if (ids.length) body.ids = ids;
     var withCred = body.username && body.password;
+    var scope = ids.length ? ("선택한 " + ids.length + "대") : "전체";
     var msg = withCred
-      ? "공통 계정으로 전 서버를 재수집합니다. OS를 자동 인식하고 상세까지 수집합니다.\n계속할까요?"
-      : "전 서버를 수집합니다. (공통 계정 미입력 — 포트/hostname/연결 스위치만, 저장 계정 있는 서버는 상세 포함)\n계속할까요?";
+      ? scope + " 서버를 공통 계정으로 재수집합니다. OS 자동 인식·상세까지 수집합니다.\n계속할까요?"
+      : scope + " 서버를 수집합니다. (공통 계정 미입력 — 포트/hostname/연결 스위치만, 저장 계정 있는 서버는 상세 포함)\n계속할까요?";
     if (!confirm(msg)) return;
     fetch("/api/servers/collect-all", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
