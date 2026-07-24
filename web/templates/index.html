@@ -20,6 +20,7 @@
     </div>
     <div class="header__right">
       <a href="/wall" target="_blank" class="btn btn--secondary" style="font-size:11px;padding:3px 8px;text-decoration:none" title="대형 모니터용 관제 화면(새 탭, 10초 자동 갱신)">🖥 관제</a>
+      <button id="btn-settings" class="alert-bell" title="설정 — 자동 수집 시각·상태 감시·알람·이메일 발송">⚙</button>
       <button id="btn-creds" class="alert-bell" title="저장 계정 관리(스위치·방화벽·PC 프로필 계정 확인/삭제)">🔑</button>
       <button id="btn-audit" class="alert-bell" title="접근 로그(어느 PC가 언제 무엇을 했는지)">📒</button>
       <button id="btn-alerts" class="alert-bell" title="알람(새 설비·연결 끊김·스위치 연결 실패 등)">
@@ -278,7 +279,6 @@
           <button id="btn-add-manual" class="btn btn--secondary">+ 스위치 추가</button>
           <button id="btn-import-excel" class="btn btn--primary" title="이름·IP·호스트네임 등이 담긴 엑셀(.xlsx)로 스위치를 일괄 등록">📥 엑셀 가져오기</button>
           <button id="btn-export-report" class="btn btn--secondary">보고서 내보내기</button>
-          <button id="btn-auto-collect" class="btn btn--secondary">⏱ 자동 수집</button>
           <input id="excel-file-input" type="file" accept=".xlsx,.xls" style="display:none">
           <input id="inventory-file-input" type="file" accept=".xlsx" style="display:none">
         </div>
@@ -377,10 +377,10 @@
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th>대역</th><th id="fac-sort-ip" style="cursor:pointer" title="클릭하면 IP 오름/내림차순 전환">IP <span id="fac-sort-arrow">▲</span></th><th>MAC</th><th>연결 스위치</th><th>포트</th><th>포트 설명</th></tr>
+            <tr><th>대역</th><th id="fac-sort-ip" style="cursor:pointer" title="클릭하면 IP 오름/내림차순 전환">IP <span id="fac-sort-arrow">▲</span></th><th>MAC</th><th>연결 스위치</th><th>포트</th><th>포트 설명</th><th>비고</th></tr>
           </thead>
           <tbody id="facility-table-body">
-            <tr><td colspan="6" style="color:#64748b">11번 스위치를 선택하고 대역을 입력해 '대역 수집(ping)'을 실행하세요. (스위치가 직접 대역에 ping → ARP/MAC 대조)</td></tr>
+            <tr><td colspan="7" style="color:#64748b">11번 스위치를 선택하고 대역을 입력해 '대역 수집(ping)'을 실행하세요. (스위치가 직접 대역에 ping → ARP/MAC 대조)</td></tr>
           </tbody>
         </table>
       </div>
@@ -476,12 +476,12 @@
   </main>
 
   <!-- 계정 입력 모달 -->
-  <!-- M14: 자동 수집 설정 모달 -->
+  <!-- 설정 모달(상단 ⚙ 설정) — 자동 수집 시각·상태 감시·알람·이메일 -->
   <div id="modal-auto-collect" class="modal hidden">
     <div class="modal__backdrop"></div>
-    <div class="modal__box">
+    <div class="modal__box" style="width:860px;max-width:96vw;max-height:90vh;overflow-y:auto">
       <div class="modal__header">
-        <span>자동 수집 설정</span>
+        <span>⚙ 설정</span>
         <button class="btn btn--ghost" data-close="modal-auto-collect">&times;</button>
       </div>
       <div class="modal__body">
@@ -519,8 +519,8 @@
           </div>
         </div>
 
-        <!-- ④ 이메일 알림 -->
-        <div class="ac-section">
+        <!-- ④ 이메일 알림 (넓은 팝업에서 전체 폭) -->
+        <div class="ac-section ac-section--wide">
           <div class="ac-section__title">✉ 이메일 알림 <span style="font-weight:400;color:#94a3b8">(60초 묶음 발송)</span></div>
           <label class="ac-toggle"><input id="em-enabled" type="checkbox"> 사용</label>
           <div class="field-row" style="margin-top:8px">

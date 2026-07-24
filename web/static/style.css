@@ -177,6 +177,14 @@ body {
 .ac-section label { font-size: 12px; color: #475569; }
 .ac-toggle { display: flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
 
+/* 설정 모달: 넓은 팝업에서 섹션을 2열 그리드로 정돈 */
+#modal-auto-collect .modal__body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+#modal-auto-collect .ac-section { margin-bottom: 0; }
+#modal-auto-collect .ac-section--wide { grid-column: 1 / -1; }
+@media (max-width: 700px) {
+  #modal-auto-collect .modal__body { grid-template-columns: 1fr; }
+}
+
 /* 재사용 진행바(수집/진단/스캔 공통) */
 .np-progress {
   margin: 6px 0; display: flex; align-items: center; gap: 8px;

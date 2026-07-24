@@ -54,7 +54,9 @@ def test_location_filter_ui():
 def test_auto_collect_ui_present():
     html = HTML.read_text(encoding="utf-8")
     assert 'id="modal-auto-collect"' in html
-    assert 'id="btn-auto-collect"' in html
+    # 설정 트리거는 현황판 '자동 수집' 버튼 → 상단 헤더 '⚙ 설정' 버튼으로 이동
+    assert 'id="btn-settings"' in html
+    assert 'id="btn-auto-collect"' not in html
     assert 'id="cred-persist"' in html  # 자동 수집용 계정 저장 체크박스
 
 

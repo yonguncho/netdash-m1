@@ -146,9 +146,10 @@ function _applyLocFilter(list, inputId) {
   });
 }
 
-// ─── M14: 자동 수집 설정 ─────────────────────────────────────────
+// ─── 설정(상단 ⚙): 자동 수집·상태 감시·알람·이메일 ───────────────
 (function () {
-  var btn = document.getElementById("btn-auto-collect");
+  // 트리거는 상단 헤더의 '⚙ 설정' 버튼(구 현황판 '자동 수집' 버튼 대체)
+  var btn = document.getElementById("btn-settings") || document.getElementById("btn-auto-collect");
   function _setVal(id, v) { var el = document.getElementById(id); if (el) el.value = v; }
   function _setChk(id, v) { var el = document.getElementById(id); if (el) el.checked = !!v; }
   function _val(id, dflt) { var el = document.getElementById(id); return el ? el.value : dflt; }
@@ -1570,56 +1571,48 @@ function _renderFacilityRows() {
     if (!all.length) emptyMsg = "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.";
     else if (subnet || q) emptyMsg = "필터/검색 조건에 맞는 설비가 없습니다.";
     else emptyMsg = "직접 연결로 확인된 설비가 없습니다. ('직접 연결만' 해제 시 전체 표시)";
-    tbody.innerHTML = "<tr><td colspan=6 style='color:#64748b'>" + emptyMsg + "</td></tr>";
+    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>" + emptyMsg + "</td></tr>";
     return;
   }
   tbody.innerHTML = rows.map(function (h) {
-    var swCell, portCell, descCell;
+    var swCell, portCell, descCell, remarkCell;
+    var remarks = [];   // 비고 컬럼 — 상태/사유/과거연결
+    if (!h.online) remarks.push("오프라인(마지막 수집 무응답)");
     if (_facIsDirect(h) && !h.online) {
-      // 오프라인이지만 마지막 관측 위치는 유지 — '직접'처럼 보이지 않게 회색 표기
+      // 오프라인이지만 마지막 관측 위치는 유지 — 회색 표기
       swCell = "<span style='color:#94a3b8'>" + escHtml(h.switch_name) +
-        "</span> <span class='status-badge status-badge--new' title='연결이 끊기기 전 마지막으로 관측된 위치'>마지막 관측</span>";
+        "</span> <span class='status-badge status-badge--new'>마지막 관측</span>";
       portCell = "<code style='color:#94a3b8'>" + escHtml(h.port || "-") + "</code>";
       descCell = "<span style='color:#94a3b8'>" + escHtml(h.port_desc || "-") + "</span>";
+      remarks.push("연결이 끊기기 전 마지막으로 관측된 위치");
     } else if (_facIsDirect(h)) {
       swCell = "<span style='font-weight:600'>" + escHtml(h.switch_name) +
         "</span> <span class='status-badge status-badge--ok'>직접</span>";
       portCell = "<code>" + escHtml(h.port || "-") + "</code>";
-      // 연결 스위치가 수집한 포트 Description — 설비 정체 파악용
       descCell = h.port_desc
         ? "<span title='연결 스위치에서 수집한 포트 설명'>" + escHtml(h.port_desc) + "</span>"
         : "<span style='color:#cbd5e1'>-</span>";
     } else {
-      // 직접 연결 미확인 — 사유를 호버 툴팁으로 명확히 구분해 보여준다
-      var reasons = [];
-      if (!h.online) reasons.push("현재 오프라인(마지막 수집에서 무응답)");
-      if (h.via) reasons.push("업링크(Po/Vl) 경유로만 관측: " + h.via);
-      reasons.push("등록 스위치의 '최신' MAC 테이블에서 직접(액세스) 포트로 확인 안 됨 — " +
-                   "연결된 액세스 스위치가 아직 수집되지 않았거나, 그 사이 MAC이 테이블에서 노후(aging)됨");
-      var reasonText = reasons.join(" · ");
-      var histBadge = h.hist_switch
-        ? " <span class='status-badge status-badge--new' title='과거 스냅샷에서 확인된 마지막 연결 위치'>과거 연결</span>"
-        : "";
-      swCell = "<span style='color:#b45309;cursor:help' title='" + escHtml(reasonText) +
-        "'>직접 연결 미확인 ⓘ</span>" + histBadge;
-      if (h.hist_switch) {
-        swCell += "<div style='font-size:11px;color:#64748b;margin-top:2px'>🕘 " + escHtml(h.hist_switch) +
-          (h.hist_port ? " · " + escHtml(h.hist_port) : "") +
-          (h.hist_ts ? " · " + escHtml(String(h.hist_ts).slice(0, 16)) : "") + "</div>";
-        portCell = h.hist_port
-          ? "<code style='color:#94a3b8'>" + escHtml(h.hist_port) + "</code>"
-          : "<span style='color:#94a3b8'>—</span>";
-      } else {
-        portCell = "<span style='color:#94a3b8'>—</span>";
-      }
+      // 직접 연결 미확인 — 연결 스위치 셀은 간결히, 사유·과거연결은 '비고'로
+      swCell = "<span style='color:#b45309'>직접 연결 미확인</span>" +
+        (h.hist_switch ? " <span class='status-badge status-badge--new'>과거 연결</span>" : "");
+      portCell = "<span style='color:#94a3b8'>—</span>";
       descCell = "<span style='color:#94a3b8'>—</span>";
+      if (h.via) remarks.push("업링크(Po/Vl) 경유로만 관측: " + h.via);
+      remarks.push("연결된 액세스 스위치 미수집이거나 최신 MAC 테이블에 없음(노후)");
+      if (h.hist_switch) {
+        remarks.push("과거 연결: " + h.hist_switch + (h.hist_port ? " " + h.hist_port : "") +
+          (h.hist_ts ? " (" + String(h.hist_ts).slice(0, 16) + ")" : ""));
+      }
     }
-    // 상태 컬럼 제거 — 오프라인(연결 실패)은 행 배경(빨강)으로만 신호
-    var trStyle = h.online ? "" : " style='background:#fef2f2'" +
-      " title='마지막 수집에서 응답 없음(오프라인)'";
+    remarkCell = remarks.length
+      ? "<span style='font-size:12px;color:#64748b'>" + escHtml(remarks.join(" · ")) + "</span>"
+      : "<span style='color:#cbd5e1'>-</span>";
+    // 오프라인(연결 실패)은 행 배경(빨강)으로 신호
+    var trStyle = h.online ? "" : " style='background:#fef2f2'";
     return "<tr" + trStyle + "><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
       "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
-      portCell + "</td><td>" + descCell + "</td></tr>";
+      portCell + "</td><td>" + descCell + "</td><td>" + remarkCell + "</td></tr>";
   }).join("");
 }
 

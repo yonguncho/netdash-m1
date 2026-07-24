@@ -210,6 +210,29 @@ def test_stop_endpoints(client):
     assert r3.status_code == 400   # 진행 중 없음
 
 
+def test_facility_remark_column_and_settings_button():
+    html = HTML.read_text(encoding="utf-8")
+    assert "<th>비고</th>" in html                 # 설비 비고 컬럼 신설
+    assert 'id="btn-settings"' in html             # 상단 ⚙ 설정 버튼
+    assert 'id="btn-auto-collect"' not in html     # 현황판 자동수집 버튼 제거
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "remarks" in js and "remarkCell" in js  # 사유·과거연결을 비고로
+
+
+def test_mac_last_cache_invalidation(temp_db):
+    """save_mac_entries가 MAC 최근위치 캐시를 무효화한다(수집 즉시 반영)."""
+    sid = db.save_switch(temp_db, "SW-C1", "10.30.0.1", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sid)
+    db.save_mac_entries(temp_db, snap, sid, [{"mac": "AA:AA:AA:00:00:01", "port": "Gi1/0/1"}])
+    m1 = db.get_mac_last_seen(temp_db, ["aaaaaa000001"])
+    assert m1.get("aaaaaa000001", {}).get("port") == "Gi1/0/1"
+    # 새 스냅샷에서 다른 포트 → 캐시 무효화 후 최신 반영
+    snap2 = db.save_snapshot(temp_db, sid)
+    db.save_mac_entries(temp_db, snap2, sid, [{"mac": "AA:AA:AA:00:00:01", "port": "Gi1/0/9"}])
+    m2 = db.get_mac_last_seen(temp_db, ["aaaaaa000001"])
+    assert m2.get("aaaaaa000001", {}).get("port") == "Gi1/0/9"
+
+
 def test_stop_button_ui_present():
     js = APP_JS.read_text(encoding="utf-8")
     assert "np-stop-btn" in js and "수집 중지" in js

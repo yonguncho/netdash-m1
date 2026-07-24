@@ -996,23 +996,13 @@ def find_mac_history(db_path, mac):
     return None
 
 
-def get_mac_last_seen(db_path, want_macs=None):
-    """MAC별 '가장 최근 관측 위치'를 1회 쿼리로 배치 구성(과거 스냅샷 포함).
+_mac_last_cache = {"built": 0.0, "map": None}   # 전체 MAC 최근위치 맵 캐시(전 스캔 1회)
+_MAC_LAST_TTL = 45.0                             # 초 — 이 시간 내 재호출은 캐시 재사용
 
-    find_mac_history를 호스트마다 부르면 N번 풀스캔이라 데이터가 많을 때 매우 느리다.
-    관제/설비 요약에서 한 번만 호출해 {정규화MAC: {switch_name, port, ts}} 맵을 얻는다.
-    want_macs(대상 MAC 반복자)를 주면 그 MAC만 유지(메모리 절약).
-    """
+
+def _build_mac_last_map(db_path):
+    """모든 스냅샷을 1회 스캔해 {정규화MAC: {switch_name, port, ts}} 전체 맵 구성."""
     import re as _re
-    want = None
-    if want_macs is not None:
-        want = set()
-        for m in want_macs:
-            h = _re.sub(r"[^0-9a-f]", "", (m or "").lower())
-            if len(h) == 12:
-                want.add(h)
-        if not want:
-            return {}
     out, best_sid = {}, {}
     with get_db(db_path) as conn:
         cur = conn.cursor()
@@ -1026,8 +1016,6 @@ def get_mac_last_seen(db_path, want_macs=None):
                 h = _re.sub(r"[^0-9a-f]", "", (r["mac"] or "").lower())
                 if len(h) != 12:
                     continue
-                if want is not None and h not in want:
-                    continue
                 sid = r["sid"] or 0
                 if h not in best_sid or sid > best_sid[h]:   # 가장 최근 스냅샷 유지
                     best_sid[h] = sid
@@ -1035,6 +1023,37 @@ def get_mac_last_seen(db_path, want_macs=None):
         except Exception:
             pass
     return out
+
+
+def invalidate_mac_last_cache():
+    """MAC 스냅샷이 바뀌면(수집) 캐시 무효화 → 다음 호출에서 재구성."""
+    _mac_last_cache["built"] = 0.0
+    _mac_last_cache["map"] = None
+
+
+def get_mac_last_seen(db_path, want_macs=None):
+    """MAC별 '가장 최근 관측 위치' {정규화MAC: {switch_name, port, ts}}.
+
+    전체 스캔은 무거우므로 TTL(45초) 캐시된 전체 맵을 재사용하고 want_macs로 필터한다.
+    (관제 10초 폴링·설비 로드에서 반복 풀스캔 → 시작 지연/느림을 방지)
+    """
+    import re as _re
+    import time as _t
+    now = _t.monotonic()
+    if _mac_last_cache["map"] is None or (now - _mac_last_cache["built"]) > _MAC_LAST_TTL:
+        _mac_last_cache["map"] = _build_mac_last_map(db_path)
+        _mac_last_cache["built"] = now
+    full = _mac_last_cache["map"]
+    if want_macs is None:
+        return dict(full)
+    want = set()
+    for m in want_macs:
+        h = _re.sub(r"[^0-9a-f]", "", (m or "").lower())
+        if len(h) == 12:
+            want.add(h)
+    if not want:
+        return {}
+    return {k: v for k, v in full.items() if k in want}
 
 
 def get_mac_to_switchport(db_path):
@@ -2018,7 +2037,8 @@ def save_mac_entries(db_path, snapshot_id, switch_id, macs):
                     (snapshot_id, switch_id, mac_entry.get("vlan"), mac_entry.get("mac"),
                      mac_entry.get("port"), mac_entry.get("type"))
                 )
-            return len(macs)
+    invalidate_mac_last_cache()   # 새 MAC 스냅샷 → 최근위치 캐시 갱신 필요
+    return len(macs)
 
 
 def save_arp_entries(db_path, snapshot_id, switch_id, arps):
