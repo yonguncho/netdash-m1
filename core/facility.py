@@ -24,11 +24,28 @@ _SWEEP_PING_GAP = 0.05   # 초 — /23(510개) 기준 총 +26초, 제어평면 �
 # 진행 상태(메모리). {"running","subnet","done","total","message"}
 _status = {"running": False, "subnet": None, "done": 0, "total": 0, "message": ""}
 _lock = threading.Lock()
+_stop_requested = False   # 사용자 '수집 중지' 요청 플래그
 
 
 def get_status():
     with _lock:
         return dict(_status)
+
+
+def request_stop():
+    """진행 중인 대역 스캔/전체 스캔에 중지 요청. 다음 체크 지점에서 부분 저장 후 종료."""
+    global _stop_requested
+    with _lock:
+        if not _status.get("running"):
+            return False
+        _stop_requested = True
+        _status["message"] = "중지 요청됨 — 마무리 중…"
+    return True
+
+
+def _is_stop_requested():
+    with _lock:
+        return _stop_requested
 
 
 def _set(**kw):
@@ -441,6 +458,9 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     vrf_capable = vendor in ("cisco_ios", "cisco_nxos", "arista_eos")
     net = ipaddress.IPv4Network(subnet, strict=False)
     ips = [str(h) for h in net.hosts()]
+    global _stop_requested
+    with _lock:
+        _stop_requested = False   # 새 스캔 시작 — 중지 플래그 초기화
     # 새 스캔 시작 시 이전 diff 배너 초기화(직전 결과가 무기한 남지 않도록)
     _set(running=True, subnet=subnet, done=0, total=len(ips), message="연결 중",
          last_subnet=subnet, last_added=[], last_removed=[])
@@ -529,6 +549,9 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
         i = 0
         try:
             while i < len(ips):
+                if _is_stop_requested():
+                    _set(message="사용자 중지 — 그때까지 확보한 결과 저장 중")
+                    break
                 ip = ips[i]
                 try:
                     conn.send_command(ping_tpl % ip, read_timeout=5)
@@ -631,7 +654,9 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
         utils.log_event("warning", "facility_zero_result", subnet=subnet,
                         vrf=vrf or "(global)", arp_sample=last_arp_sample)
     done_msg = "완료(설비 %d · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt)
-    if partial_error:
+    if _is_stop_requested():
+        done_msg = "중지됨(그때까지 설비 %d 저장 · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt)
+    elif partial_error:
         done_msg = "부분 완료(설비 %d 확보 — 중단 사유: %s)" % (len(by_ip), partial_error[:80])
     _set(running=False, message=done_msg)
     return {"subnet": subnet, "pinged": len(ips), "arp": len(arp),
@@ -978,6 +1003,9 @@ def run_auto_scan(db_path):
     scanned = skipped = 0
     src = pcprofile.get_source_ip(db_path)
     for subnet, switch_id in band_map.items():
+        if _is_stop_requested():   # 사용자 중지 → 남은 대역 스캔 취소
+            utils.log_event("info", "facility_auto_scan_stopped", scanned=scanned)
+            break
         if _status.get("running"):
             # 수동 수집과 겹치면 대기(최대 30분) 후 재확인
             for _ in range(180):

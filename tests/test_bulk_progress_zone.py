@@ -171,6 +171,51 @@ def test_progress_autohide_present():
     assert "_hideTimer" in js
 
 
+# ── 수집 중지 ───────────────────────────────────────────────────
+def test_facility_stop_flag(monkeypatch):
+    from core import facility
+    # 진행 중이 아니면 중지 요청 실패
+    facility._set(running=False)
+    assert facility.request_stop() is False
+    # 진행 중이면 중지 플래그가 서고 다음 체크에서 감지
+    facility._set(running=True)
+    try:
+        assert facility.request_stop() is True
+        assert facility._is_stop_requested() is True
+    finally:
+        facility._set(running=False)
+        facility._stop_requested = False   # 전역 상태 원복
+
+
+def test_server_collect_all_stop_flag():
+    from core import server_collector as sc
+    sc._set_progress(running=False)
+    assert sc.request_stop() is False
+    sc._set_progress(running=True)
+    try:
+        assert sc.request_stop() is True
+        assert sc._is_stop() is True
+    finally:
+        sc._set_progress(running=False)
+        sc._stop = False   # 전역 상태 원복
+
+
+def test_stop_endpoints(client):
+    # 진행 중이 아닐 때 stop 엔드포인트는 정상 응답(ok False/400)
+    r1 = client.post("/api/facility/stop")
+    assert r1.status_code == 200 and r1.get_json()["ok"] is False
+    r2 = client.post("/api/servers/collect-all/stop")
+    assert r2.status_code == 200 and r2.get_json()["ok"] is False
+    r3 = client.post("/api/firewalls/collect-all/stop")
+    assert r3.status_code == 400   # 진행 중 없음
+
+
+def test_stop_button_ui_present():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "np-stop-btn" in js and "수집 중지" in js
+    assert "/api/facility/stop" in js
+
+
 def test_db_error_banner_ui_present():
     js = APP_JS.read_text(encoding="utf-8")
     assert "showDbErrorBanner" in js and "dberr-banner" in js

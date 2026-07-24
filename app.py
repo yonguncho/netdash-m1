@@ -159,6 +159,10 @@ def _run_collect_all_firewalls(db_path, source_ip):
         return
     ok = 0
     for i, fw in enumerate(firewalls):
+        with _fw_all_lock:
+            if _fw_all.get("stop"):   # 사용자 중지 → 남은 방화벽 건너뜀
+                _fw_all.update(running=False, message="중지됨(성공 %d/%d)" % (ok, len(firewalls)))
+                return
         fid = fw["id"]
         token = username = password = ""
         try:
@@ -2279,6 +2283,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "facility_recollect_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/facility/stop", methods=["POST"])
+    def facility_stop():
+        """진행 중인 대역 스캔/전체 스캔 중지(부분 결과는 저장)."""
+        return jsonify({"ok": facility_mod.request_stop()})
+
     @app.route("/api/facility/scan-all", methods=["POST"])
     @rate_limit("facility_scan_all", max_requests=4, window_seconds=60)
     def facility_scan_all():
@@ -2935,7 +2944,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 total = len(db.list_firewalls(db_path))
             except Exception:
                 total = 0
-            _fw_all.update(running=True, total=total, done=0, ok=0, message="시작 중")
+            _fw_all.update(running=True, total=total, done=0, ok=0, message="시작 중", stop=False)
         src = pcprofile.get_source_ip(db_path)
         threading.Thread(target=_run_collect_all_firewalls,
                          args=(db_path, src), daemon=True).start()
@@ -2946,10 +2955,24 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         with _fw_all_lock:
             return jsonify(dict(_fw_all))
 
+    @app.route("/api/firewalls/collect-all/stop", methods=["POST"])
+    def collect_all_firewalls_stop():
+        with _fw_all_lock:
+            if not _fw_all.get("running"):
+                return jsonify({"ok": False, "error": "진행 중인 수집이 없습니다"}), 400
+            _fw_all["stop"] = True
+            _fw_all["message"] = "중지 요청됨 — 마무리 중…"
+        return jsonify({"ok": True})
+
     @app.route("/api/servers/collect-all/status", methods=["GET"])
     def collect_all_servers_status():
         from core import server_collector
         return jsonify(server_collector.get_progress())
+
+    @app.route("/api/servers/collect-all/stop", methods=["POST"])
+    def collect_all_servers_stop():
+        from core import server_collector
+        return jsonify({"ok": server_collector.request_stop()})
 
     @app.route("/api/switches/<int:switch_id>/events", methods=["GET"])
     def get_switch_events(switch_id):

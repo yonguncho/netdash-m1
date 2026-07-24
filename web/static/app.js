@@ -1390,29 +1390,43 @@ function _autoHideProgress(el, ms) {
   if (el._hideTimer) clearTimeout(el._hideTimer);
   el._hideTimer = setTimeout(function () { el.innerHTML = ""; el._hideTimer = null; }, ms || 6000);
 }
-function renderProgressBar(el, st) {
+function renderProgressBar(el, st, stopUrl) {
   if (!el) return;
   if (el._hideTimer) { clearTimeout(el._hideTimer); el._hideTimer = null; }  // 새 진행 시 숨김 취소
   if (!st || (!st.running && !st.message)) { el.innerHTML = ""; return; }
   var total = st.total || 0, done = st.done || 0;
   var pct = total ? Math.round(done / total * 100) : (st.running ? 0 : 100);
   var barCls = st.running ? "" : " np-progress__bar--done";
+  var stopBtn = (st.running && stopUrl)
+    ? "<button class='btn btn--ghost np-stop-btn' data-stop-url='" + escHtml(stopUrl) +
+      "' style='font-size:11px;padding:2px 10px;margin-left:8px'>⏹ 수집 중지</button>"
+    : "";
   el.innerHTML =
     "<div class='np-progress'>" +
       "<div class='np-progress__track'><div class='np-progress__bar" + barCls +
         "' style='width:" + pct + "%'></div></div>" +
       "<span class='np-progress__label'>" + (st.running ? "⏳ " : "✅ ") +
         (total ? done + "/" + total + " (" + pct + "%)" : "") +
-        (st.message ? " · " + escHtml(st.message) : "") + "</span>" +
+        (st.message ? " · " + escHtml(st.message) : "") + "</span>" + stopBtn +
     "</div>";
 }
 
+// '⏹ 수집 중지' 위임 핸들러 — 어느 진행바의 중지 버튼이든 그 stop URL로 POST
+document.addEventListener("click", function (e) {
+  var b = e.target.closest(".np-stop-btn");
+  if (!b) return;
+  var url = b.getAttribute("data-stop-url");
+  if (!url) return;
+  b.disabled = true; b.textContent = "중지 중…";
+  fetch(url, { method: "POST" }).catch(function () {});
+});
+
 // 진행 상태 폴링: url을 1.5초마다 조회 → el에 진행바. running=false면 종료 후 onDone().
-function pollProgress(url, elId, onDone) {
+function pollProgress(url, elId, onDone, stopUrl) {
   var el = document.getElementById(elId);
   var timer = setInterval(function () {
     fetch(url).then(function (r) { return r.json(); }).then(function (st) {
-      renderProgressBar(el, st);
+      renderProgressBar(el, st, stopUrl);
       if (!st.running) {
         clearInterval(timer);
         if (typeof onDone === "function") onDone(st);
@@ -1427,9 +1441,10 @@ function renderFacilityProgress(st) {
   if (!el) return;
   if (!st || (!st.running && !st.message)) { el.innerHTML = ""; return; }
   if (st.running) {
-    // 진행바 + 대역/메시지
+    // 진행바 + 대역/메시지 + 중지 버튼
     renderProgressBar(el, {running: true, done: st.done, total: st.total,
-      message: (st.subnet ? st.subnet + " · " : "") + (st.message || "")});
+      message: (st.subnet ? st.subnet + " · " : "") + (st.message || "")},
+      "/api/facility/stop");
   } else {
     var html = st.message ? "<span>" + escHtml(st.message) + "</span>" : "";
     // 완료 diff 배너 — 직전 스캔에서 새로 추가되거나 끊긴 설비를 한눈에(대상 대역 라벨 포함)
@@ -4868,7 +4883,8 @@ function renderServers() {
         // 비밀번호 입력란은 비워 화면 잔류 방지
         var pw = document.getElementById("server-common-pass"); if (pw) pw.value = "";
         // 진행바 폴링 → 완료 시 목록 새로고침
-        pollProgress("/api/servers/collect-all/status", "server-progress", loadServers);
+        pollProgress("/api/servers/collect-all/status", "server-progress", loadServers,
+          "/api/servers/collect-all/stop");
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
   });
 
@@ -4880,7 +4896,8 @@ function renderServers() {
       .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (res) {
         if (!res.ok) { alert((res.b && res.b.error) || "일괄 수집 시작 실패"); return; }
-        pollProgress("/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls);
+        pollProgress("/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls,
+          "/api/firewalls/collect-all/stop");
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
   });
 

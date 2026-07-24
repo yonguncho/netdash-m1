@@ -373,6 +373,7 @@ def collect_server(db_path, server_id, username=None, password=None):
 
 _progress = {"running": False, "done": 0, "total": 0, "message": ""}
 _prog_lock = threading.Lock()
+_stop = False   # 전체 수집 중지 요청
 
 
 def get_progress():
@@ -386,6 +387,22 @@ def _set_progress(**kw):
         _progress.update(kw)
 
 
+def request_stop():
+    """진행 중인 서버 전체 수집에 중지 요청(남은 서버는 건너뜀)."""
+    global _stop
+    with _prog_lock:
+        if not _progress.get("running"):
+            return False
+        _stop = True
+        _progress["message"] = "중지 요청됨 — 마무리 중…"
+    return True
+
+
+def _is_stop():
+    with _prog_lock:
+        return _stop
+
+
 def collect_all_servers(db_path, max_workers=8, common_user=None,
                         common_pass=None, persist=False):
     """등록된 전 서버 일괄 (재)수집(스레드풀).
@@ -394,8 +411,11 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
     공통 계정 + persist=True면 각 서버에 그 계정을 저장한다.
     """
     import concurrent.futures as _cf
+    global _stop
     servers = db.list_servers(db_path)
     done = failed = 0
+    with _prog_lock:
+        _stop = False   # 새 수집 시작 — 중지 플래그 초기화
     _set_progress(running=True, done=0, total=len(servers), message="서버 수집 중")
     common = bool(common_user and common_pass)
     if common and persist:
@@ -408,6 +428,8 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
                     pass
 
     def _one(sv):
+        if _is_stop():
+            return {"status": "skipped"}   # 중지 요청 후 남은 서버는 건너뜀
         if common:
             username, password = common_user, common_pass
         else:
@@ -429,7 +451,7 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
                 _set_progress(done=done + failed,
                               message="서버 수집 중 (%d/%d)" % (done + failed, len(servers)))
     finally:
-        _set_progress(running=False,
-                      message="완료(성공 %d · 실패 %d)" % (done, failed))
+        _msg = ("중지됨(성공 %d · 실패 %d)" if _is_stop() else "완료(성공 %d · 실패 %d)") % (done, failed)
+        _set_progress(running=False, message=_msg)
     utils.log_event("info", "server_collect_all_done", done=done, failed=failed)
     return {"done": done, "failed": failed, "total": len(servers)}
