@@ -506,6 +506,8 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     arp_union = {}      # {ip: {ip, mac, interface}} — 청크 ARP 누적(뒤 결과 우선)
     arp_reads = 0
     partial_error = None
+    i = 0               # ping 진행 인덱스(= 실제 스캔한 IP 수)
+    stopped_at = None   # 중지 지점 — 이후 IP는 미스캔이므로 오프라인 판정에서 제외
 
     vrf = None            # 대역이 VRF 소속이면 ping/ARP에 vrf 키워드 적용
     arp_cmd = arp_base_cmd
@@ -546,10 +548,10 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
             arp_cmd = "%s vrf %s" % (arp_base_cmd, vrf)
         ping_tpl = _ping_tpl(vendor, vrf)
         _set(message="대역 ping 중" + ((" (VRF %s)" % vrf) if vrf else ""))
-        i = 0
         try:
             while i < len(ips):
                 if _is_stop_requested():
+                    stopped_at = i
                     _set(message="사용자 중지 — 그때까지 확보한 결과 저장 중")
                     break
                 ip = ips[i]
@@ -577,7 +579,10 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
                     _set(done=i, message="대역 ping 중 (%d/%d · ARP 중간수집 %d회 · 확보 %d대)"
                          % (i, len(ips), arp_reads, len(arp_union)))
                     _read_arp()                    # 청크마다 ARP 중간 수집
-            _set(done=len(ips), message="ARP 최종 수집 중")
+            if stopped_at is None:
+                _set(done=len(ips), message="ARP 최종 수집 중")
+            else:
+                _set(done=stopped_at, message="ARP 최종 수집 중(중지)")
             _read_arp()                            # 마지막 잔여분
         except Exception as e:
             # 복구 불가 오류 — 지금까지 확보한 청크 결과라도 저장(부분 완료)
@@ -644,20 +649,32 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
                           "via": "; ".join(via) if via else None,
                           "port_desc": port_descs.get((sid, (port or "").lower()))}
 
-    saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip)
+    # 중지·부분중단 시엔 '실제로 ping한 IP'만 오프라인 판정 대상으로 넘긴다.
+    # (미스캔 IP를 끊김으로 처리하면 대량 허위 '설비 연결 끊김' 알람이 발생)
+    scanned_ips = None
+    if stopped_at is not None:
+        scanned_ips = set(ips[:stopped_at]) | set(by_ip.keys())
+    elif partial_error:
+        scanned_ips = set(ips[:i]) | set(by_ip.keys())
+    saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip, scanned_ips=scanned_ips)
     utils.log_event("info", "facility_collected", subnet=subnet, pinged=len(ips),
                     arp=len(arp), saved=saved, new=new_cnt, offline=off_cnt,
                     arp_reads=arp_reads, vrf=vrf or "(global)",
-                    partial=bool(partial_error))
+                    partial=bool(partial_error), stopped=stopped_at is not None)
     if not by_ip:
         # 0대 완료 — VRF/ARP 형식 진단을 위해 원문 샘플을 로그로
         utils.log_event("warning", "facility_zero_result", subnet=subnet,
                         vrf=vrf or "(global)", arp_sample=last_arp_sample)
     done_msg = "완료(설비 %d · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt)
-    if _is_stop_requested():
-        done_msg = "중지됨(그때까지 설비 %d 저장 · 새 %d · 오프라인 %d)" % (len(by_ip), new_cnt, off_cnt)
+    if stopped_at is not None:
+        done_msg = "중지됨(스캔한 %d개 IP만 반영 · 설비 %d · 새 %d · 끊김 %d)" % (
+            stopped_at, len(by_ip), new_cnt, off_cnt)
     elif partial_error:
         done_msg = "부분 완료(설비 %d 확보 — 중단 사유: %s)" % (len(by_ip), partial_error[:80])
+    # 중지 플래그는 이 스캔에서 소비 완료 — 반드시 해제해야 다음 스캔(전체 대역·
+    # 매일 자동 스캔)이 정상 동작한다(잔류 시 즉시 break되어 무력화됨).
+    with _lock:
+        _stop_requested = False
     _set(running=False, message=done_msg)
     return {"subnet": subnet, "pinged": len(ips), "arp": len(arp),
             "saved": saved, "new": new_cnt, "offline": off_cnt,
@@ -667,12 +684,15 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
 _KEEP_COLS = ("subnet", "ip", "mac", "switch_id", "switch_name", "port", "direct", "via", "port_desc")
 
 
-def _apply_scan(db_path, subnet, by_ip):
+def _apply_scan(db_path, subnet, by_ip, scanned_ips=None):
     """대역 스캔 결과(by_ip: {ip: host})를 이전 상태와 비교해 저장 + 변경 이벤트 기록.
 
     - 새 IP → new_device 이벤트
     - 이전 online인데 이번에 없음 → device_offline 이벤트 + online=0으로 '유지'(삭제 안 함)
     - 이전 offline인데 이번에 응답 → device_online(복구) 이벤트
+    scanned_ips: 중지·부분중단으로 대역 일부만 ping한 경우 '실제 스캔한 IP' 집합.
+      이 집합 밖의 기존 설비는 확인되지 않았으므로 상태·이벤트를 그대로 보존한다
+      (미스캔 IP를 끊김으로 처리해 대량 허위 알람이 나가던 문제 방지).
     반환: (저장 개수, 새 설비 수, 오프라인 전환 수)
     """
     existing = {h["ip"]: h for h in db.get_facility_hosts(db_path) if h.get("subnet") == subnet}
@@ -714,6 +734,10 @@ def _apply_scan(db_path, subnet, by_ip):
                         host.get("switch_name"), host.get("port")))
     for ip, ex in existing.items():
         if ip in by_ip:
+            continue
+        # 중지·부분중단: 실제로 ping하지 않은 IP는 '확인 불가' → 이전 상태 그대로 보존
+        if scanned_ips is not None and ip not in scanned_ips:
+            merged.append({k: ex.get(k) for k in _KEEP_COLS + ("online",)})
             continue
         # ARP엔 없지만 MAC 테이블에 살아있으면 online 유지(ICMP 차단 장비 오탐 방지)
         ex_mac = (ex.get("mac") or "").lower()
@@ -999,6 +1023,9 @@ def run_auto_scan(db_path):
     """
     from . import credentials
     from . import pcprofile
+    global _stop_requested
+    with _lock:
+        _stop_requested = False   # 새 전체 스캔 시작 — 이전 중지 요청 잔류 해제
     band_map = get_band_map(db_path)
     scanned = skipped = 0
     src = pcprofile.get_source_ip(db_path)

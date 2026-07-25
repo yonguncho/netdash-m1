@@ -59,7 +59,9 @@ function renderProblems() {
       filterBar = "<div class='wall-cat__filter'>필터: 🔌 " + esc(wallFacFilter) +
         " (" + items.length + ") <button class='wall-filter-clear'>✕ 전체 보기</button></div>";
     }
-    var moreHtml = (!wallFacFilter && c.total != null && c.total > c.items.length)
+    // '외 N건' 안내: 서버가 잘라 보낸 경우 항상 표시(설비 필터 중에도 유지),
+    // 다른 카테고리(도달 불가/수집 실패)도 total이 있으면 동일하게 안내.
+    var moreHtml = (c.total != null && c.total > c.items.length)
       ? "<div class='wall-cat__more'>외 " + (c.total - c.items.length) + "건 — 설비 현황에서 전체 확인</div>"
       : "";
     return "<div class='wall-cat wall-cat--" + esc(c.severity || "warn") + "'>" +

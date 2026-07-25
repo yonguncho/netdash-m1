@@ -996,8 +996,10 @@ def find_mac_history(db_path, mac):
     return None
 
 
-_mac_last_cache = {"built": 0.0, "map": None}   # 전체 MAC 최근위치 맵 캐시(전 스캔 1회)
-_MAC_LAST_TTL = 45.0                             # 초 — 이 시간 내 재호출은 캐시 재사용
+# 전체 MAC 최근위치 맵 캐시 — DB 경로별로 분리(다른 DB 결과 오염 방지)
+_mac_last_cache = {}          # {str(db_path): {"built": float, "map": dict}}
+_mac_cache_lock = threading.Lock()
+_MAC_LAST_TTL = 45.0          # 초 — 이 시간 내 재호출은 캐시 재사용
 
 
 def _build_mac_last_map(db_path):
@@ -1025,34 +1027,49 @@ def _build_mac_last_map(db_path):
     return out
 
 
-def invalidate_mac_last_cache():
-    """MAC 스냅샷이 바뀌면(수집) 캐시 무효화 → 다음 호출에서 재구성."""
-    _mac_last_cache["built"] = 0.0
-    _mac_last_cache["map"] = None
+def invalidate_mac_last_cache(db_path=None):
+    """MAC 스냅샷이 바뀌면(수집·삭제·세대정리) 캐시 무효화 → 다음 호출에서 재구성.
+
+    db_path를 주면 그 DB만, 없으면 전체 무효화.
+    """
+    with _mac_cache_lock:
+        if db_path is None:
+            _mac_last_cache.clear()
+        else:
+            _mac_last_cache.pop(str(db_path), None)
 
 
 def get_mac_last_seen(db_path, want_macs=None):
     """MAC별 '가장 최근 관측 위치' {정규화MAC: {switch_name, port, ts}}.
 
-    전체 스캔은 무거우므로 TTL(45초) 캐시된 전체 맵을 재사용하고 want_macs로 필터한다.
+    전체 스캔은 무거우므로 DB별 TTL(45초) 캐시를 재사용하고 want_macs로 필터한다.
     (관제 10초 폴링·설비 로드에서 반복 풀스캔 → 시작 지연/느림을 방지)
     """
     import re as _re
     import time as _t
+    # want_macs가 있고 유효 MAC이 하나도 없으면 풀맵 구축조차 불필요
+    want = None
+    if want_macs is not None:
+        want = set()
+        for m in want_macs:
+            h = _re.sub(r"[^0-9a-f]", "", (m or "").lower())
+            if len(h) == 12:
+                want.add(h)
+        if not want:
+            return {}
+    key = str(db_path)
     now = _t.monotonic()
-    if _mac_last_cache["map"] is None or (now - _mac_last_cache["built"]) > _MAC_LAST_TTL:
-        _mac_last_cache["map"] = _build_mac_last_map(db_path)
-        _mac_last_cache["built"] = now
-    full = _mac_last_cache["map"]
-    if want_macs is None:
+    with _mac_cache_lock:
+        ent = _mac_last_cache.get(key)
+        fresh = ent is not None and (now - ent["built"]) <= _MAC_LAST_TTL
+        full = ent["map"] if fresh else None
+    if full is None:
+        built = _build_mac_last_map(db_path)   # 락 밖에서 조회(다른 요청 블로킹 방지)
+        with _mac_cache_lock:
+            _mac_last_cache[key] = {"built": now, "map": built}
+        full = built
+    if want is None:
         return dict(full)
-    want = set()
-    for m in want_macs:
-        h = _re.sub(r"[^0-9a-f]", "", (m or "").lower())
-        if len(h) == 12:
-            want.add(h)
-    if not want:
-        return {}
     return {k: v for k, v in full.items() if k in want}
 
 
@@ -2037,7 +2054,7 @@ def save_mac_entries(db_path, snapshot_id, switch_id, macs):
                     (snapshot_id, switch_id, mac_entry.get("vlan"), mac_entry.get("mac"),
                      mac_entry.get("port"), mac_entry.get("type"))
                 )
-    invalidate_mac_last_cache()   # 새 MAC 스냅샷 → 최근위치 캐시 갱신 필요
+    invalidate_mac_last_cache(db_path)   # 새 MAC 스냅샷 → 최근위치 캐시 갱신 필요
     return len(macs)
 
 
@@ -2302,7 +2319,10 @@ def delete_switch(db_path, switch_id):
                 cur.execute("DELETE FROM switches WHERE id=?", (switch_id,))
             except Exception:
                 pass
-            return True
+            ok = True
+    # mac_entries가 사라졌으므로 '과거 연결' 캐시 무효화(삭제된 스위치명 잔류 방지)
+    invalidate_mac_last_cache(db_path)
+    return ok
 
 
 def delete_switches_bulk(db_path, switch_ids):
@@ -2329,6 +2349,8 @@ def delete_switches_bulk(db_path, switch_ids):
                 except Exception:
                     pass
                 deleted += 1
+    if deleted:
+        invalidate_mac_last_cache(db_path)   # 삭제된 스위치의 '과거 연결' 잔류 방지
     return deleted
 
 

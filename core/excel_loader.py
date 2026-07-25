@@ -28,13 +28,15 @@ MIN_MATCHED_COLS = 2
 
 # 알려진 필드와 별칭 매핑 (모두 정규화된 형태: 공백 제거 + 소문자)
 ALIASES = {
-    'name': {'name', 'switchname', 'devicename', '이름', '장비명', '장비이름',
-             '호스트명', '호스트이름', '서버이름'},
+    # 주의: 같은 헤더 문자열을 두 필드에 넣지 말 것(콜맵 충돌로 한쪽이 유실됨).
+    # '호스트명'은 hostname 전용 — 이름(name)이 없으면 파서가 hostname으로 대체한다.
+    'name': {'name', 'switchname', 'devicename', '이름', '장비명', '장비이름', '서버이름'},
     'ip': {'ip', 'ipv4', 'ipaddress', 'address', '호스트', '호스트ip', '관리ip', 'host',
            '대표ip', '대표아이피', '아이피', 'ip주소', 'ip address'},
     'hostname': {'hostname', 'dnsname', 'fqdn', '사용서버명', '서버명', '호스트명', '호스트네임'},
     'vendor': {'vendor', 'manufacturer', 'os', 'platform', '벤더', '제조사'},
-    'location': {'location', 'site', 'datacenter', 'dc', '랙위치', '위치', '랙', '용도상세', '용도'},
+    # 위치는 랙 위치(A09U27)만 — '용도/용도상세'는 랙 파싱을 깨뜨리므로 매핑하지 않는다.
+    'location': {'location', 'site', 'datacenter', 'dc', '랙위치', '위치', '랙'},
     'mac': {'mac', 'macaddress', 'hwaddr'},
     # M7: 장부(ledger) 위치 — 호스트 블록에서 기대 연결 위치를 적재
     'ledger_switch': {'연결스위치', 'connectedswitch', 'ledgerswitch', 'uplinkswitch'},
@@ -89,7 +91,7 @@ def parse_switch_inventory(source) -> List[Dict[str, Any]]:
                 for ci, cell in enumerate(row):
                     n = _norm(cell)
                     for f, al in field_alias.items():
-                        if n in al:
+                        if n in al and f not in m:   # first-wins(뒤 컬럼이 앞을 덮지 않음)
                             m[f] = ci
                 if 'ip' in m:  # ip 컬럼이 있는 행을 헤더로 인식
                     colmap = m
@@ -159,18 +161,39 @@ def _inventory_rows(source, wanted, key_field, builder):
     return out
 
 
+def _norm_os_type(raw):
+    """엑셀 OS 문자열 → (os_type, os_info).
+
+    os_type은 수집 로직이 분기에 쓰므로 'linux'/'windows'/'auto'로 정규화하고,
+    원문('Ubuntu 22.04' 등)은 화면 표시용 os_info로 보존한다.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return "auto", ""
+    low = s.lower()
+    if any(k in low for k in ("windows", "win2", "win 2", "msserver", "microsoft")):
+        return "windows", s
+    if any(k in low for k in ("linux", "ubuntu", "centos", "redhat", "rhel", "debian",
+                              "rocky", "suse", "unix", "aix", "solaris", "bsd")):
+        return "linux", s
+    return "auto", s
+
+
 def parse_server_inventory(source) -> List[Dict[str, Any]]:
     """이름/IP(필수) + 위치/OS(선택) 엑셀 → 서버 등록 행 목록.
 
-    Returns: [{name, ip, location, os_type}] — 계정·상세는 이후 '수집'에서 채운다.
+    Returns: [{name, ip, location, os_type, os_info}] — 계정·상세는 이후 '수집'에서.
     """
     def _b(_get):
         ip = _get('ip')
+        os_type, os_info = _norm_os_type(_get('os_type'))
         return {
             "name": _get('name') or _get('hostname') or ip,
             "ip": ip,
+            "hostname": _get('hostname'),
             "location": _get('location'),
-            "os_type": (_get('os_type') or "auto"),
+            "os_type": os_type,
+            "os_info": os_info,
         }
     return _inventory_rows(source, ('name', 'ip', 'hostname', 'location', 'os_type'),
                            'ip', _b)

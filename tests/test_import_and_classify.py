@@ -90,8 +90,12 @@ def test_parse_server_inventory_korean_columns():
     assert len(rows) == 2
     r = {x["name"]: x for x in rows}
     assert r["WEB01"]["ip"] == "10.92.10.5"           # 대표 IP → ip
-    assert r["WEB01"]["os_type"] == "Ubuntu 22.04"    # OS Version → os_type
-    assert r["DB01"]["location"] == "DB"              # 용도상세 → 위치(참고)
+    # OS Version은 os_type을 linux/windows/auto로 정규화하고 원문은 os_info로 보존
+    assert r["WEB01"]["os_type"] == "linux"
+    assert r["WEB01"]["os_info"] == "Ubuntu 22.04"
+    assert r["DB01"]["os_type"] == "windows"
+    # '용도상세'는 location으로 매핑하지 않는다(랙 위치 A09U27 파싱 보호)
+    assert r["DB01"]["location"] == ""
 
 
 def test_parse_firewall_inventory():

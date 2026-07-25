@@ -932,30 +932,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         log_event("info", "import_inventory_requested")
         if "file" not in request.files:
             return jsonify({"error": "file field required"}), 400
-        file = request.files["file"]
-        if not file or not file.filename:
-            return jsonify({"error": "file required"}), 400
-        if not file.filename.endswith(".xlsx"):
-            return jsonify({"error": ".xlsx file required"}), 400
+        # 서버/방화벽 임포트와 동일한 검증·한국어 안내(.xls·CSV·손상 파일 안내, 오탐 완화)
+        content, err = _read_xlsx_safe(request.files["file"])
+        if err:
+            return err
         try:
-            content = file.read()
-            if len(content) / (1024 * 1024) > 16:
-                return jsonify({"error": "file too large (16MB)"}), 413
-            # CWE-409: 압축폭탄(zip bomb) 방어 — /api/upload와 동일 검증
-            import zipfile as _zip
-            try:
-                with _zip.ZipFile(io.BytesIO(content), "r") as zf:
-                    total = 0
-                    for info in zf.infolist():
-                        if info.file_size / (1024 * 1024) > 10:
-                            return jsonify({"error": "ZIP entry too large"}), 413
-                        total += info.file_size
-                        if info.compress_size > 0 and info.file_size / info.compress_size > 100:
-                            return jsonify({"error": "compression ratio too high (zip bomb)"}), 413
-                    if total / (1024 * 1024) > 50:
-                        return jsonify({"error": "uncompressed size too large"}), 413
-            except _zip.BadZipFile:
-                return jsonify({"error": "invalid xlsx file"}), 400
             rows = parse_switch_inventory(io.BytesIO(content))
             allowed = config.collector.get("allowed_ip_ranges")
             valid, skipped = [], 0
@@ -1027,9 +1008,17 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     skipped += 1
                     continue
                 try:
-                    db.save_server(db_path, r["name"], ip,
-                                   os_type=(r.get("os_type") or "auto"),
-                                   location=(r.get("location") or None))
+                    sid = db.save_server(db_path, r["name"], ip,
+                                         os_type=(r.get("os_type") or "auto"),
+                                         location=(r.get("location") or None))
+                    # 엑셀에 있던 hostname·OS 원문도 함께 보존(표시용)
+                    _extra = {}
+                    if r.get("hostname"):
+                        _extra["hostname"] = r["hostname"]
+                    if r.get("os_info"):
+                        _extra["os_info"] = r["os_info"]
+                    if _extra:
+                        db.update_server(db_path, sid, **_extra)
                     imported += 1
                 except Exception:
                     skipped += 1
@@ -1643,7 +1632,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                             "switch": _fac_switch_of(h),   # 칩 클릭 필터용
                             "recollect": True,
                             "detail": _facility_detail(h)}
-                           for h in fac_off[:30]]},
+                           # 칩 필터가 클라이언트에서 동작하므로 넉넉히 내려보낸다
+                           # (30건 슬라이스면 '미확인' 칩이 항상 빈 목록이 되던 문제)
+                           for h in fac_off[:300]]},
             ]
 
             # 구버전 호환(problems 평면 목록) — 카테고리에서 파생

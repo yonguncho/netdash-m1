@@ -444,17 +444,24 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
                     username, password = dec.split("|", 1)
         return collect_server(db_path, sv["id"], username, password)
 
+    skipped = 0   # 중지 요청 후 시도조차 하지 않은 서버(실패로 집계하지 않음)
     try:
         with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
             for res in ex.map(_one, servers):
-                if res.get("status") == "done":
+                st = (res or {}).get("status")
+                if st == "done":
                     done += 1
+                elif st == "skipped":
+                    skipped += 1
                 else:
                     failed += 1
-                _set_progress(done=done + failed,
-                              message="서버 수집 중 (%d/%d)" % (done + failed, len(servers)))
+                _set_progress(done=done + failed + skipped,
+                              message="서버 수집 중 (%d/%d)" % (done + failed + skipped, len(servers)))
     finally:
-        _msg = ("중지됨(성공 %d · 실패 %d)" if _is_stop() else "완료(성공 %d · 실패 %d)") % (done, failed)
+        if _is_stop():
+            _msg = "중지됨(성공 %d · 실패 %d · 건너뜀 %d)" % (done, failed, skipped)
+        else:
+            _msg = "완료(성공 %d · 실패 %d)" % (done, failed)
         _set_progress(running=False, message=_msg)
-    utils.log_event("info", "server_collect_all_done", done=done, failed=failed)
-    return {"done": done, "failed": failed, "total": len(servers)}
+    utils.log_event("info", "server_collect_all_done", done=done, failed=failed, skipped=skipped)
+    return {"done": done, "failed": failed, "skipped": skipped, "total": len(servers)}
