@@ -164,8 +164,9 @@ def _inventory_rows(source, wanted, key_field, builder):
 def _norm_os_type(raw):
     """엑셀 OS 문자열 → (os_type, os_info).
 
-    os_type은 수집 로직이 분기에 쓰므로 'linux'/'windows'/'auto'로 정규화하고,
-    원문('Ubuntu 22.04' 등)은 화면 표시용 os_info로 보존한다.
+    os_type은 수집 분기에 쓰이므로 계열로 정규화하고(windows/linux/aix/solaris/
+    hpux/esxi/bsd/macos), 원문('Ubuntu 22.04' 등)은 표시용 os_info로 보존한다.
+    linux·windows가 아닌 OS도 그대로 인식해 범용 UNIX 경로로 수집된다.
     """
     s = (raw or "").strip()
     if not s:
@@ -173,9 +174,23 @@ def _norm_os_type(raw):
     low = s.lower()
     if any(k in low for k in ("windows", "win2", "win 2", "msserver", "microsoft")):
         return "windows", s
-    if any(k in low for k in ("linux", "ubuntu", "centos", "redhat", "rhel", "debian",
-                              "rocky", "suse", "unix", "aix", "solaris", "bsd")):
+    if any(k in low for k in ("esxi", "vmware", "vsphere", "vmkernel")):
+        return "esxi", s
+    if "aix" in low:
+        return "aix", s
+    if any(k in low for k in ("solaris", "sunos")):
+        return "solaris", s
+    if any(k in low for k in ("hp-ux", "hpux")):
+        return "hpux", s
+    if any(k in low for k in ("mac os", "macos", "darwin", "osx")):
+        return "macos", s
+    if "bsd" in low:
+        return "bsd", s
+    if any(k in low for k in ("linux", "ubuntu", "centos", "redhat", "red hat", "rhel",
+                              "debian", "rocky", "alma", "suse", "oracle linux", "amazon linux")):
         return "linux", s
+    if "unix" in low:
+        return "unix", s
     return "auto", s
 
 

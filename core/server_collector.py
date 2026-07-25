@@ -45,12 +45,20 @@ _VM_OUI = {
 
 
 def _norm_mac(mac):
-    """MAC을 AA:BB:CC:DD:EE:FF 로 정규화(콜론/하이픈/점 표기 수용)."""
+    """MAC을 AA:BB:CC:DD:EE:FF 로 정규화(콜론/하이픈/점 표기 수용).
+
+    AIX/Solaris는 앞 0을 생략해 출력한다(예: '0:9:6b:8f:ab:cd', '0.9.6b...') →
+    구분자로 나눠 옥텟 단위로 0을 채워 표준 표기로 맞춘다.
+    """
     if not mac:
         return ""
-    hexs = re.sub(r"[^0-9A-Fa-f]", "", str(mac))
+    s = str(mac).strip()
+    parts = re.split(r"[:\-.]", s)
+    if len(parts) == 6 and all(re.fullmatch(r"[0-9A-Fa-f]{1,2}", p or "") for p in parts):
+        return ":".join(p.rjust(2, "0") for p in parts).upper()
+    hexs = re.sub(r"[^0-9A-Fa-f]", "", s)
     if len(hexs) != 12:
-        return str(mac).upper()
+        return s.upper()
     return ":".join(hexs[i:i + 2] for i in range(0, 12, 2)).upper()
 
 
@@ -162,31 +170,114 @@ def _ssh_exec(ip, username, password, commands, timeout=15, port=22):
     return out
 
 
-def _ssh_detail_linux(ip, username, password, port=22):
-    """리눅스 SSH 상세: hostname, OS, 첫 물리 인터페이스 MAC, 리스닝 포트."""
-    o = _ssh_exec(ip, username, password,
-                  ["hostname", "uname -sr", "ip -o link", "ss -tln"], port=port)
+def _first_mac_from_text(text):
+    """임의 OS의 인터페이스 출력에서 첫 물리 MAC 추출(루프백·전부0 제외).
+
+    지원 표기: 'link/ether aa:bb:..'(iproute2), 'ether aa:bb:..'(BSD/macOS/ESXi),
+    'HWaddr aa:bb:..'(구형 ifconfig), 'aa.bb.cc.dd.ee.ff'(Solaris/AIX netstat -in),
+    'aa-bb-cc-dd-ee-ff'(일부 유닉스).
+    """
+    for ln in (text or "").splitlines():
+        low = ln.lower()
+        if " lo" in low and ("loopback" in low or low.strip().startswith("lo")):
+            continue
+        # AIX/Solaris는 앞 0을 생략(0:9:6b:..., 0.9.6b...) → 1~2자리 옥텟 허용
+        # ESXi `esxcli network nic list`는 구분자 있는 MAC이 표 중간에 위치 → 콜론형 우선 검색
+        m = (re.search(r"(?:link/ether|ether|hwaddr|address:)\s+"
+                       r"([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})", ln)
+             or re.search(r"\b([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\b", ln)
+             or re.search(r"\b([0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5})\b", ln)
+             or re.search(r"\b([0-9a-fA-F]{1,2}(?:\.[0-9a-fA-F]{1,2}){5})\b", ln)
+             # HP-UX lanscan: '0x00306EF4A1B2'
+             or re.search(r"\b0x([0-9a-fA-F]{12})\b", ln))
+        if not m:
+            continue
+        mac = _norm_mac(m.group(1).replace("-", ":").replace(".", ":"))
+        if mac and mac not in ("00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF"):
+            return mac
+    return ""
+
+
+def _listening_ports_from_text(text):
+    """netstat/ss 출력에서 LISTEN 포트 집합 추출(플랫폼 표기 차이 흡수)."""
+    ports = set()
+    for ln in (text or "").splitlines():
+        if "LISTEN" not in ln.upper():
+            continue
+        # 0.0.0.0:22 / *.22 / *:22 / [::]:443 등
+        m = (re.search(r"[\d.\[\]:*]+:(\d{1,5})\s", ln)
+             or re.search(r"\*\.(\d{1,5})\s", ln)
+             or re.search(r"\.(\d{1,5})\s+\S+\s+LISTEN", ln))
+        if m:
+            try:
+                p = int(m.group(1))
+                if 0 < p < 65536:
+                    ports.add(p)
+            except ValueError:
+                pass
+    return ports
+
+
+# 플랫폼 무관 폴백 명령 — 되는 것만 결과로 취한다(없는 명령은 빈 출력).
+_UNIX_CMDS = [
+    "hostname", "uname -n",                       # hostname
+    "uname -a", "uname -sr",                      # OS 정보
+    "ip -o link", "ifconfig -a", "netstat -in",   # MAC (Linux / BSD·AIX·HP-UX / Solaris·AIX)
+    "lanscan",                                    # HP-UX MAC(0x00306EF4A1B2)
+    "ss -tln", "netstat -an",                     # 리스닝 포트
+    "esxcli system version get",                  # VMware ESXi
+    "esxcli network nic list",
+]
+
+
+def _ssh_detail_unix(ip, username, password, port=22):
+    """범용 UNIX 계열 SSH 상세 — Linux/AIX/Solaris/HP-UX/BSD/macOS/ESXi 공용.
+
+    OS를 특정하지 못해도(unknown) 동작하도록 여러 명령을 시도해 성공한 것만 취합한다.
+    반환: {hostname?, os_info?, mac?, open_ports?}
+    """
+    o = _ssh_exec(ip, username, password, _UNIX_CMDS, port=port)
     detail = {}
-    if o.get("hostname", "").strip():
-        detail["hostname"] = o["hostname"].strip().splitlines()[0][:100]
-    if o.get("uname -sr", "").strip():
-        detail["os_info"] = o["uname -sr"].strip().splitlines()[0][:120]
-    # ip -o link: "2: ens192: <...> link/ether 00:50:56:aa:bb:cc ..."
-    for ln in (o.get("ip -o link") or "").splitlines():
-        if "link/ether" in ln and "lo:" not in ln:
-            m = re.search(r"link/ether\s+([0-9a-f:]{17})", ln, re.I)
-            if m:
-                detail["mac"] = _norm_mac(m.group(1))
+    # hostname: hostname → uname -n 폴백
+    for c in ("hostname", "uname -n"):
+        v = (o.get(c) or "").strip()
+        if v and "not found" not in v.lower():
+            detail["hostname"] = v.splitlines()[0][:100]
+            break
+    # OS 정보: esxcli(ESXi) → uname -a → uname -sr
+    esx = (o.get("esxcli system version get") or "").strip()
+    if esx:
+        _ver = re.search(r"Version:\s*(\S+)", esx)
+        _prod = re.search(r"Product:\s*(.+)", esx)
+        detail["os_info"] = ((_prod.group(1).strip() + " " if _prod else "VMware ESXi ") +
+                             (_ver.group(1) if _ver else ""))[:120].strip()
+    else:
+        for c in ("uname -a", "uname -sr"):
+            v = (o.get(c) or "").strip()
+            if v and "not found" not in v.lower():
+                detail["os_info"] = v.splitlines()[0][:120]
                 break
-    # ss -tln: "LISTEN 0 128 0.0.0.0:22 ..." → 리스닝 포트
+    # MAC: iproute2 → ifconfig → netstat -in → esxcli nic
+    for c in ("ip -o link", "ifconfig -a", "netstat -in", "esxcli network nic list"):
+        mac = _first_mac_from_text(o.get(c))
+        if mac:
+            detail["mac"] = mac
+            break
+    # 리스닝 포트: ss → netstat
     lports = set()
-    for ln in (o.get("ss -tln") or "").splitlines():
-        m = re.search(r"[\d.\[\]:*]+:(\d+)\s", ln)
-        if m and "LISTEN" in ln.upper():
-            lports.add(int(m.group(1)))
+    for c in ("ss -tln", "netstat -an"):
+        lports = _listening_ports_from_text(o.get(c))
+        if lports:
+            break
     if lports:
         detail["open_ports"] = ",".join(str(p) for p in sorted(lports)[:40])
     return detail
+
+
+# 하위 호환 별칭 — 기존 호출부/테스트가 쓰던 이름(내부는 범용 폴백으로 통일)
+def _ssh_detail_linux(ip, username, password, port=22):
+    """리눅스 SSH 상세(= 범용 UNIX 폴백). AIX/Solaris/ESXi 등에서도 최대한 수집."""
+    return _ssh_detail_unix(ip, username, password, port=port)
 
 
 def _ssh_detail_windows(ip, username, password, port=22):
@@ -218,12 +309,46 @@ def infer_os_from_scan(open_ports, netbios_hit=False):
     return None
 
 
-def detect_os(ip, username, password, timeout=15, port=22):
-    """SSH 접속 후 OS 자동 인식: 'linux' | 'windows' | None(접속 실패).
+def os_family_from_uname(uname):
+    """`uname -s`/`uname -a` 출력 → OS 계열. 미상이면 'unknown'.
 
-    ① SSH 배너(transport.remote_version)에 'windows'가 있으면 윈도우 OpenSSH.
-    ② 아니면 'uname -s' 실행 — 성공하고 Linux/BSD/Darwin이면 리눅스 계열.
-    ③ 배너 판별이 되면 명령 없이 즉시 반환(비용 절감).
+    linux/windows 외의 OS(AIX·Solaris·HP-UX·ESXi·BSD·macOS)도 그대로 식별해,
+    수집을 '지원 안 함'으로 떨구지 않고 범용 UNIX 경로로 처리하게 한다.
+    """
+    u = (uname or "").strip().lower()
+    if not u:
+        return "unknown"
+    if "linux" in u:
+        return "linux"
+    if "vmkernel" in u or "esxi" in u:
+        return "esxi"
+    if "aix" in u:
+        return "aix"
+    if "sunos" in u or "solaris" in u:
+        return "solaris"
+    if "hp-ux" in u or "hpux" in u:
+        return "hpux"
+    if "darwin" in u:
+        return "macos"
+    if "bsd" in u:
+        return "bsd"
+    if "cygwin" in u or "msys" in u or "mingw" in u or "windows" in u:
+        return "windows"
+    return "unknown"
+
+
+# UNIX 계열로 취급(= 범용 폴백 명령으로 상세 수집) — windows만 별도 경로
+UNIX_LIKE = ("linux", "aix", "solaris", "hpux", "bsd", "macos", "esxi", "unix")
+
+
+def detect_os(ip, username, password, timeout=15, port=22):
+    """SSH 접속 후 OS 자동 인식. 반환: 'windows'|'linux'|'aix'|'solaris'|'hpux'|
+    'bsd'|'macos'|'esxi'|'unknown', 접속 실패 시 None.
+
+    ① SSH 배너(transport.remote_version)에 'windows'면 윈도우 OpenSSH.
+    ② 아니면 'uname -s'(실패 시 'uname -a') → os_family_from_uname으로 계열 판정.
+    ③ 판정 불가여도 'unknown'을 반환 — 호출부가 범용 UNIX 경로로 수집을 시도한다
+       (이전엔 windows로 단정해 유닉스 서버 상세가 비었음).
     """
     import paramiko
     cli = paramiko.SSHClient()
@@ -239,15 +364,16 @@ def detect_os(ip, username, password, timeout=15, port=22):
             banner = ""
         if "windows" in banner:
             return "windows"
-        try:
-            _, stdout, _ = cli.exec_command("uname -s", timeout=timeout)
-            uname = stdout.read().decode("utf-8", "replace").strip().lower()
-            if any(k in uname for k in ("linux", "bsd", "darwin", "sunos", "aix")):
-                return "linux"
-        except Exception:
-            pass
-        # uname이 안 먹고(윈도우 cmd) 배너에 단서 없으면 윈도우로 간주
-        return "windows"
+        for cmd in ("uname -s", "uname -a"):
+            try:
+                _, stdout, _ = cli.exec_command(cmd, timeout=timeout)
+                out = stdout.read().decode("utf-8", "replace")
+                fam = os_family_from_uname(out)
+                if fam != "unknown":
+                    return fam
+            except Exception:
+                continue
+        return "unknown"   # 미상 — 범용 UNIX + 윈도우 양쪽 시도
     except Exception as e:
         utils.log_event("warning", "server_os_detect_failed", ip=ip,
                         error=str(e)[:120])
@@ -324,8 +450,9 @@ def collect_server(db_path, server_id, username=None, password=None):
             errors.append("SSH 포트(22/2222) 미개방 — 상세 수집 생략(포트/hostname/MAC로 식별)")
         else:
             os_type = (sv.get("os_type") or "auto").lower()
-            # OS 자동 인식: 'auto'이거나 미설정이면 접속해서 판별 후 os_type 확정
-            if os_type not in ("linux", "windows"):
+            # OS 자동 인식: 사용자가 windows/UNIX계열로 확정하지 않았으면 접속해 판별.
+            # (AIX·Solaris·HP-UX·ESXi·BSD·macOS도 그대로 확정 — 'unknown'이면 양쪽 시도)
+            if os_type not in ("windows",) + UNIX_LIKE:
                 detected = detect_os(ip, username, password, port=ssh_port)
                 if detected:
                     os_type = detected
@@ -333,12 +460,24 @@ def collect_server(db_path, server_id, username=None, password=None):
                     utils.log_event("info", "server_os_detected",
                                     server_id=server_id, os_type=detected, port=ssh_port)
                 else:
-                    os_type = "linux"   # 접속 실패 시 기본값
+                    os_type = "unknown"   # 접속 실패 — 아래에서 범용 경로로 재시도
             try:
                 if os_type == "windows":
                     fields.update(_ssh_detail_windows(ip, username, password, port=ssh_port))
                 else:
-                    fields.update(_ssh_detail_linux(ip, username, password, port=ssh_port))
+                    # linux 및 그 외 모든 OS(aix/solaris/hpux/bsd/macos/esxi/unknown)
+                    d = _ssh_detail_unix(ip, username, password, port=ssh_port)
+                    if not d and os_type == "unknown":
+                        # UNIX 명령이 전부 안 먹음 → 윈도우 계열일 수 있어 한 번 더 시도
+                        d = _ssh_detail_windows(ip, username, password, port=ssh_port)
+                        if d:
+                            fields["os_type"] = "windows"
+                    fields.update(d)
+                    # 수집된 OS 원문으로 계열을 확정(os_type이 unknown으로 남지 않게)
+                    if fields.get("os_info") and (fields.get("os_type") or os_type) in ("unknown", "auto"):
+                        fam = os_family_from_uname(fields["os_info"])
+                        if fam != "unknown":
+                            fields["os_type"] = fam
             except Exception as e:
                 errors.append("SSH(:%d): %s" % (ssh_port, str(e)[:110]))
 

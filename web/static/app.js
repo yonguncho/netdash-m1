@@ -4962,7 +4962,10 @@ function renderServers() {
       _srvEditId = id;
       document.getElementById("srv-name").value = sv.name || "";
       document.getElementById("srv-ip").value = sv.ip || "";
-      document.getElementById("srv-os").value = (sv.os_type === "windows" || sv.os_type === "linux") ? sv.os_type : "auto";
+      // linux/windows 외 OS(aix·solaris·hpux·esxi·bsd·macos·unix)도 드롭다운에서 복원
+      var _osOpts = ["linux", "windows", "aix", "solaris", "hpux", "esxi", "bsd", "macos", "unix"];
+      document.getElementById("srv-os").value =
+        _osOpts.indexOf(sv.os_type) >= 0 ? sv.os_type : "auto";
       document.getElementById("srv-location").value = sv.location || "";
       document.getElementById("srv-isvm").checked = !!sv.is_vm;
       var mh = document.querySelector("#modal-add-server .modal__header span");

@@ -282,6 +282,12 @@ _SERVER_ETH_IP = None   # 서버 이더넷 IP 캐시(루프백 접속 시 대체
 _collecting_firewalls = set()
 _collecting_fw_lock = threading.Lock()
 
+# 서버 os_type 허용값 — Windows가 아닌 OS는 모두 범용 UNIX 폴백 명령으로 수집한다.
+# (linux/windows만 허용하던 제약 때문에 AIX·Solaris·HP-UX·ESXi 서버 등록이 auto로
+#  덮여 수집 분기가 어긋나던 문제 해소)
+_SERVER_OS_TYPES = ("auto", "linux", "windows", "aix", "solaris", "hpux",
+                    "esxi", "bsd", "macos", "unix")
+
 
 def _server_eth_ip():
     global _SERVER_ETH_IP
@@ -1344,7 +1350,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @app.route("/api/servers", methods=["POST"])
     @rate_limit("save_server", max_requests=60, window_seconds=60)
     def save_server_endpoint():
-        """서버 등록. body: {name, ip, os_type(linux|windows), location?, is_vm?}"""
+        """서버 등록. body: {name, ip, os_type(auto|windows|UNIX 계열), location?, is_vm?}
+
+        os_type은 linux/windows 외 AIX·Solaris·HP-UX·ESXi·BSD·macOS·unix도 허용한다
+        (Windows가 아닌 OS는 모두 범용 UNIX 명령 폴백으로 수집).
+        """
         try:
             data = request.get_json(silent=True) or {}
             name = (data.get("name") or "").strip()[:100]
@@ -1355,7 +1365,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 validated_ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
             except ValueError as e:
                 return jsonify({"error": "IP 거부: %s" % e}), 400
-            os_type = data.get("os_type") if data.get("os_type") in ("linux", "windows", "auto") else "auto"
+            os_type = data.get("os_type") if data.get("os_type") in _SERVER_OS_TYPES else "auto"
             sid = db.save_server(db_path, name, validated_ip, os_type=os_type,
                                  location=(data.get("location") or "").strip()[:60] or None,
                                  is_vm=1 if data.get("is_vm") else 0)
@@ -1374,6 +1384,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             for k in ("name", "os_type", "location", "hostname"):
                 if k in data:
                     fields[k] = (str(data[k]) or "").strip()[:100] or None
+            # os_type은 허용 계열만(임의 값 저장 방지 — 수집 분기가 문자열에 의존)
+            if fields.get("os_type") and fields["os_type"] not in _SERVER_OS_TYPES:
+                fields["os_type"] = "auto"
             if "is_vm" in data:
                 fields["is_vm"] = 1 if data.get("is_vm") else 0
             if not db.get_server(db_path, server_id):

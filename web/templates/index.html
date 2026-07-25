@@ -125,10 +125,17 @@
         <label>IP <span class="required">*</span></label>
         <input id="srv-ip" type="text" placeholder="10.92.10.5">
         <label>OS</label>
-        <select id="srv-os">
+        <select id="srv-os" title="Linux/Windows가 아닌 OS(AIX·Solaris·HP-UX·ESXi 등)도 수집됩니다">
           <option value="auto">자동 인식 (계정 입력 후 수집 시)</option>
           <option value="linux">Linux</option>
           <option value="windows">Windows</option>
+          <option value="aix">AIX</option>
+          <option value="solaris">Solaris</option>
+          <option value="hpux">HP-UX</option>
+          <option value="esxi">VMware ESXi</option>
+          <option value="bsd">BSD</option>
+          <option value="macos">macOS</option>
+          <option value="unix">기타 UNIX</option>
         </select>
         <label>위치 (물리 서버 — A09U27 형식이면 서버실 현황에 표시)</label>
         <input id="srv-location" type="text" placeholder="A09U27">
