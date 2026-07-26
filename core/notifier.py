@@ -38,12 +38,32 @@ _KIND_KO = {
 }
 
 
+_dropped = 0            # 큐 포화로 버린 알람 수(무증상 유실 방지용 집계)
+
+
+def dropped_count():
+    """큐 포화로 버려진 알람 누적 수 — 진단용."""
+    return _dropped
+
+
 def notify(event):
-    """이벤트를 발송 큐에 추가(논블로킹, 가득 차면 버림)."""
+    """이벤트를 발송 큐에 추가(논블로킹, 가득 차면 버림).
+
+    버릴 때는 반드시 흔적을 남긴다. 이전엔 조용히 pass해서 대량 장애 시
+    알람이 사라져도 아무 로그가 없었다. 로그 자체가 폭주하지 않도록
+    100건마다 1회만 기록한다.
+    """
+    global _dropped
     try:
         _queue.put_nowait(dict(event))
     except queue.Full:
-        pass
+        _dropped += 1
+        if _dropped == 1 or _dropped % 100 == 0:
+            try:
+                utils.log_event("warning", "notifier_queue_full",
+                                dropped=_dropped, kind=str(event.get("kind")))
+            except Exception:
+                pass
 
 
 def _settings(db_path):

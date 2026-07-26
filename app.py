@@ -155,63 +155,75 @@ def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None):
     백그라운드 스레드에는 request가 없으므로 호출 시점에 꺼내어 넘긴다.
     """
     import json as _json
-    try:
-        firewalls = db.list_firewalls(db_path)
-        if ids:
-            _idset = set(int(x) for x in ids)
-            firewalls = [f for f in firewalls if f.get("id") in _idset]
-    except Exception as e:
-        with _fw_all_lock:
-            _fw_all.update(running=False, message=collector._sanitize_error_msg(str(e)))
-        return
+    # 이 함수는 백그라운드 스레드에서 돈다. 예상 못한 예외로 스레드가 죽으면
+    # running 플래그가 True로 남아 이후 모든 수집이 영구 409가 되므로,
+    # 바깥 try/finally로 해제를 보장한다(현장 db_error에서 실제로 재현됨).
     ok = 0
-    for i, fw in enumerate(firewalls):
-        with _fw_all_lock:
-            if _fw_all.get("stop"):   # 사용자 중지 → 남은 방화벽 건너뜀
-                _fw_all.update(running=False, message="중지됨(성공 %d/%d)" % (ok, len(firewalls)))
-                return
-        fid = fw["id"]
-        token = username = password = ""
+    firewalls = []
+    try:
         try:
-            blob = db.get_firewall_credential(db_path, fid)
-            if blob:
-                dec = credentials.decrypt_text(blob)
-                if dec:
-                    saved = _json.loads(dec)
-                    token = saved.get("token", "")
-                    username = saved.get("username", "")
-                    password = saved.get("password", "")
-        except Exception:
-            pass
-        if not (token or (username and password)) and sess_cred:
-            username, password = sess_cred
-        db.set_firewall_status(db_path, fid, "collecting")
-        try:
-            result = firewall_mod.collect_firewall(
-                fw["vendor"], fw["host"], fw.get("port"),
-                token=token, username=username, password=password,
-                verify_ssl=False, source_ip=source_ip)
-            db.save_firewall_interfaces(db_path, fid, result["interfaces"])
-            db.save_firewall_arp(db_path, fid, result["arp"])
-            if result.get("ha"):
-                try:
-                    db.set_firewall_ha_info(db_path, fid, _json.dumps(result["ha"]))
-                except Exception:
-                    pass
-            db.set_firewall_status(db_path, fid, "done")
-            ok += 1
+            firewalls = db.list_firewalls(db_path)
+            if ids:
+                _idset = set(int(x) for x in ids)
+                firewalls = [f for f in firewalls if f.get("id") in _idset]
         except Exception as e:
-            db.set_firewall_status(db_path, fid, "failed")
-            log_event("warning", "firewall_collect_all_item_error",
-                      firewall_id=fid, error=collector._sanitize_error_msg(str(e)))
-        finally:
-            token = username = password = None
             with _fw_all_lock:
-                _fw_all.update(done=i + 1, ok=ok,
-                               message="방화벽 수집 중 (%d/%d)" % (i + 1, len(firewalls)))
-    with _fw_all_lock:
-        _fw_all.update(running=False, message="완료(성공 %d/%d)" % (ok, len(firewalls)))
-    log_event("info", "firewall_collect_all_done", total=len(firewalls), ok=ok)
+                _fw_all.update(message=collector._sanitize_error_msg(str(e)))
+            return
+        for i, fw in enumerate(firewalls):
+            with _fw_all_lock:
+                if _fw_all.get("stop"):   # 사용자 중지 → 남은 방화벽 건너뜀
+                    _fw_all.update(message="중지됨(성공 %d/%d)" % (ok, len(firewalls)))
+                    return
+            fid = fw.get("id")
+            token = username = password = ""
+            try:
+                blob = db.get_firewall_credential(db_path, fid)
+                if blob:
+                    dec = credentials.decrypt_text(blob)
+                    if dec:
+                        saved = _json.loads(dec)
+                        token = saved.get("token", "")
+                        username = saved.get("username", "")
+                        password = saved.get("password", "")
+            except Exception:
+                pass
+            if not (token or (username and password)) and sess_cred:
+                username, password = sess_cred
+            try:
+                # 상태 갱신도 try 안에 둔다(DB 잠금 시 예외가 스레드를 죽이던 지점).
+                db.set_firewall_status(db_path, fid, "collecting")
+                result = firewall_mod.collect_firewall(
+                    fw["vendor"], fw["host"], fw.get("port"),
+                    token=token, username=username, password=password,
+                    verify_ssl=False, source_ip=source_ip)
+                db.save_firewall_interfaces(db_path, fid, result["interfaces"])
+                db.save_firewall_arp(db_path, fid, result["arp"])
+                if result.get("ha"):
+                    try:
+                        db.set_firewall_ha_info(db_path, fid, _json.dumps(result["ha"]))
+                    except Exception:
+                        pass
+                db.set_firewall_status(db_path, fid, "done")
+                ok += 1
+            except Exception as e:
+                try:
+                    db.set_firewall_status(db_path, fid, "failed")
+                except Exception:
+                    pass       # 상태 저장 실패가 남은 방화벽 수집을 막지 않도록
+                log_event("warning", "firewall_collect_all_item_error",
+                          firewall_id=fid, error=collector._sanitize_error_msg(str(e)))
+            finally:
+                token = username = password = None
+                with _fw_all_lock:
+                    _fw_all.update(done=i + 1, ok=ok,
+                                   message="방화벽 수집 중 (%d/%d)" % (i + 1, len(firewalls)))
+        with _fw_all_lock:
+            _fw_all.update(message="완료(성공 %d/%d)" % (ok, len(firewalls)))
+        log_event("info", "firewall_collect_all_done", total=len(firewalls), ok=ok)
+    finally:
+        with _fw_all_lock:
+            _fw_all.update(running=False, ok=ok)
 
 
 def validate_credential(value, max_length=256):
