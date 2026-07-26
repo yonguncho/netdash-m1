@@ -2053,6 +2053,26 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "facility_export_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/export/<kind>", methods=["GET"])
+    def export_dataset(kind):
+        """현황 페이지 공통 내보내기 — CSV/TXT.
+
+        kind: switches | servers | firewalls | serverroom | facility
+        ?format=csv|txt (기본 csv, UTF-8 BOM으로 Excel 한글 정상)
+        """
+        try:
+            from core import exporter
+            fmt = (request.args.get("format") or "csv").lower()
+            data, mime, fname = exporter.export(db_path, kind, fmt)
+            return Response(data, mimetype=mime,
+                            headers={"Content-Disposition": "attachment; filename=%s" % fname})
+        except ValueError:
+            return jsonify({"error": "unknown dataset"}), 404
+        except Exception as e:
+            log_event("error", "export_error", kind=kind,
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/facility/rematch", methods=["POST"])
     @rate_limit("facility_rematch", max_requests=30, window_seconds=60)
     def facility_rematch():

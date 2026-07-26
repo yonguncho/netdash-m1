@@ -464,6 +464,34 @@ body.nav-collapsed .sidebar__link { justify-content: center; }
 /* 배지 안에 도트가 이미 있는 경우(구성도 등)는 중복 방지 */
 .status-badge.no-dot::before { display: none; }
 
+/* ─── 컬럼 너비 조정(헤더 경계 드래그) ─────────── */
+.data-table th { position: sticky; }           /* sticky 유지 + 핸들 기준점 */
+.data-table th.col-resizable { position: sticky; }
+.col-resizer {
+  position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
+  cursor: col-resize; user-select: none; z-index: 3;
+  touch-action: none;
+}
+.col-resizer::after {
+  content: ""; position: absolute; left: 3px; top: 18%; bottom: 18%;
+  width: 1px; background: var(--border-strong); opacity: 0; transition: opacity .12s;
+}
+.data-table th:hover .col-resizer::after { opacity: .8; }
+.col-resizer:hover::after, .col-resizer.dragging::after {
+  opacity: 1; background: var(--primary); width: 2px;
+}
+/* 드래그 중 텍스트 선택·커서 고정 */
+body.col-resizing { cursor: col-resize !important; user-select: none !important; }
+/* 리사이즈가 켜진 표는 지정 너비를 그대로 지킨다 */
+.data-table.col-sized { table-layout: fixed; }
+/* td만 말줄임 — th는 리사이즈 핸들이 잘리지 않도록 overflow 유지 */
+.data-table.col-sized td {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.data-table.col-sized th { white-space: nowrap; }
+/* 셀 안 줄바꿈이 필요한 내용(비고·오류 메시지)은 유지 */
+.data-table.col-sized td .wrap { white-space: normal; }
+
 /* ─── M8: 장부 대조 요약 카드 ───────────────────── */
 .reconcile-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 16px; }
 .reconcile-stat {

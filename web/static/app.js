@@ -283,6 +283,184 @@ function _searchBox(targetId, placeholder) {
     "border:1px solid #cbd5e1;border-radius:4px;font-size:13px'>";
 }
 
+// ─── 현황 페이지 CSV/TXT 다운로드(공통 위임) ─────────────────────
+document.addEventListener("click", function (e) {
+  var b = e.target.closest(".nd-export");
+  if (!b) return;
+  var kind = b.getAttribute("data-export");
+  var fmt = b.getAttribute("data-fmt") || "csv";
+  if (!kind) return;
+  window.location = "/api/export/" + encodeURIComponent(kind) + "?format=" + encodeURIComponent(fmt);
+});
+
+// ─── IP 컬럼 정렬(모든 .data-table 공통) ─────────────────────────
+// 헤더에 'IP'가 있으면 클릭 시 IP 숫자 기준 오름/내림 정렬. 표 재렌더 후에도 재적용.
+(function () {
+  function ipToInt(s) {
+    var m = String(s || "").match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/);
+    if (!m) return -1;                       // IP 없는 행은 뒤로
+    return ((+m[1]) * 16777216) + ((+m[2]) * 65536) + ((+m[3]) * 256) + (+m[4]);
+  }
+  function sortByCol(tbl, idx, dir) {
+    var tb = tbl.tBodies[0];
+    if (!tb) return;
+    var rows = Array.prototype.slice.call(tb.rows).filter(function (r) {
+      return r.cells.length > idx && !r.querySelector("td[colspan]");
+    });
+    if (rows.length < 2) return;
+    rows.sort(function (a, b) {
+      return dir * (ipToInt(a.cells[idx].textContent) - ipToInt(b.cells[idx].textContent));
+    });
+    rows.forEach(function (r) { tb.appendChild(r); });
+  }
+  function setup(tbl) {
+    if (tbl.dataset.ipSort === "1") return;
+    var ths = Array.prototype.slice.call(tbl.querySelectorAll("thead th"));
+    var idx = -1;
+    ths.forEach(function (th, i) {
+      var t = (th.textContent || "").trim().toUpperCase();
+      if (idx < 0 && (t === "IP" || t === "호스트" || t.indexOf("IP") === 0)) idx = i;
+    });
+    if (idx < 0) return;
+    tbl.dataset.ipSort = "1";
+    var th = ths[idx];
+    if (th.id === "fac-sort-ip") return;      // 설비 표는 자체 정렬 사용(중복 방지)
+    th.style.cursor = "pointer";
+    th.title = "클릭: IP 오름/내림차순 정렬";
+    var arrow = document.createElement("span");
+    arrow.className = "ip-sort-arrow";
+    arrow.textContent = " ↕";
+    th.appendChild(arrow);
+    var dir = 0;
+    th.addEventListener("click", function (e) {
+      if (e.target.closest(".col-resizer")) return;   // 폭 조절 핸들 클릭은 제외
+      dir = dir === 1 ? -1 : 1;
+      arrow.textContent = dir === 1 ? " ▲" : " ▼";
+      sortByCol(tbl, idx, dir);
+      tbl._ipSortDir = dir;
+      tbl._ipSortIdx = idx;
+    });
+    // 표가 다시 그려지면(수집·폴링) 마지막 정렬을 재적용
+    var tb = tbl.tBodies[0];
+    if (tb && window.MutationObserver) {
+      var mo = new MutationObserver(function () {
+        if (tbl._ipSortDir) {
+          mo.disconnect();
+          sortByCol(tbl, tbl._ipSortIdx, tbl._ipSortDir);
+          mo.observe(tb, { childList: true });
+        }
+      });
+      mo.observe(tb, { childList: true });
+    }
+  }
+  function setupAll() { document.querySelectorAll("table.data-table").forEach(setup); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", setupAll);
+  else setupAll();
+  document.addEventListener("click", function () { setTimeout(setupAll, 60); });
+})();
+
+// ─── 표 컬럼 너비 조정(헤더 경계 드래그, 너비는 로컬 저장) ───────
+// 모든 .data-table에 적용. 헤더 우측 경계를 끌어 폭 조절, 더블클릭이면 그 컬럼 초기화.
+(function () {
+  var MIN_W = 44;
+
+  function tableKey(tbl) {
+    // 표 식별: tbody id > 표가 속한 탭 id > 문서 내 순번
+    var tb = tbl.querySelector("tbody");
+    if (tb && tb.id) return tb.id;
+    var pane = tbl.closest(".tab-pane");
+    var idx = Array.prototype.indexOf.call(document.querySelectorAll("table.data-table"), tbl);
+    return (pane ? pane.id : "tbl") + ":" + idx;
+  }
+  function loadWidths(key) {
+    try { return JSON.parse(localStorage.getItem("nd_colw:" + key) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function saveWidths(key, map) {
+    try { localStorage.setItem("nd_colw:" + key, JSON.stringify(map)); } catch (e) {}
+  }
+  // 현재 렌더된 폭을 모두 인라인으로 고정 → table-layout:fixed 전환(레이아웃 튐 방지)
+  function freeze(tbl, ths) {
+    if (tbl.classList.contains("col-sized")) return;
+    ths.forEach(function (th) { th.style.width = th.getBoundingClientRect().width + "px"; });
+    tbl.classList.add("col-sized");
+  }
+
+  function setup(tbl) {
+    if (tbl.dataset.colResize === "1") return;
+    var ths = Array.prototype.slice.call(tbl.querySelectorAll("thead th"));
+    if (ths.length < 2) return;
+    tbl.dataset.colResize = "1";
+    var key = tableKey(tbl);
+    var saved = loadWidths(key);
+
+    // 저장된 폭 복원
+    var hasSaved = false;
+    ths.forEach(function (th, i) {
+      if (saved[i]) { th.style.width = saved[i] + "px"; hasSaved = true; }
+    });
+    if (hasSaved) tbl.classList.add("col-sized");
+
+    ths.forEach(function (th, i) {
+      if (i === ths.length - 1) return;          // 마지막 컬럼은 잔여 폭
+      th.classList.add("col-resizable");
+      var grip = document.createElement("span");
+      grip.className = "col-resizer";
+      grip.title = "드래그: 폭 조절 · 더블클릭: 이 컬럼 폭 초기화";
+      th.appendChild(grip);
+
+      var startX = 0, startW = 0;
+      function onMove(e) {
+        var w = Math.max(MIN_W, startW + (e.clientX - startX));
+        th.style.width = w + "px";
+      }
+      function onUp() {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.classList.remove("col-resizing");
+        grip.classList.remove("dragging");
+        var map = loadWidths(key);
+        map[i] = Math.round(parseFloat(th.style.width) || th.getBoundingClientRect().width);
+        saveWidths(key, map);
+      }
+      grip.addEventListener("mousedown", function (e) {
+        e.preventDefault(); e.stopPropagation();
+        freeze(tbl, ths);
+        startX = e.clientX;
+        startW = th.getBoundingClientRect().width;
+        document.body.classList.add("col-resizing");
+        grip.classList.add("dragging");
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
+      // 더블클릭 = 이 컬럼만 저장 폭 삭제 후 자동 폭으로
+      grip.addEventListener("dblclick", function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var map = loadWidths(key);
+        delete map[i];
+        saveWidths(key, map);
+        th.style.width = "";
+        if (!Object.keys(map).length) {
+          ths.forEach(function (t) { t.style.width = ""; });
+          tbl.classList.remove("col-sized");
+        }
+      });
+    });
+  }
+
+  function setupAll() {
+    document.querySelectorAll("table.data-table").forEach(setup);
+  }
+  // 최초 + 탭 전환/동적 생성(상세 패널 표 등) 이후에도 적용
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", setupAll);
+  } else {
+    setupAll();
+  }
+  document.addEventListener("click", function () { setTimeout(setupAll, 60); });
+  window._ndSetupColumnResize = setupAll;   // 필요 시 수동 호출
+})();
+
 // ─── 사이드바 접기/펼치기(선택 상태는 로컬 저장) ─────────────────
 (function () {
   var btn = document.getElementById("btn-nav-toggle");
