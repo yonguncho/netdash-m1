@@ -148,11 +148,14 @@ _fw_all_lock = threading.Lock()
 _fw_all = {"running": False, "total": 0, "done": 0, "ok": 0, "message": ""}
 
 
-def _run_collect_all_firewalls(db_path, source_ip):
-    """등록된 전 방화벽을 저장된 자격증명으로 순차 수집. 진행은 _fw_all에 누적."""
+def _run_collect_all_firewalls(db_path, source_ip, ids=None):
+    """방화벽을 저장된 자격증명으로 순차 수집. ids를 주면 그 방화벽만. 진행은 _fw_all."""
     import json as _json
     try:
         firewalls = db.list_firewalls(db_path)
+        if ids:
+            _idset = set(int(x) for x in ids)
+            firewalls = [f for f in firewalls if f.get("id") in _idset]
     except Exception as e:
         with _fw_all_lock:
             _fw_all.update(running=False, message=collector._sanitize_error_msg(str(e)))
@@ -2975,18 +2978,25 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @app.route("/api/firewalls/collect-all", methods=["POST"])
     @rate_limit("collect_all_firewalls", max_requests=6, window_seconds=60)
     def collect_all_firewalls_endpoint():
-        """등록된 전 방화벽을 저장된 자격증명으로 일괄 수집(백그라운드)."""
+        """방화벽 일괄 수집(백그라운드). body {ids:[...]} 주면 그 방화벽만, 없으면 전체."""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ids") or None
         with _fw_all_lock:
             if _fw_all["running"]:
                 return jsonify({"error": "이미 수집 중입니다", "status": dict(_fw_all)}), 409
             try:
-                total = len(db.list_firewalls(db_path))
+                _all = db.list_firewalls(db_path)
+                if ids:
+                    _idset = set(int(x) for x in ids)
+                    total = len([f for f in _all if f.get("id") in _idset])
+                else:
+                    total = len(_all)
             except Exception:
                 total = 0
             _fw_all.update(running=True, total=total, done=0, ok=0, message="시작 중", stop=False)
         src = pcprofile.get_source_ip(db_path)
         threading.Thread(target=_run_collect_all_firewalls,
-                         args=(db_path, src), daemon=True).start()
+                         args=(db_path, src, ids), daemon=True).start()
         return jsonify({"ok": True, "total": total}), 202
 
     @app.route("/api/firewalls/collect-all/status", methods=["GET"])

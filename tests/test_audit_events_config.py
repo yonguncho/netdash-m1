@@ -59,7 +59,9 @@ def test_config_export_selected(client):
 
 def test_config_download_ui():
     html = HTML.read_text(encoding="utf-8")
-    assert ">config 다운로드</button>" in html
+    # v5.4 툴바 통일: 라벨이 '⬇ 설정 다운로드'로 변경(버튼 id·동작은 동일)
+    assert 'id="btn-configs-export"' in html
+    assert "설정 다운로드</button>" in html
     assert "config 일괄 다운로드" not in html
     js = APP_JS.read_text(encoding="utf-8")
     assert "export-all?ids=" in js

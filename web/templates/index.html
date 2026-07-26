@@ -323,9 +323,10 @@
           <button id="btn-view-card" class="btn btn--primary" style="font-size:12px">카드 뷰</button>
           <button id="btn-view-rack" class="btn btn--secondary" style="font-size:12px">랙 뷰</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer"><input type="checkbox" id="dash-check-all"> 전체선택</label>
-          <input id="dash-cred-user" type="text" placeholder="공통 계정" autocomplete="off" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:90px" title="여기에 계정을 입력해 두면, 스위치 선택 후 '정보 수집'을 누를 때 팝업 없이 이 계정으로 바로 수집합니다">
-          <input id="dash-cred-pass" type="password" placeholder="비밀번호" autocomplete="new-password" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:90px">
-          <label style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#475569;cursor:pointer" title="이 계정을 각 장비에 암호화 저장해 자동 수집에 재사용"><input type="checkbox" id="dash-cred-persist"> 저장</label>
+          <!-- 공통 계정 입력칸은 보안상 제거(어깨너머·화면공유 노출 방지).
+               '정보 수집'을 누르면 팝업에서만 입력받는다. -->
+          <input type="hidden" id="dash-cred-user"><input type="hidden" id="dash-cred-pass">
+          <input type="checkbox" id="dash-cred-persist" style="display:none">
           <button id="btn-bulk-collect" class="btn btn--primary" style="font-size:12px" disabled>정보 수집 (0)</button>
           <button id="btn-dash-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
           <input id="loc-filter-dash" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·위치...)" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:180px">
@@ -369,13 +370,16 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">서버실 현황</span>
         <div class="pane-toolbar__actions">
+          <input id="loc-filter-room" class="loc-filter" type="text" placeholder="검색 (랙·이름·IP...)" style="width:200px">
           <button id="btn-room-card" class="btn btn--primary" style="font-size:12px">카드 뷰</button>
           <button id="btn-room-rack" class="btn btn--secondary" style="font-size:12px">랙 뷰</button>
-          <button id="btn-room-export" class="btn btn--secondary" style="font-size:12px">⬇ 엑셀(랙배치)</button>
+          <button id="btn-room-collect" class="btn btn--secondary" style="font-size:12px" title="서버실에 등록된 스위치·방화벽·서버를 저장 계정으로 일괄 재수집">정보 수집</button>
+          <button id="btn-room-diagnose" class="btn btn--secondary" style="font-size:12px" title="서버실 장비의 도달성·계정 인증을 확인(스위치 전체 진단)">전체 진단</button>
           <button class="btn btn--secondary nd-export" data-export="serverroom" data-label="서버실 현황" style="font-size:12px" title="목록을 파일로 저장(CSV/TXT 선택)">⬇ 다운로드</button>
-          <input id="loc-filter-room" class="loc-filter" type="text" placeholder="랙/이름으로 필터..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px">
+          <button id="btn-room-export" class="btn btn--secondary" style="font-size:12px" title="랙 배치도(엑셀) — 랙·U 그리드 형식">⬇ 랙배치(엑셀)</button>
         </div>
       </div>
+      <div id="room-progress" style="margin:6px 0"></div>
       <p style="margin:4px 0 10px;font-size:12px;color:#64748b">스위치 <b>위치(location)</b>를 <code>A09U27</code> 형식으로 기재하면 서버실 <b>A09 랙 U27</b>에 표시됩니다. (수정 → 위치 입력)</p>
       <div id="room-grid" class="switch-grid">
         <p class="placeholder">서버실 위치(A09U27 형식)가 지정된 장비가 없습니다.</p>
@@ -388,15 +392,17 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">서버 현황</span>
         <div class="pane-toolbar__actions">
-          <input id="server-search" placeholder="이름·IP·hostname·MAC 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:180px">
-          <input id="server-common-user" placeholder="공통 SSH 계정" autocomplete="off" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:120px" title="여기에 계정/비밀번호를 넣고 '전체 수집'하면 모든 서버에 이 계정으로 SSH 접속해 OS·상세를 수집합니다">
-          <input id="server-common-pass" type="password" placeholder="비밀번호" autocomplete="new-password" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:110px">
-          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer" title="입력한 공통 계정을 각 서버에 저장(다음부터 자동 사용)"><input type="checkbox" id="server-common-persist"> 계정 저장</label>
+          <input id="server-search" class="loc-filter" placeholder="검색 (이름·IP·hostname·MAC...)" style="width:200px">
           <button id="btn-server-add" class="btn btn--primary" style="font-size:12px">+ 서버 추가</button>
-          <button id="btn-server-import" class="btn btn--primary" style="font-size:12px" title="이름·IP가 담긴 엑셀(.xlsx)로 서버를 일괄 등록. 계정·OS·상세는 이후 '수집'에서 자동 채웁니다.">📥 엑셀 가져오기</button>
+          <button id="btn-server-import" class="btn btn--primary" style="font-size:12px" title="이름·IP가 담긴 엑셀(.xlsx)로 서버를 일괄 등록. 계정·OS·상세는 이후 '수집'에서 자동 채웁니다.">📥 엑셀 등록</button>
+          <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="체크한 서버를 수집(미체크 시 전체). 계정이 필요하면 팝업에서 입력합니다.">정보 수집 (0)</button>
+          <button id="btn-server-diagnose" class="btn btn--secondary" style="font-size:12px" title="계정 없이 도달성·열린 포트·hostname·연결 스위치를 확인(무자격 진단)">전체 진단</button>
           <button class="btn btn--secondary nd-export" data-export="servers" data-label="서버 현황" style="font-size:12px" title="목록을 파일로 저장(CSV/TXT 선택)">⬇ 다운로드</button>
-          <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="체크한 서버를 수집(아무것도 체크 안 하면 전체). 공통 계정을 입력하면 그 계정으로 접속해 OS 자동 인식·상세까지 수집합니다.">정보 수집</button>
+          <button id="btn-server-bulk-delete" class="btn btn--ghost" style="font-size:12px" title="체크한 서버 삭제" disabled>선택 삭제 (0)</button>
           <input id="server-import-file" type="file" accept=".xlsx" style="display:none">
+          <!-- 공통 계정 입력칸은 보안상 제거 — 수집 시 팝업에서만 입력(세션 유지) -->
+          <input type="hidden" id="server-common-user"><input type="hidden" id="server-common-pass">
+          <input type="checkbox" id="server-common-persist" style="display:none">
         </div>
       </div>
       <div id="server-progress" style="margin:6px 0"></div>
@@ -459,10 +465,13 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">방화벽 현황</span>
         <div class="pane-toolbar__actions">
+          <input id="fw-search" class="loc-filter" type="text" placeholder="검색 (이름·벤더·호스트·위치...)" style="width:210px">
           <button id="btn-add-firewall" class="btn btn--primary">+ 방화벽 추가</button>
-          <button id="btn-firewall-import" class="btn btn--primary" title="이름·벤더·호스트IP·포트가 담긴 엑셀(.xlsx)로 방화벽을 일괄 등록">📥 엑셀 가져오기</button>
+          <button id="btn-firewall-import" class="btn btn--primary" title="이름·벤더·호스트IP·포트가 담긴 엑셀(.xlsx)로 방화벽을 일괄 등록">📥 엑셀 등록</button>
+          <button id="btn-firewall-collect-all" class="btn btn--secondary" title="체크한 방화벽을 저장된 계정으로 수집(미체크 시 전체)">정보 수집 (0)</button>
+          <button id="btn-fw-diagnose-all" class="btn btn--secondary" title="등록된 방화벽의 관리 포트 도달성과 저장 계정 인증을 확인">전체 진단</button>
           <button class="btn btn--secondary nd-export" data-export="firewalls" data-label="방화벽 현황" title="목록을 파일로 저장(CSV/TXT 선택)">⬇ 다운로드</button>
-          <button id="btn-firewall-collect-all" class="btn btn--secondary" title="등록된 전 방화벽을 저장된 계정으로 일괄 수집">전체 수집</button>
+          <button id="btn-fw-bulk-delete" class="btn btn--ghost" title="체크한 방화벽 삭제" disabled>선택 삭제 (0)</button>
           <input id="firewall-import-file" type="file" accept=".xlsx" style="display:none">
         </div>
       </div>
@@ -470,10 +479,11 @@
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th>이름</th><th>벤더</th><th>호스트</th><th>위치</th><th>상태</th><th>연결 상태</th><th>작업</th></tr>
+            <tr><th style="width:34px;text-align:center"><input type="checkbox" id="fw-check-all" title="전체 선택"></th>
+                <th>이름</th><th>벤더</th><th>호스트</th><th>위치</th><th>상태</th><th>연결 상태</th><th>작업</th></tr>
           </thead>
           <tbody id="firewall-table-body">
-            <tr><td colspan="7" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
+            <tr><td colspan="8" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
           </tbody>
         </table>
       </div>
@@ -485,12 +495,14 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">스위치 현황</span>
         <div class="pane-toolbar__actions">
-          <button id="btn-sw-collect" class="btn btn--primary" style="font-size:12px" title="체크한 스위치를 계정 입력 후 일괄 수집" disabled>정보 수집 (0)</button>
-          <button id="btn-sw-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
+          <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·모델·버전·위치...)" style="width:230px">
+          <button id="btn-sw-add" class="btn btn--primary" style="font-size:12px" title="스위치 1대 수동 등록">+ 스위치 추가</button>
+          <button id="btn-sw-import" class="btn btn--primary" style="font-size:12px" title="IP·호스트네임 등이 담긴 엑셀(.xlsx)로 스위치를 일괄 등록">📥 엑셀 등록</button>
+          <button id="btn-sw-collect" class="btn btn--secondary" style="font-size:12px" title="체크한 스위치를 계정 입력 후 일괄 수집" disabled>정보 수집 (0)</button>
           <button id="btn-diagnose-all" class="btn btn--secondary" style="font-size:12px" title="등록된 전 스위치를 저장된 계정으로 일괄 진단해 벤더·OS·버전·시리얼 미지정/누락을 자동 채웁니다">전체 진단</button>
-          <button id="btn-configs-export" class="btn btn--secondary" style="font-size:12px" title="체크한 스위치의 최신 running-config 백업을 ZIP으로 다운로드(선택 필요)">config 다운로드</button>
           <button class="btn btn--secondary nd-export" data-export="switches" data-label="스위치 현황" style="font-size:12px" title="목록을 파일로 저장(CSV/TXT 선택)">⬇ 다운로드</button>
-          <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·모델·버전·위치...)" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:230px">
+          <button id="btn-configs-export" class="btn btn--secondary" style="font-size:12px" title="체크한 스위치의 최신 running-config 백업을 ZIP으로 다운로드(선택 필요)">⬇ 설정 다운로드</button>
+          <button id="btn-sw-bulk-delete" class="btn btn--ghost" style="font-size:12px" disabled>선택 삭제 (0)</button>
         </div>
       </div>
       <div id="diag-progress" style="margin:6px 0"></div>

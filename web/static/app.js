@@ -283,6 +283,61 @@ function _searchBox(targetId, placeholder) {
     "border:1px solid #cbd5e1;border-radius:4px;font-size:13px'>";
 }
 
+// ─── 페이지 공통 툴바 보조 동작 ──────────────────────────────────
+(function () {
+  // 스위치 현황: '+ 스위치 추가'·'📥 엑셀 등록' — 현황판의 기존 모달/입력을 재사용
+  var add = document.getElementById("btn-sw-add");
+  if (add) add.addEventListener("click", function () {
+    var b = document.getElementById("btn-add-manual");
+    if (b) b.click();
+  });
+  var imp = document.getElementById("btn-sw-import");
+  if (imp) imp.addEventListener("click", function () {
+    var inp = document.getElementById("excel-file-input");
+    if (inp) inp.click();
+  });
+
+  // 서버실 현황: 정보 수집(서버실 장비 일괄) / 전체 진단
+  var rc = document.getElementById("btn-room-collect");
+  if (rc) rc.addEventListener("click", function () {
+    var sw = (_switches || []).filter(function (s) { return s.room_rack; });
+    var fw = (_firewalls || []).filter(function (f) { return f.room_rack; });
+    var sv = (_servers || []).filter(function (s) { return s.room_rack; });
+    var total = sw.length + fw.length + sv.length;
+    if (!total) { alert("서버실(위치 A09U27 형식)에 등록된 장비가 없습니다."); return; }
+    if (!confirm("서버실 장비 " + total + "대를 저장된 계정으로 재수집합니다.\n" +
+                 "(스위치 " + sw.length + " · 방화벽 " + fw.length + " · 서버 " + sv.length + ")\n계속할까요?")) return;
+    // 방화벽·서버는 저장 계정으로 일괄, 스위치는 계정이 필요하므로 선택분을 모달로
+    if (fw.length) {
+      fetch("/api/firewalls/collect-all", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ids: fw.map(function (f) { return f.id; })}),
+      }).then(function () {
+        pollProgress("/api/firewalls/collect-all/status", "room-progress", loadFirewalls,
+          "/api/firewalls/collect-all/stop");
+      }).catch(function () {});
+    }
+    if (sv.length) {
+      fetch("/api/servers/collect-all", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ids: sv.map(function (s) { return s.id; })}),
+      }).then(function () {
+        pollProgress("/api/servers/collect-all/status", "room-progress", loadServers,
+          "/api/servers/collect-all/stop");
+      }).catch(function () {});
+    }
+    if (sw.length) {
+      // 스위치는 계정 입력이 필요 — 공통 일괄 수집 모달로 안내
+      alert("스위치 " + sw.length + "대는 계정이 필요합니다. 스위치 현황 탭에서 체크 후 '정보 수집'을 사용하세요.");
+    }
+  });
+  var rd = document.getElementById("btn-room-diagnose");
+  if (rd) rd.addEventListener("click", function () {
+    var b = document.getElementById("btn-diagnose-all");
+    if (b) { b.click(); }
+  });
+})();
+
 // ─── 현황 페이지 다운로드: 버튼 클릭 → 형식 선택 팝업 → 저장 ─────
 var _exportKind = null;
 document.addEventListener("click", function (e) {
@@ -1990,6 +2045,60 @@ function renderReconcile(data) {
 var _fwStatusMeta = {
   done: "ok", collecting: "collecting", failed: "critical", new: "new",
 };
+var _fwSel = {};    // 방화벽 표 선택 집합 {id: true} — 재렌더에도 유지
+
+function _updateFwSelBtns() {
+  var n = document.querySelectorAll("#firewall-table-body .fw-check:checked").length;
+  var c = document.getElementById("btn-firewall-collect-all");
+  if (c) c.textContent = "정보 수집 (" + n + ")";
+  var d = document.getElementById("btn-fw-bulk-delete");
+  if (d) { d.textContent = "선택 삭제 (" + n + ")"; d.disabled = n === 0; }
+}
+
+(function () {
+  // 검색
+  var s = document.getElementById("fw-search");
+  if (s) s.addEventListener("input", function () { renderFirewalls(_firewalls || []); });
+  // 전체 선택
+  var all = document.getElementById("fw-check-all");
+  if (all) all.addEventListener("change", function () {
+    document.querySelectorAll("#firewall-table-body .fw-check").forEach(function (c) {
+      c.checked = all.checked;
+      if (all.checked) _fwSel[c.value] = true; else delete _fwSel[c.value];
+    });
+    _updateFwSelBtns();
+  });
+  // 개별 선택(위임)
+  var tb = document.getElementById("firewall-table-body");
+  if (tb) tb.addEventListener("change", function (e) {
+    if (e.target && e.target.classList.contains("fw-check")) {
+      if (e.target.checked) _fwSel[e.target.value] = true; else delete _fwSel[e.target.value];
+      _updateFwSelBtns();
+    }
+  });
+  // 선택 삭제(개별 DELETE 반복)
+  var del = document.getElementById("btn-fw-bulk-delete");
+  if (del) del.addEventListener("click", function () {
+    var ids = Object.keys(_fwSel);
+    if (!ids.length) return;
+    if (!confirm(ids.length + "대 방화벽을 삭제할까요? (수집 데이터도 함께 삭제)")) return;
+    Promise.all(ids.map(function (id) {
+      return fetch("/api/firewalls/" + id, { method: "DELETE" }).catch(function () {});
+    })).then(function () { _fwSel = {}; loadFirewalls(); });
+  });
+  // 전체 진단 — 저장 계정으로 도달성·인증 확인(수집과 동일 경로, 진행바 공유)
+  var diag = document.getElementById("btn-fw-diagnose-all");
+  if (diag) diag.addEventListener("click", function () {
+    if (!confirm("등록된 방화벽의 관리 포트 도달성과 저장 계정 인증을 확인합니다.\n계속할까요?")) return;
+    fetch("/api/firewalls/collect-all", { method: "POST" })
+      .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+      .then(function (res) {
+        if (!res.ok) { alert((res.b && res.b.error) || "진단 시작 실패"); return; }
+        pollProgress("/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls,
+          "/api/firewalls/collect-all/stop");
+      }).catch(function () { alert("진단 오류"); });
+  });
+})();
 
 function loadFirewalls() {
   fetch("/api/firewalls")
@@ -2007,8 +2116,19 @@ function loadFirewalls() {
 function renderFirewalls(firewalls) {
   var tbody = document.getElementById("firewall-table-body");
   if (!tbody) return;
+  // 검색 필터(이름·벤더·호스트·위치)
+  var q = ((document.getElementById("fw-search") || {}).value || "").trim().toLowerCase();
+  if (q) {
+    firewalls = (firewalls || []).filter(function (f) {
+      return [f.name, f.vendor, f.host, f.location, f.room_label]
+        .map(function (x) { return (x || "").toString().toLowerCase(); }).join(" ").indexOf(q) >= 0;
+    });
+  }
   if (!firewalls.length) {
-    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>";
+    tbody.innerHTML = "<tr><td colspan=8 style='color:#64748b'>" +
+      (q ? "검색 조건에 맞는 방화벽이 없습니다." : "등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.") +
+      "</td></tr>";
+    _updateFwSelBtns();
     return;
   }
   tbody.innerHTML = firewalls.map(function(f) {
@@ -2017,7 +2137,10 @@ function renderFirewalls(firewalls) {
     var locCell = f.room_label
       ? "<span style='color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
       : escHtml(f.location || "-");
-    return "<tr><td>" + escHtml(f.name) + "</td>" +
+    return "<tr>" +
+      "<td style='text-align:center'><input type='checkbox' class='fw-check' value='" + f.id + "'" +
+      (_fwSel[f.id] ? " checked" : "") + "></td>" +
+      "<td>" + escHtml(f.name) + "</td>" +
       "<td>" + escHtml(f.vendor) + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
@@ -5004,7 +5127,21 @@ function loadCreds() {
 
 // ─── 서버 현황 (리눅스/윈도우) ───────────────────────────────────
 var _srvCollectId = null;
+var _srvCollectIds = null;   // 일괄 수집 대상 id 목록(null/빈=전체)
 var _srvEditId = null;   // 서버 수정 대상 id(null=신규 등록)
+
+function _selectedServerIds() {
+  return Array.prototype.map.call(
+    document.querySelectorAll("#server-table-body .srv-check:checked"),
+    function (c) { return parseInt(c.value, 10); });
+}
+function _updateSrvSelBtns() {
+  var n = _selectedServerIds().length;
+  var c = document.getElementById("btn-server-collect-all");
+  if (c) c.textContent = "정보 수집 (" + n + ")";
+  var d = document.getElementById("btn-server-bulk-delete");
+  if (d) { d.textContent = "선택 삭제 (" + n + ")"; d.disabled = n === 0; }
+}
 
 // 서버 수집 모달 오픈(서버 현황 테이블 + 서버실 카드 공용)
 function _openServerCollect(id) {
@@ -5105,49 +5242,78 @@ function renderServers() {
   var searchEl = document.getElementById("server-search");
   if (searchEl) searchEl.addEventListener("input", renderServers);
 
-  // 서버 전체선택 체크박스
+  // 서버 전체선택 체크박스 + 선택 카운트
   var srvAll = document.getElementById("srv-check-all");
   if (srvAll) srvAll.addEventListener("change", function () {
     Array.prototype.forEach.call(document.querySelectorAll("#server-table-body .srv-check"),
       function (c) { c.checked = srvAll.checked; });
+    _updateSrvSelBtns();
+  });
+  var srvBody = document.getElementById("server-table-body");
+  if (srvBody) srvBody.addEventListener("change", function (e) {
+    if (e.target && e.target.classList.contains("srv-check")) _updateSrvSelBtns();
+  });
+
+  // 서버 선택 삭제
+  var srvDel = document.getElementById("btn-server-bulk-delete");
+  if (srvDel) srvDel.addEventListener("click", function () {
+    var ids = _selectedServerIds();
+    if (!ids.length) return;
+    if (!confirm(ids.length + "대 서버를 삭제할까요?")) return;
+    Promise.all(ids.map(function (id) {
+      return fetch("/api/servers/" + id, { method: "DELETE" }).catch(function () {});
+    })).then(loadServers);
+  });
+
+  // 서버 전체 진단 — 계정 없이 도달성·포트·hostname·연결 스위치 확인
+  var srvDiag = document.getElementById("btn-server-diagnose");
+  if (srvDiag) srvDiag.addEventListener("click", function () {
+    if (!(_servers || []).length) { alert("등록된 서버가 없습니다."); return; }
+    if (!confirm("계정 없이 전 서버의 도달성·열린 포트·hostname·연결 스위치를 확인합니다.\n계속할까요?")) return;
+    fetch("/api/servers/collect-all", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
+    }).then(function () {
+      pollProgress("/api/servers/collect-all/status", "server-progress", loadServers,
+        "/api/servers/collect-all/stop");
+    }).catch(function (e) { console.error(e); alert("진단 오류"); });
   });
 
   var allBtn = document.getElementById("btn-server-collect-all");
   if (allBtn) allBtn.addEventListener("click", function () {
     if (!_servers.length) { alert("등록된 서버가 없습니다."); return; }
-    // 체크된 서버만(없으면 전체)
-    var ids = Array.prototype.map.call(
-      document.querySelectorAll("#server-table-body .srv-check:checked"),
-      function (c) { return parseInt(c.value, 10); });
-    var body = {
-      username: (document.getElementById("server-common-user") || {}).value || "",
-      password: (document.getElementById("server-common-pass") || {}).value || "",
-      persist: (document.getElementById("server-common-persist") || {}).checked || false,
-    };
-    if (ids.length) body.ids = ids;
-    var withCred = body.username && body.password;
-    var scope = ids.length ? ("선택한 " + ids.length + "대") : "전체";
-    var msg = withCred
-      ? scope + " 서버를 공통 계정으로 재수집합니다. OS 자동 인식·상세까지 수집합니다.\n계속할까요?"
-      : scope + " 서버를 수집합니다. (공통 계정 미입력 — 포트/hostname/연결 스위치만, 저장 계정 있는 서버는 상세 포함)\n계속할까요?";
-    if (!confirm(msg)) return;
+    // 체크된 서버만(없으면 전체) — 계정은 팝업에서만 입력받는다(툴바 노출 제거)
+    var ids = _selectedServerIds();
+    _srvCollectIds = ids;                       // 일괄 대상(빈 배열이면 전체)
+    _srvCollectId = null;
+    var t = document.getElementById("srv-collect-title");
+    if (t) t.textContent = "서버 수집 — " + (ids.length ? (ids.length + "대 선택") : "전체");
+    var u = document.getElementById("srv-username"); if (u) u.value = "";
+    var p = document.getElementById("srv-password"); if (p) p.value = "";
+    var pe = document.getElementById("srv-persist"); if (pe) pe.checked = false;
+    openModal("modal-server-collect");
+  });
+
+  // 일괄 수집 실행(모달에서 계정 입력 후 호출) — 진행바 폴링 공용
+  window._runServerCollectAll = function (body) {
     fetch("/api/servers/collect-all", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); })
       .then(function () {
-        // 비밀번호 입력란은 비워 화면 잔류 방지
-        var pw = document.getElementById("server-common-pass"); if (pw) pw.value = "";
-        // 진행바 폴링 → 완료 시 목록 새로고침
         pollProgress("/api/servers/collect-all/status", "server-progress", loadServers,
           "/api/servers/collect-all/stop");
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
-  });
+  };
 
   // 방화벽 전체 수집 — 진행바 폴링
   var fwAllBtn = document.getElementById("btn-firewall-collect-all");
   if (fwAllBtn) fwAllBtn.addEventListener("click", function () {
-    if (!confirm("등록된 전 방화벽을 저장된 계정으로 일괄 수집합니다.\n계속할까요?")) return;
-    fetch("/api/firewalls/collect-all", { method: "POST" })
+    var ids = Object.keys(_fwSel).map(function (x) { return parseInt(x, 10); });
+    var scope = ids.length ? ("선택한 " + ids.length + "대") : "등록된 전";
+    if (!confirm(scope + " 방화벽을 저장된 계정으로 수집합니다.\n계속할까요?")) return;
+    fetch("/api/firewalls/collect-all", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(ids.length ? {ids: ids} : {}),
+    })
       .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (res) {
         if (!res.ok) { alert((res.b && res.b.error) || "일괄 수집 시작 실패"); return; }
@@ -5201,12 +5367,20 @@ function renderServers() {
 
   var collectBtn = document.getElementById("btn-srv-collect");
   if (collectBtn) collectBtn.addEventListener("click", function () {
-    if (_srvCollectId == null) return;
     var body = {
       username: document.getElementById("srv-username").value.trim(),
       password: document.getElementById("srv-password").value,
       persist: document.getElementById("srv-persist").checked,
     };
+    // 일괄 경로(정보 수집 버튼): 선택분 또는 전체를 계정과 함께 수집
+    if (_srvCollectId == null) {
+      if (_srvCollectIds && _srvCollectIds.length) body.ids = _srvCollectIds;
+      closeModal("modal-server-collect");
+      document.getElementById("srv-password").value = "";   // 화면 잔류 방지
+      _srvCollectIds = null;
+      window._runServerCollectAll(body);
+      return;
+    }
     fetch("/api/servers/" + _srvCollectId + "/collect", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function (res) {
