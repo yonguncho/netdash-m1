@@ -15,3 +15,7 @@ htmlcov/
 *.egg-info/
 .venv/
 venv/
+
+netdash.log
+netdash_server.info
+netdash_server.lock

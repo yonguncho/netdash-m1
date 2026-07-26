@@ -48,6 +48,11 @@
       <button id="ip-search-btn">검색</button>
     </div>
     <div class="header__right">
+      <!-- 세션 수집 계정: 활성일 때만 표시. 비밀번호는 서버 메모리에만 있고 여기엔 안 나온다. -->
+      <span id="sess-cred" class="sess-cred hidden">
+        <span id="sess-cred-text">🔓 수집 계정 활성</span>
+        <button id="btn-sess-lock" title="지금 즉시 세션 계정 폐기(다음 수집부터 재입력)">잠금</button>
+      </span>
       <button id="btn-settings" class="alert-bell" title="설정 — 자동 수집 시각·상태 감시·알람·이메일 발송">⚙</button>
       <button id="btn-creds" class="alert-bell" title="저장 계정 관리(스위치·방화벽·PC 프로필 계정 확인/삭제)">🔑</button>
       <button id="btn-audit" class="alert-bell" title="접근 로그(어느 PC가 언제 무엇을 했는지)">📒</button>
@@ -225,6 +230,8 @@
         <input id="srv-password" type="password" autocomplete="new-password">
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:8px;cursor:pointer">
           <input id="srv-persist" type="checkbox"> 계정 저장 (다음 수집·전체 수집에 자동 사용)</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:6px;cursor:pointer">
+          <input id="srv-remember" type="checkbox"> 이 세션 동안 기억 (30분, 서버 메모리에만)</label>
       </div>
       <div class="modal__footer">
         <button id="btn-srv-collect" class="btn btn--primary">수집</button>
@@ -687,6 +694,10 @@
         <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;cursor:pointer">
           <input id="bulk-persist" type="checkbox">
           이 계정을 저장해 자동 수집에 사용 (암호화 저장, 화면 비노출)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px;cursor:pointer">
+          <input id="bulk-remember" type="checkbox">
+          이 세션 동안 기억 (30분, 서버 메모리에만 — 재입력 없이 수집)
         </label>
         <p style="margin-top:8px;font-size:12px;color:#64748b">선택한 장비를 동시에(백그라운드) 수집합니다. 진행 상태는 카드 색상으로 표시됩니다.</p>
       </div>

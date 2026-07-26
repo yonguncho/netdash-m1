@@ -2595,9 +2595,14 @@ document.addEventListener("change", function (e) {
     if (!ids.length) { closeModal("modal-bulk-collect"); return; }
     var username = document.getElementById("bulk-username").value.trim();
     var password = document.getElementById("bulk-password").value;
-    if (!username || !password) { alert("아이디와 패스워드를 입력하세요."); return; }
+    // 세션 계정이 살아 있으면 빈칸으로 두어도 서버가 그 계정을 쓴다.
+    if ((!username || !password) && !window._sessCredActive) {
+      alert("아이디와 패스워드를 입력하세요."); return;
+    }
     var persist = document.getElementById("bulk-persist");
     var be = document.getElementById("bulk-enable");
+    var rem = document.getElementById("bulk-remember");
+    if (rem && rem.checked && username && password) sessCredRemember(username, password);
     _runBulkCollect(ids, username, password, persist && persist.checked,
                     be ? be.value : "");
     _swCollectIds = null;
@@ -5372,6 +5377,10 @@ function renderServers() {
       password: document.getElementById("srv-password").value,
       persist: document.getElementById("srv-persist").checked,
     };
+    var srem = document.getElementById("srv-remember");
+    if (srem && srem.checked && body.username && body.password) {
+      sessCredRemember(body.username, body.password);
+    }
     // 일괄 경로(정보 수집 버튼): 선택분 또는 전체를 계정과 함께 수집
     if (_srvCollectId == null) {
       if (_srvCollectIds && _srvCollectIds.length) body.ids = _srvCollectIds;
@@ -5700,6 +5709,50 @@ function loadNetInfo() {
       .then(function(res) { if (res.error) alert(res.error); })
       .catch(function(e) { console.error(e); });
   });
+})();
+
+// ─── 세션 수집 계정 (메모리 전용·TTL) ─────────────────────────────
+// 계정을 화면에 상시 노출하지 않으면서 수집 때마다 재입력하는 불편을 없앤다.
+// 비밀번호는 서버 메모리에만 있고, 여기서는 활성 여부와 남은 시간만 받아 표시한다.
+window._sessCredActive = false;
+
+function sessCredRemember(username, password) {
+  return fetch("/api/session/credential", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: username, password: password }),
+  }).then(function (r) { return r.json(); })
+    .then(function () { refreshSessCred(); })
+    .catch(function () { /* 실패해도 이번 수집은 입력한 계정으로 진행됨 */ });
+}
+
+function refreshSessCred() {
+  var box = document.getElementById("sess-cred");
+  if (!box) return;
+  fetch("/api/session/credential").then(function (r) { return r.json(); })
+    .then(function (s) {
+      window._sessCredActive = !!(s && s.active);
+      if (!window._sessCredActive) { box.classList.add("hidden"); return; }
+      var min = Math.max(1, Math.ceil((s.remaining || 0) / 60));
+      var t = document.getElementById("sess-cred-text");
+      if (t) t.textContent = "🔓 수집 계정 활성 " + escHtml(s.username || "") + " (" + min + "분)";
+      box.classList.remove("hidden");
+    })
+    .catch(function () { /* 상태 조회 실패는 무시 */ });
+}
+
+(function () {
+  var lock = document.getElementById("btn-sess-lock");
+  if (lock) lock.addEventListener("click", function () {
+    fetch("/api/session/credential/lock", { method: "POST" })
+      .then(function () {
+        window._sessCredActive = false;
+        var box = document.getElementById("sess-cred");
+        if (box) box.classList.add("hidden");
+      });
+  });
+  refreshSessCred();
+  setInterval(refreshSessCred, 30000);   // 남은 시간 갱신·만료 시 자동 숨김
 })();
 
 // ─── 초기화 ──────────────────────────────────────────────────────

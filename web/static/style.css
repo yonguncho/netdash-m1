@@ -679,6 +679,19 @@ body.col-resizing { cursor: col-resize !important; user-select: none !important;
   font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
 }
 .alert-badge.hidden { display: none; }
+/* 세션 수집 계정 표시 — 활성일 때만 노출(비밀번호는 표시하지 않음) */
+.sess-cred {
+  display: inline-flex; align-items: center; gap: 6px; margin-right: 4px;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857;
+  font-size: 11px; white-space: nowrap;
+}
+.sess-cred.hidden { display: none; }
+.sess-cred button {
+  border: 1px solid #a7f3d0; background: #fff; color: #047857;
+  border-radius: 4px; font-size: 11px; padding: 1px 6px; cursor: pointer;
+}
+.sess-cred button:hover { background: #d1fae5; }
 .alert-row {
   display: flex; align-items: flex-start; gap: 8px; padding: 8px 4px;
   border-bottom: 1px solid var(--border); font-size: 13px;

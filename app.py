@@ -148,8 +148,12 @@ _fw_all_lock = threading.Lock()
 _fw_all = {"running": False, "total": 0, "done": 0, "ok": 0, "message": ""}
 
 
-def _run_collect_all_firewalls(db_path, source_ip, ids=None):
-    """방화벽을 저장된 자격증명으로 순차 수집. ids를 주면 그 방화벽만. 진행은 _fw_all."""
+def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None):
+    """방화벽을 저장된 자격증명으로 순차 수집. ids를 주면 그 방화벽만. 진행은 _fw_all.
+
+    sess_cred: (username, password) — 저장된 자격증명이 없는 방화벽에만 쓰는 세션 계정.
+    백그라운드 스레드에는 request가 없으므로 호출 시점에 꺼내어 넘긴다.
+    """
     import json as _json
     try:
         firewalls = db.list_firewalls(db_path)
@@ -179,6 +183,8 @@ def _run_collect_all_firewalls(db_path, source_ip, ids=None):
                     password = saved.get("password", "")
         except Exception:
             pass
+        if not (token or (username and password)) and sess_cred:
+            username, password = sess_cred
         db.set_firewall_status(db_path, fid, "collecting")
         try:
             result = firewall_mod.collect_firewall(
@@ -1462,6 +1468,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             data = request.get_json(silent=True) or {}
             cu = (data.get("username") or "").strip() or None
             cp = data.get("password") or None
+            # 요청에 계정이 없으면 이 세션에 보관된 수집 계정 사용(메모리·TTL)
+            if not (cu and cp):
+                _sc = _session_cred()
+                if _sc:
+                    cu, cp = _sc
             persist = bool(data.get("persist"))
             ids = data.get("ids") or None   # 선택 수집(없으면 전체)
             threading.Thread(
@@ -2061,6 +2072,53 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "facility_export_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    def _cred_owner():
+        """세션 자격증명 소유자 키 — 접속한 원격 주소(브라우저 PC) 기준."""
+        return request.remote_addr or "local"
+
+    def _session_cred():
+        """(username, password) 또는 None — 수집 경로에서 계정 미입력 시 사용."""
+        from core import session_creds
+        return session_creds.get_credential(_cred_owner())
+
+    @app.route("/api/session/credential", methods=["GET"])
+    def session_cred_status():
+        """수집 계정 활성 상태(비밀번호는 반환하지 않음)."""
+        from core import session_creds
+        return jsonify(session_creds.status(_cred_owner()))
+
+    @app.route("/api/session/credential", methods=["POST"])
+    @rate_limit("session_cred", max_requests=20, window_seconds=60)
+    def session_cred_set():
+        """수집 계정을 이 세션(메모리)에만 TTL 동안 보관. 디스크 저장 없음."""
+        try:
+            data = request.get_json(silent=True) or {}
+            u = (data.get("username") or "").strip()
+            p = data.get("password") or ""
+            if not u or not p:
+                return jsonify({"error": "username/password required"}), 400
+            try:
+                u = validate_credential(u)
+                p = validate_credential(p)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            from core import session_creds
+            ttl = session_creds.set_credential(_cred_owner(), u, p, data.get("ttl"))
+            log_event("info", "session_cred_set", owner=_cred_owner(), ttl=ttl,
+                      minutes=ttl // 60)
+            return jsonify({"ok": True, "ttl": ttl})
+        except Exception as e:
+            log_event("error", "session_cred_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/session/credential/lock", methods=["POST"])
+    def session_cred_lock():
+        """즉시 잠금 — 보관 중인 계정을 폐기."""
+        from core import session_creds
+        session_creds.clear(_cred_owner())
+        log_event("info", "session_cred_locked", owner=_cred_owner())
+        return jsonify({"ok": True})
+
     @app.route("/api/export/<kind>", methods=["GET"])
     def export_dataset(kind):
         """현황 페이지 공통 내보내기 — CSV/TXT.
@@ -2255,7 +2313,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             sw = db.get_switch(db_path, switch_id)
             if not sw:
                 return jsonify({"error": "switch not found"}), 404
-            # 게이트웨이 스위치 IP는 등록 시 검증됨. 계정: 입력 또는 저장된 자격증명.
+            # 게이트웨이 스위치 IP는 등록 시 검증됨.
+            # 계정 우선순위: 요청 입력 > 세션 보관(메모리·TTL) > 저장된 자격증명.
+            if not (username and password):
+                _sc = _session_cred()
+                if _sc:
+                    username, password = _sc
             if not (username and password):
                 blob = db.get_switch_credential(db_path, switch_id)
                 if blob:
@@ -2996,7 +3059,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             _fw_all.update(running=True, total=total, done=0, ok=0, message="시작 중", stop=False)
         src = pcprofile.get_source_ip(db_path)
         threading.Thread(target=_run_collect_all_firewalls,
-                         args=(db_path, src, ids), daemon=True).start()
+                         args=(db_path, src, ids, _session_cred()), daemon=True).start()
         return jsonify({"ok": True, "total": total}), 202
 
     @app.route("/api/firewalls/collect-all/status", methods=["GET"])
@@ -3056,6 +3119,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     if data.get("enable_secret") else None
             except ValueError as ve:
                 return jsonify({"error": str(ve)}), 400
+            # 요청에 계정이 없으면 이 세션에 보관된 수집 계정 사용(메모리·TTL)
+            if not (username and password):
+                _sc = _session_cred()
+                if _sc:
+                    username, password = _sc
             if not config.app.get("demo_mode") and (not username or not password):
                 return jsonify({"error": "username and password required"}), 400
 
@@ -3132,6 +3200,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             except ValueError as validation_error:
                 log_event("warning", "collect_invalid_credentials", switch_id=switch_id, reason=str(validation_error))
                 return jsonify({"error": str(validation_error)}), 400
+
+            # 요청에 계정이 없으면 이 세션에 보관된 수집 계정 사용(메모리·TTL)
+            if not (username and password):
+                _sc = _session_cred()
+                if _sc:
+                    username, password = _sc
 
             # CWE-522 fix: Require credentials in production mode; sanitize log output
             if not config.app.get("demo_mode") and (not username or not password):
