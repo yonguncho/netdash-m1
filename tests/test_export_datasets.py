@@ -84,18 +84,38 @@ def test_export_endpoint(client):
     assert client.get("/api/export/nope").status_code == 404
 
 
-def test_export_buttons_present():
+def test_export_buttons_and_format_modal():
+    """페이지마다 다운로드 버튼 1개 + 형식 선택 팝업(CSV/TXT)."""
     html = HTML.read_text(encoding="utf-8")
     for kind in ("serverroom", "servers", "firewalls", "switches", "facility"):
         assert 'data-export="%s"' % kind in html
-    assert html.count('class="btn btn--secondary nd-export"') >= 5
+    assert 'data-fmt=' not in html                  # 형식별 버튼은 없어짐
+    assert 'id="modal-export"' in html and 'id="btn-export-go"' in html
+    assert html.count("name=\"export-fmt\"") == 2   # CSV/TXT 라디오
     js = APP_JS.read_text(encoding="utf-8")
-    assert "nd-export" in js and "/api/export/" in js
+    assert "modal-export" in js and "/api/export/" in js
+    assert "export-fmt']:checked" in js
 
 
-def test_column_resize_and_ip_sort_ui():
+def test_column_resize_and_sort_ui():
     js = APP_JS.read_text(encoding="utf-8")
     assert "col-resizer" in js and "nd_colw:" in js      # 컬럼 폭 조절·저장
-    assert "ip-sort-arrow" in js and "ipToInt" in js     # IP 정렬
+    assert "ipToInt" in js and "natKey" in js            # IP·위치(자연) 정렬
+    assert "ip-sort-arrow" not in js                     # 화살표 표시 제거
+    assert "_sortDir" in js and "_sortMode" in js        # 1클릭 오름/2클릭 내림
     css = CSS.read_text(encoding="utf-8")
     assert ".col-resizer" in css and ".data-table.col-sized" in css
+    assert ".export-opt" in css
+
+
+def test_mac_cache_warm_and_swr():
+    """관제 지연 개선: 기동 워밍 + 만료 시에도 즉시 응답(백그라운드 갱신)."""
+    import inspect
+    import app as _app
+    from core import db as _db
+    assert hasattr(_db, "warm_mac_last_cache")
+    # 주 서버 기동 서비스에서 워밍 시작(읽기전용 인스턴스는 제외 — 올바른 위치)
+    assert "warm_mac_last_cache" in inspect.getsource(_app._start_primary_services)
+    src = inspect.getsource(_db.get_mac_last_seen)
+    assert "refreshing" in src        # stale-while-revalidate
+    assert "_build_mac_last_map" in src

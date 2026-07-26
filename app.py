@@ -414,6 +414,11 @@ def _start_primary_services(config, db_path):
             reachability.start_monitor(db_path)
         except Exception as e:
             log_event("warning", "reachability_start_failed", error=str(e))
+        # 관제/설비가 쓰는 'MAC 최근위치' 맵을 기동 직후 미리 구축(첫 진입 지연 제거)
+        try:
+            db.warm_mac_last_cache(db_path)
+        except Exception as e:
+            log_event("warning", "mac_cache_warm_start_failed", error=str(e))
         # 알람 이메일 발송 스레드(설정으로 on/off, 60초 묶음 발송)
         try:
             from core import notifier

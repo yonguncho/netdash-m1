@@ -283,25 +283,51 @@ function _searchBox(targetId, placeholder) {
     "border:1px solid #cbd5e1;border-radius:4px;font-size:13px'>";
 }
 
-// ─── 현황 페이지 CSV/TXT 다운로드(공통 위임) ─────────────────────
+// ─── 현황 페이지 다운로드: 버튼 클릭 → 형식 선택 팝업 → 저장 ─────
+var _exportKind = null;
 document.addEventListener("click", function (e) {
   var b = e.target.closest(".nd-export");
   if (!b) return;
-  var kind = b.getAttribute("data-export");
-  var fmt = b.getAttribute("data-fmt") || "csv";
-  if (!kind) return;
-  window.location = "/api/export/" + encodeURIComponent(kind) + "?format=" + encodeURIComponent(fmt);
+  _exportKind = b.getAttribute("data-export");
+  if (!_exportKind) return;
+  var t = document.getElementById("export-title");
+  if (t) t.textContent = (b.getAttribute("data-label") || "목록") + " 다운로드";
+  var csv = document.querySelector("input[name='export-fmt'][value='csv']");
+  if (csv) csv.checked = true;                 // 기본 CSV
+  openModal("modal-export");
 });
+(function () {
+  var go = document.getElementById("btn-export-go");
+  if (!go) return;
+  go.addEventListener("click", function () {
+    if (!_exportKind) return;
+    var sel = document.querySelector("input[name='export-fmt']:checked");
+    var fmt = sel ? sel.value : "csv";
+    closeModal("modal-export");
+    window.location = "/api/export/" + encodeURIComponent(_exportKind) +
+      "?format=" + encodeURIComponent(fmt);
+  });
+})();
 
-// ─── IP 컬럼 정렬(모든 .data-table 공통) ─────────────────────────
-// 헤더에 'IP'가 있으면 클릭 시 IP 숫자 기준 오름/내림 정렬. 표 재렌더 후에도 재적용.
+// ─── 표 정렬(IP·위치 컬럼) ───────────────────────────────────────
+// 헤더 클릭 1회=오름차순, 2회=내림차순. 화살표 표시 없이 클릭만으로 동작.
+// 표가 다시 그려져도(수집·폴링) 마지막 정렬을 유지한다.
 (function () {
   function ipToInt(s) {
     var m = String(s || "").match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/);
     if (!m) return -1;                       // IP 없는 행은 뒤로
     return ((+m[1]) * 16777216) + ((+m[2]) * 65536) + ((+m[3]) * 256) + (+m[4]);
   }
-  function sortByCol(tbl, idx, dir) {
+  // 위치: '1공장 Assembly(B02) 1층 TPS01', 'A09U27', 'RC_4F' 등 — 숫자는 자연 정렬
+  function natKey(s) {
+    return String(s || "").trim().toLowerCase()
+      .replace(/\d+/g, function (n) { return n.padStart(8, "0"); });
+  }
+  function cellText(row, idx) {
+    var c = row.cells[idx];
+    return c ? (c.textContent || "").trim() : "";
+  }
+  function sortBy(tbl, idx, dir, mode) {
     var tb = tbl.tBodies[0];
     if (!tb) return;
     var rows = Array.prototype.slice.call(tb.rows).filter(function (r) {
@@ -309,44 +335,44 @@ document.addEventListener("click", function (e) {
     });
     if (rows.length < 2) return;
     rows.sort(function (a, b) {
-      return dir * (ipToInt(a.cells[idx].textContent) - ipToInt(b.cells[idx].textContent));
+      if (mode === "ip") return dir * (ipToInt(cellText(a, idx)) - ipToInt(cellText(b, idx)));
+      var ka = natKey(cellText(a, idx)), kb = natKey(cellText(b, idx));
+      // 빈 값은 항상 뒤로(정렬 방향과 무관)
+      if (!ka && kb) return 1;
+      if (ka && !kb) return -1;
+      return dir * (ka < kb ? -1 : ka > kb ? 1 : 0);
     });
     rows.forEach(function (r) { tb.appendChild(r); });
   }
   function setup(tbl) {
-    if (tbl.dataset.ipSort === "1") return;
+    if (tbl.dataset.ndSort === "1") return;
     var ths = Array.prototype.slice.call(tbl.querySelectorAll("thead th"));
-    var idx = -1;
+    if (!ths.length) return;
+    tbl.dataset.ndSort = "1";
     ths.forEach(function (th, i) {
+      if (th.id === "fac-sort-ip") return;          // 설비 IP는 자체 정렬 사용
       var t = (th.textContent || "").trim().toUpperCase();
-      if (idx < 0 && (t === "IP" || t === "호스트" || t.indexOf("IP") === 0)) idx = i;
+      var mode = null;
+      if (t === "IP" || t === "호스트" || t === "관리 IP" || t.indexOf("IP") === 0) mode = "ip";
+      else if (t === "위치" || t === "랙" || t === "대역") mode = "text";
+      if (!mode) return;
+      th.style.cursor = "pointer";
+      th.title = "클릭: 오름차순 / 다시 클릭: 내림차순";
+      th.addEventListener("click", function (e) {
+        if (e.target.closest(".col-resizer")) return;   // 폭 조절 핸들 클릭 제외
+        // 같은 컬럼 재클릭이면 방향 반전, 다른 컬럼이면 오름차순부터
+        var dir = (tbl._sortIdx === i && tbl._sortDir === 1) ? -1 : 1;
+        tbl._sortIdx = i; tbl._sortDir = dir; tbl._sortMode = mode;
+        sortBy(tbl, i, dir, mode);
+      });
     });
-    if (idx < 0) return;
-    tbl.dataset.ipSort = "1";
-    var th = ths[idx];
-    if (th.id === "fac-sort-ip") return;      // 설비 표는 자체 정렬 사용(중복 방지)
-    th.style.cursor = "pointer";
-    th.title = "클릭: IP 오름/내림차순 정렬";
-    var arrow = document.createElement("span");
-    arrow.className = "ip-sort-arrow";
-    arrow.textContent = " ↕";
-    th.appendChild(arrow);
-    var dir = 0;
-    th.addEventListener("click", function (e) {
-      if (e.target.closest(".col-resizer")) return;   // 폭 조절 핸들 클릭은 제외
-      dir = dir === 1 ? -1 : 1;
-      arrow.textContent = dir === 1 ? " ▲" : " ▼";
-      sortByCol(tbl, idx, dir);
-      tbl._ipSortDir = dir;
-      tbl._ipSortIdx = idx;
-    });
-    // 표가 다시 그려지면(수집·폴링) 마지막 정렬을 재적용
+    // 재렌더 후 마지막 정렬 유지
     var tb = tbl.tBodies[0];
     if (tb && window.MutationObserver) {
       var mo = new MutationObserver(function () {
-        if (tbl._ipSortDir) {
+        if (tbl._sortDir) {
           mo.disconnect();
-          sortByCol(tbl, tbl._ipSortIdx, tbl._ipSortDir);
+          sortBy(tbl, tbl._sortIdx, tbl._sortDir, tbl._sortMode);
           mo.observe(tb, { childList: true });
         }
       });

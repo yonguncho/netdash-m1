@@ -1002,29 +1002,53 @@ _mac_cache_lock = threading.Lock()
 _MAC_LAST_TTL = 45.0          # 초 — 이 시간 내 재호출은 캐시 재사용
 
 
+#  MAC 정규화용 변환표(구분자 제거) — re.sub보다 수 배 빠르다(수만 행 순회 경로)
+_MAC_STRIP = {ord(c): None for c in ":-. \t"}
+
+
 def _build_mac_last_map(db_path):
-    """모든 스냅샷을 1회 스캔해 {정규화MAC: {switch_name, port, ts}} 전체 맵 구성."""
-    import re as _re
-    out, best_sid = {}, {}
+    """{정규화MAC: {switch_name, port, ts}} 전체 맵(과거 스냅샷 포함).
+
+    SQL 집계(GROUP BY mac + 자기조인)는 SQLite에서 오히려 느려(측정 2.8s vs 0.2s)
+    전체 행을 한 번 읽고 파이썬에서 최신 스냅샷을 고른다. 정렬 대신 단순 비교라 O(n).
+    호출은 캐시·백그라운드 갱신 뒤에 있어 사용자 요청을 막지 않는다.
+    """
+    out, best = {}, {}
     with get_db(db_path) as conn:
+        conn.row_factory = None          # 튜플 접근이 Row보다 빠름
         cur = conn.cursor()
         try:
             cur.execute(
-                "SELECT m.mac AS mac, m.port AS port, s.name AS sw, "
-                "       snap.collected_at AS ts, snap.id AS sid "
+                "SELECT m.mac, m.port, s.name, snap.collected_at, m.snapshot_id "
                 "FROM mac_entries m JOIN switches s ON m.switch_id = s.id "
                 "JOIN snapshots snap ON m.snapshot_id = snap.id")
-            for r in cur.fetchall():
-                h = _re.sub(r"[^0-9a-f]", "", (r["mac"] or "").lower())
+            for mac, port, sw, ts, sid in cur.fetchall():
+                if not mac:
+                    continue
+                h = mac.lower().translate(_MAC_STRIP)
                 if len(h) != 12:
                     continue
-                sid = r["sid"] or 0
-                if h not in best_sid or sid > best_sid[h]:   # 가장 최근 스냅샷 유지
-                    best_sid[h] = sid
-                    out[h] = {"switch_name": r["sw"], "port": r["port"], "ts": r["ts"]}
+                if h not in best or (sid or 0) > best[h]:
+                    best[h] = sid or 0
+                    out[h] = {"switch_name": sw, "port": port, "ts": ts}
         except Exception:
             pass
     return out
+
+
+def warm_mac_last_cache(db_path):
+    """앱 기동 직후 백그라운드로 MAC 최근위치 맵을 미리 구축(관제 첫 진입 지연 제거)."""
+    def _work():
+        try:
+            m = _build_mac_last_map(db_path)
+            import time as _t
+            with _mac_cache_lock:
+                _mac_last_cache[str(db_path)] = {"built": _t.monotonic(), "map": m,
+                                                 "refreshing": False}
+            utils.log_event("info", "mac_last_cache_warmed", entries=len(m))
+        except Exception as e:
+            utils.log_event("warning", "mac_last_cache_warm_failed", error=str(e)[:120])
+    threading.Thread(target=_work, daemon=True).start()
 
 
 def invalidate_mac_last_cache(db_path=None):
@@ -1061,13 +1085,33 @@ def get_mac_last_seen(db_path, want_macs=None):
     now = _t.monotonic()
     with _mac_cache_lock:
         ent = _mac_last_cache.get(key)
-        fresh = ent is not None and (now - ent["built"]) <= _MAC_LAST_TTL
-        full = ent["map"] if fresh else None
+        full = ent["map"] if ent else None
+        stale = ent is None or (now - ent["built"]) > _MAC_LAST_TTL
+        refreshing = bool(ent and ent.get("refreshing"))
+        if ent and stale and not refreshing:
+            ent["refreshing"] = True         # 이 호출이 갱신 담당
+            need_bg = True
+        else:
+            need_bg = False
     if full is None:
-        built = _build_mac_last_map(db_path)   # 락 밖에서 조회(다른 요청 블로킹 방지)
+        # 최초 1회만 동기 구축(이후에는 항상 캐시를 즉시 반환)
+        built = _build_mac_last_map(db_path)
         with _mac_cache_lock:
-            _mac_last_cache[key] = {"built": now, "map": built}
+            _mac_last_cache[key] = {"built": now, "map": built, "refreshing": False}
         full = built
+    elif need_bg:
+        # 만료됐어도 옛 값을 즉시 반환하고 갱신은 백그라운드로(관제 폴링 지연 제거)
+        def _refresh():
+            try:
+                m = _build_mac_last_map(db_path)
+                with _mac_cache_lock:
+                    _mac_last_cache[key] = {"built": _t.monotonic(), "map": m, "refreshing": False}
+            except Exception:
+                with _mac_cache_lock:
+                    e = _mac_last_cache.get(key)
+                    if e:
+                        e["refreshing"] = False
+        threading.Thread(target=_refresh, daemon=True).start()
     if want is None:
         return dict(full)
     return {k: v for k, v in full.items() if k in want}

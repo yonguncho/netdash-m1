@@ -492,6 +492,21 @@ body.col-resizing { cursor: col-resize !important; user-select: none !important;
 /* 셀 안 줄바꿈이 필요한 내용(비고·오류 메시지)은 유지 */
 .data-table.col-sized td .wrap { white-space: normal; }
 
+/* 정렬 가능한 헤더 — 화살표 대신 hover 강조로 알려준다 */
+.data-table th[style*="cursor: pointer"]:hover,
+.data-table th[style*="cursor:pointer"]:hover { background: var(--primary-soft); color: var(--primary); }
+
+/* 다운로드 형식 선택 옵션 */
+.export-opt {
+  display: flex; align-items: flex-start; gap: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+.export-opt:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.export-opt input { margin-top: 3px; }
+.export-opt:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+
 /* ─── M8: 장부 대조 요약 카드 ───────────────────── */
 .reconcile-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 16px; }
 .reconcile-stat {
