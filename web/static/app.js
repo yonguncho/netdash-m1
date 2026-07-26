@@ -283,6 +283,23 @@ function _searchBox(targetId, placeholder) {
     "border:1px solid #cbd5e1;border-radius:4px;font-size:13px'>";
 }
 
+// ─── 사이드바 접기/펼치기(선택 상태는 로컬 저장) ─────────────────
+(function () {
+  var btn = document.getElementById("btn-nav-toggle");
+  if (!btn) return;
+  function apply(collapsed) {
+    document.body.classList.toggle("nav-collapsed", collapsed);
+    btn.textContent = collapsed ? "▶" : "◀ 메뉴 접기";
+    try { localStorage.setItem("nd_nav_collapsed", collapsed ? "1" : "0"); } catch (e) {}
+  }
+  var saved = "0";
+  try { saved = localStorage.getItem("nd_nav_collapsed") || "0"; } catch (e) {}
+  apply(saved === "1");
+  btn.addEventListener("click", function () {
+    apply(!document.body.classList.contains("nav-collapsed"));
+  });
+})();
+
 // ─── 탭 전환 ─────────────────────────────────────────────────────
 document.querySelectorAll(".tab-nav__btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -575,10 +592,9 @@ function _updateStatusCounts(list) {
   document.querySelectorAll(".dash-sfilter").forEach(function (btn) {
     btn.addEventListener("click", function () {
       _dashStatusFilter = btn.getAttribute("data-sfilter");
+      // KPI 카드 선택 표시(.active) — 클래스 통째 교체하지 않아 카드 스타일 유지
       document.querySelectorAll(".dash-sfilter").forEach(function (b) {
-        b.className = "btn dash-sfilter " +
-          (b === btn ? "btn--primary" : "btn--secondary");
-        b.style.fontSize = "12px";
+        b.classList.toggle("active", b === btn);
       });
       _bulkSel = {};  // 필터 전환 시 이전 선택 해제(다른 리스트 오수집 방지)
       var allc = document.getElementById("dash-check-all");

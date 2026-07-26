@@ -13,7 +13,9 @@ APP_JS = ROOT / "web" / "static" / "app.js"
 def test_switch_tab_renamed():
     """탭 이름: '스위치 현황' (v3.26.1에서 '스위치 리스트'→'스위치 현황' 재변경)."""
     html = HTML.read_text(encoding="utf-8")
-    assert '>스위치 현황</button>' in html
+    # v5.2: 사이드바 네비로 이동하며 라벨이 <span class="nav-label">로 감싸짐
+    assert 'data-tab="switch"' in html
+    assert '<span class="nav-label">스위치 현황</span>' in html
     assert "스위치 리스트" not in html
 
 

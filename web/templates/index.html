@@ -7,11 +7,40 @@
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/vendor/xterm.css">
 </head>
-<body>
-  <!-- 헤더 -->
+<body class="app-shell">
+  <!-- 좌측 사이드바(벤더 NMS 표준 네비게이션) -->
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <span class="sidebar__mark">ND</span>
+      <span>
+        <div class="sidebar__title">NetDash</div>
+        <div class="sidebar__sub">NETWORK OPERATIONS</div>
+      </span>
+    </div>
+    <div class="sidebar__section">모니터링</div>
+    <!-- 탭 버튼은 여기(사이드바)로 이동 — data-tab/클래스는 그대로라 동작 동일 -->
+    <nav class="tab-nav">
+      <button class="tab-nav__btn active" data-tab="dashboard"><span class="nav-ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span><span class="nav-label">현황판</span></button>
+      <button class="tab-nav__btn" data-tab="room"><span class="nav-ico"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="6" rx="1.5"/><rect x="4" y="10" width="16" height="6" rx="1.5"/><rect x="4" y="17" width="16" height="4" rx="1.5"/><circle cx="8" cy="6" r="0.8" fill="currentColor"/><circle cx="8" cy="13" r="0.8" fill="currentColor"/></svg></span><span class="nav-label">서버실 현황</span></button>
+      <button class="tab-nav__btn" data-tab="firewall"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6l7-3z"/></svg></span><span class="nav-label">방화벽 현황</span></button>
+      <button class="tab-nav__btn" data-tab="switch"><span class="nav-ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="8" width="19" height="8" rx="1.6"/><path d="M6 12h2M10 12h2M14 12h2M18 12h1.5"/></svg></span><span class="nav-label">스위치 현황</span></button>
+      <button class="tab-nav__btn" data-tab="server"><span class="nav-ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></span><span class="nav-label">서버 현황</span></button>
+      <button class="tab-nav__btn" data-tab="facility"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M3 21V9l6-3v3l6-3v4l6-3v14z"/><path d="M8 21v-4M14 21v-4"/></svg></span><span class="nav-label">설비 현황</span></button>
+      <button class="tab-nav__btn" data-tab="vlan"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1.6" fill="currentColor"/><circle cx="15" cy="12" r="1.6" fill="currentColor"/><circle cx="10" cy="18" r="1.6" fill="currentColor"/></svg></span><span class="nav-label">VLAN</span></button>
+      <button class="tab-nav__btn" data-tab="topology"><span class="nav-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.4"/><circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="18" r="2.4"/><path d="M12 7.4v4.6M12 12l-5.4 4M12 12l5.4 4"/></svg></span><span class="nav-label">토폴로지</span></button>
+    </nav>
+    <div class="sidebar__footer">
+      <a href="/wall" target="_blank" class="sidebar__link" title="대형 모니터용 관제 화면(새 탭, 10초 자동 갱신)">
+        <span class="nav-ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12" rx="1.8"/><path d="M9 20h6M12 16v4"/></svg></span><span>관제 화면</span>
+      </a>
+      <button id="btn-nav-toggle" class="nav-toggle" title="사이드바 접기/펼치기">◀ 메뉴 접기</button>
+    </div>
+  </aside>
+
+  <!-- 상단바 -->
   <header class="header">
     <div class="header__left">
-      <span class="header__logo">NetDash</span>
+      <span class="header__logo">네트워크 현황</span>
       {% if demo_mode %}<span class="badge badge--demo">DEMO</span>{% endif %}
     </div>
     <div class="header__search">
@@ -19,7 +48,6 @@
       <button id="ip-search-btn">검색</button>
     </div>
     <div class="header__right">
-      <a href="/wall" target="_blank" class="btn btn--secondary" style="font-size:11px;padding:3px 8px;text-decoration:none" title="대형 모니터용 관제 화면(새 탭, 10초 자동 갱신)">🖥 관제</a>
       <button id="btn-settings" class="alert-bell" title="설정 — 자동 수집 시각·상태 감시·알람·이메일 발송">⚙</button>
       <button id="btn-creds" class="alert-bell" title="저장 계정 관리(스위치·방화벽·PC 프로필 계정 확인/삭제)">🔑</button>
       <button id="btn-audit" class="alert-bell" title="접근 로그(어느 PC가 언제 무엇을 했는지)">📒</button>
@@ -255,17 +283,6 @@
   </div>
 
   <!-- 탭 네비게이션 -->
-  <nav class="tab-nav">
-    <button class="tab-nav__btn active" data-tab="dashboard">현황판</button>
-    <button class="tab-nav__btn" data-tab="room">서버실 현황</button>
-    <button class="tab-nav__btn" data-tab="firewall">방화벽 현황</button>
-    <button class="tab-nav__btn" data-tab="switch">스위치 현황</button>
-    <button class="tab-nav__btn" data-tab="server">서버 현황</button>
-    <button class="tab-nav__btn" data-tab="facility">설비 현황</button>
-    <button class="tab-nav__btn" data-tab="vlan">VLAN</button>
-    <button class="tab-nav__btn" data-tab="topology">토폴로지</button>
-  </nav>
-
   <!-- 탭 컨텐츠 -->
   <main class="main">
 
@@ -291,15 +308,27 @@
         </div>
       </div>
       <div id="diagnostics-container"></div>
-      <!-- 상태 필터: 오류/미수집만 골라 보고 그 리스트만 선택·재수집 -->
-      <div id="dash-status-tabs" style="display:flex;gap:6px;margin:2px 0 10px">
-        <button class="btn btn--primary dash-sfilter" data-sfilter="all" style="font-size:12px">전체 <span id="sf-cnt-all">0</span></button>
-        <button class="btn btn--secondary dash-sfilter" data-sfilter="ok" style="font-size:12px">정상 <span id="sf-cnt-ok">0</span></button>
-        <button class="btn btn--secondary dash-sfilter" data-sfilter="failed" style="font-size:12px">오류 <span id="sf-cnt-failed">0</span></button>
-        <button class="btn btn--secondary dash-sfilter" data-sfilter="new" style="font-size:12px">미수집 <span id="sf-cnt-new">0</span></button>
-        <span style="font-size:11px;color:#64748b;align-self:center;margin-left:6px">
-          탭 선택 → 전체선택 → '정보 수집'으로 해당 리스트만 재수집</span>
+      <!-- KPI 요약(클릭 = 상태 필터). 오류/미수집만 골라 보고 그 리스트만 재수집 -->
+      <div id="dash-status-tabs" class="kpi-row">
+        <button class="kpi kpi--total dash-sfilter active" data-sfilter="all" title="전체 TPS 스위치">
+          <span class="kpi__ico">▦</span>
+          <span class="kpi__body"><span class="kpi__val" id="sf-cnt-all">0</span><span class="kpi__label">전체 장비</span></span>
+        </button>
+        <button class="kpi kpi--ok dash-sfilter" data-sfilter="ok" title="정상 수집·도달">
+          <span class="kpi__ico">✓</span>
+          <span class="kpi__body"><span class="kpi__val" id="sf-cnt-ok">0</span><span class="kpi__label">정상</span></span>
+        </button>
+        <button class="kpi kpi--bad dash-sfilter" data-sfilter="failed" title="수집 실패 또는 도달 불가">
+          <span class="kpi__ico">!</span>
+          <span class="kpi__body"><span class="kpi__val" id="sf-cnt-failed">0</span><span class="kpi__label">오류·도달불가</span></span>
+        </button>
+        <button class="kpi kpi--warn dash-sfilter" data-sfilter="new" title="아직 한 번도 수집하지 않음">
+          <span class="kpi__ico">◷</span>
+          <span class="kpi__body"><span class="kpi__val" id="sf-cnt-new">0</span><span class="kpi__label">미수집</span></span>
+        </button>
       </div>
+      <p style="font-size:11.5px;color:#64748b;margin:-6px 0 10px">
+        카드를 클릭하면 해당 상태만 표시 → 전체선택 → '정보 수집'으로 그 목록만 재수집합니다.</p>
       <div id="switch-grid" class="switch-grid">
         <p class="placeholder">스위치를 추가하거나 엑셀 파일을 가져오세요.</p>
       </div>
