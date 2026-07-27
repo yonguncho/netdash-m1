@@ -2514,6 +2514,31 @@ function collectSwitch(switchId, username, password, persist, enableSecret) {
 }
 
 // ─── 일괄 정보 수집 (공통 계정) ──────────────────────────────────
+// 선택 대상 요약 HTML. 이름을 전부 나열하면(수백 대) 팝업이 화면 밖으로 자라
+// 계정 입력칸과 '수집 시작' 버튼을 누를 수 없게 된다 → 앞 몇 대만 보이고
+// 전체는 접어 둔다(펼치면 스크롤 목록).
+var _BULK_PREVIEW = 5;
+function _bulkTargetInfo(ids) {
+  var names = ids.map(function (id) {
+    var s = (_switches || []).find(function (x) { return String(x.id) === String(id); });
+    return s ? (s.name + " (" + s.ip + ")") : ("#" + id);
+  });
+  var head = "<strong>" + ids.length + "대</strong> 선택됨";
+  if (names.length <= _BULK_PREVIEW) {
+    return head + "<div style='margin-top:4px;color:var(--text-2)'>" +
+      names.map(escHtml).join(", ") + "</div>";
+  }
+  return head +
+    "<div style='margin-top:4px;color:var(--text-2)'>" +
+      names.slice(0, _BULK_PREVIEW).map(escHtml).join(", ") +
+      " <span style='color:var(--text-faint)'>외 " + (names.length - _BULK_PREVIEW) + "대</span>" +
+    "</div>" +
+    "<details class='target-list' style='margin-top:6px'>" +
+      "<summary>대상 " + names.length + "대 전체 보기</summary>" +
+      "<div class='target-list__items'>" + names.map(escHtml).join("<br>") + "</div>" +
+    "</details>";
+}
+
 function _updateBulkCollectBtn() {
   var n = Object.keys(_bulkSel).length;
   var btn = document.getElementById("btn-bulk-collect");
@@ -2664,13 +2689,7 @@ document.addEventListener("change", function (e) {
                       user, pass, hpersist && hpersist.checked);
       return;
     }
-    var names = ids.map(function (id) {
-      var s = (_switches || []).find(function (x) { return String(x.id) === String(id); });
-      return s ? (s.name + " (" + s.ip + ")") : ("#" + id);
-    });
-    document.getElementById("bulk-cred-info").innerHTML =
-      "<strong>" + ids.length + "대</strong> 선택됨<br>" +
-      "<span style='font-size:12px;color:#475569'>" + names.map(escHtml).join(", ") + "</span>";
+    document.getElementById("bulk-cred-info").innerHTML = _bulkTargetInfo(ids);
     document.getElementById("bulk-username").value = "";
     document.getElementById("bulk-password").value = "";
     var be = document.getElementById("bulk-enable"); if (be) be.value = "";
@@ -2708,13 +2727,7 @@ document.addEventListener("change", function (e) {
       function (c) { return parseInt(c.value, 10); });
     if (!ids.length) { alert("먼저 수집할 스위치를 체크하세요."); return; }
     _swCollectIds = ids;
-    var names = ids.map(function (id) {
-      var s = (_switches || []).find(function (x) { return String(x.id) === String(id); });
-      return s ? (s.name + " (" + s.ip + ")") : ("#" + id);
-    });
-    document.getElementById("bulk-cred-info").innerHTML =
-      "<strong>" + ids.length + "대</strong> 선택됨<br>" +
-      "<span style='font-size:12px;color:#475569'>" + names.map(escHtml).join(", ") + "</span>";
+    document.getElementById("bulk-cred-info").innerHTML = _bulkTargetInfo(ids);
     document.getElementById("bulk-username").value = "";
     document.getElementById("bulk-password").value = "";
     var be2 = document.getElementById("bulk-enable"); if (be2) be2.value = "";

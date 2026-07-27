@@ -227,19 +227,43 @@ body.nav-collapsed .sidebar__link { justify-content: center; }
 .btn {
   padding: 7px 14px; border-radius: var(--radius-sm); border: 1px solid transparent;
   cursor: pointer; font-size: 13px; font-weight: 500; line-height: 1.4;
-  transition: background .13s, border-color .13s, box-shadow .13s;
+  transition: background .13s, border-color .13s, box-shadow .13s,
+              transform .08s ease-out, color .13s;
   display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap; user-select: none;
 }
-.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-soft); }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn--primary { background: var(--primary); color: #fff; }
-.btn--primary:hover:not(:disabled) { background: var(--primary-h); }
-.btn--secondary { background: var(--surface); color: var(--text-2); border-color: var(--border-strong); }
-.btn--secondary:hover:not(:disabled) { background: var(--surface-2); border-color: var(--text-faint); }
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(26, 86, 219, .22), 0 1px 2px rgba(15,23,42,.10);
+}
+/* 눌림 반응 — 클릭이 먹었는지 즉시 알 수 있게(대량 작업에서 중요) */
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+.btn--primary {
+  background: linear-gradient(180deg, #2563eb, var(--primary));
+  color: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.16);
+}
+.btn--primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--primary), var(--primary-h));
+  box-shadow: 0 2px 6px rgba(26,86,219,.28);
+}
+.btn--secondary {
+  background: var(--surface); color: var(--text-2); border-color: var(--border-strong);
+  box-shadow: 0 1px 1px rgba(15,23,42,.04);
+}
+.btn--secondary:hover:not(:disabled) {
+  background: var(--surface-2); border-color: var(--text-faint); color: var(--text);
+}
 .btn--ghost { background: none; color: var(--text-muted); border-color: transparent; }
 .btn--ghost:hover:not(:disabled) { background: var(--neutral-soft); color: var(--text); }
-.btn--danger { background: var(--danger); color: #fff; }
-.btn--danger:hover:not(:disabled) { background: #b91c1c; }
+.btn--danger {
+  background: linear-gradient(180deg, #ef4444, var(--danger)); color: #fff;
+  box-shadow: 0 1px 2px rgba(15,23,42,.16);
+}
+.btn--danger:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--danger), #b91c1c);
+  box-shadow: 0 2px 6px rgba(220,38,38,.28);
+}
 
 /* 입력 요소 통일(툴바에 흩어진 input/select) */
 .pane-toolbar input[type="text"], .pane-toolbar input[type="password"],
@@ -517,31 +541,73 @@ body.col-resizing { cursor: col-resize !important; user-select: none !important;
 .reconcile-stat__count { font-size: 18px; font-weight: 700; color: #1f2937; }
 
 /* ─── 모달 ───────────────────────────────────── */
-.modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; }
+.modal {
+  position: fixed; inset: 0; z-index: 300;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
 .modal.hidden { display: none; }
-.modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
+.modal__backdrop {
+  position: absolute; inset: 0;
+  background: rgba(15, 23, 42, .55); backdrop-filter: blur(2px);
+  animation: nd-fade .14s ease-out;
+}
+/* 본문이 길어도 헤더·푸터는 항상 보이게: 박스 높이를 화면에 묶고 본문만 스크롤.
+   (내용이 많으면 모달이 화면 밖으로 자라 '수집 시작' 버튼을 못 누르던 문제) */
 .modal__box {
   position: relative; background: var(--surface);
-  border-radius: var(--radius); box-shadow: 0 8px 32px rgba(0,0,0,.18);
-  width: 400px; max-width: 95vw; z-index: 1;
+  border-radius: 12px; box-shadow: 0 20px 50px -12px rgba(15,23,42,.35),
+                                   0 0 0 1px rgba(15,23,42,.06);
+  width: 400px; max-width: 100%; max-height: 100%; z-index: 1;
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: nd-modal-in .16s cubic-bezier(.2, .8, .3, 1);
+}
+@keyframes nd-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes nd-modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(.985) }
+  to { opacity: 1; transform: none }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal__box, .modal__backdrop { animation: none; }
 }
 .modal__header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 20px; border-bottom: 1px solid var(--border);
-  font-weight: 600; font-size: 15px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 15px 20px; border-bottom: 1px solid var(--border);
+  font-weight: 600; font-size: 15px; color: var(--text);
+  background: var(--surface); flex: 0 0 auto;
 }
 .modal__close {
-  background: none; border: none; cursor: pointer;
-  font-size: 20px; color: var(--text-muted); line-height: 1;
+  background: none; border: none; cursor: pointer; border-radius: var(--radius-sm);
+  width: 28px; height: 28px; display: inline-flex; align-items: center;
+  justify-content: center; flex: 0 0 auto;
+  font-size: 20px; color: var(--text-faint); line-height: 1;
+  transition: background .13s, color .13s;
 }
-.modal__close:hover { color: var(--text); }
-.modal__body { padding: 20px; display: flex; flex-direction: column; gap: 10px; }
-.modal__body label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.modal__close:hover { color: var(--text); background: var(--neutral-soft); }
+.modal__close:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-soft); }
+.modal__body {
+  padding: 20px; display: flex; flex-direction: column; gap: 10px;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+}
+.modal__body label {
+  font-size: 12px; font-weight: 600; color: var(--text-2); letter-spacing: -.1px;
+}
 .modal__body input, .modal__body select {
-  border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 8px 12px; font-size: 13px; outline: none; width: 100%;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 9px 12px; font-size: 13px; outline: none; width: 100%;
+  background: var(--surface); color: var(--text);
+  transition: border-color .13s, box-shadow .13s;
 }
-.modal__body input:focus, .modal__body select:focus { border-color: var(--primary); }
+.modal__body input::placeholder { color: var(--text-faint); }
+.modal__body input:hover:not(:disabled), .modal__body select:hover:not(:disabled) {
+  border-color: var(--text-faint);
+}
+.modal__body input:focus, .modal__body select:focus {
+  border-color: var(--primary); box-shadow: 0 0 0 3px rgba(26, 86, 219, .14);
+}
+/* 체크박스도 브랜드 색으로(기본 회색 체크는 비활성처럼 보인다) */
+.modal__body input[type="checkbox"] {
+  width: auto; accent-color: var(--primary); padding: 0;
+}
 
 /* IP 검색 결과 모달: 표가 잘리지 않게 넓게 + 스크롤 */
 #modal-search-result .modal__box { width: 820px; }
@@ -552,13 +618,30 @@ body.col-resizing { cursor: col-resize !important; user-select: none !important;
 #search-result-body .data-table th { word-break: break-word; white-space: normal; vertical-align: top; }
 #search-result-body code { word-break: break-all; }
 .modal__footer {
-  padding: 14px 20px; border-top: 1px solid var(--border);
+  padding: 13px 20px; border-top: 1px solid var(--border);
   display: flex; gap: 8px; justify-content: flex-end;
+  background: var(--surface-2); flex: 0 0 auto;
 }
 .required { color: var(--danger); }
+/* 선택 목록처럼 길이가 예측 불가한 내용은 여기서 잘라 스크롤한다 */
 .switch-info-box {
-  background: var(--bg); border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 10px 14px; font-size: 12px; color: var(--text-muted);
+  max-height: 160px; overflow-y: auto; overscroll-behavior: contain;
+}
+/* 대상이 많을 때 접어 두는 목록(기본 접힘 — 입력칸이 밀려나지 않게) */
+.target-list > summary {
+  cursor: pointer; color: var(--primary); font-size: 12px;
+  list-style: none; user-select: none; padding: 2px 0;
+}
+.target-list > summary::-webkit-details-marker { display: none; }
+.target-list > summary::before { content: "▸ "; }
+.target-list[open] > summary::before { content: "▾ "; }
+.target-list__items {
+  margin-top: 6px; max-height: 132px; overflow-y: auto; overscroll-behavior: contain;
+  font-size: 12px; color: var(--text-2); line-height: 1.7;
+  border-top: 1px dashed var(--border); padding-top: 6px;
 }
 
 /* ─── 상세 패널 (우측 슬라이드) ─────────────── */
