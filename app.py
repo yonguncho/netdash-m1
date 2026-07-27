@@ -1516,6 +1516,52 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/servers/<int:server_id>/diagnose", methods=["POST"])
+    @rate_limit("diagnose_server", max_requests=20, window_seconds=60)
+    def diagnose_server_endpoint(server_id):
+        """서버 1대 무자격 진단(동기) — 도달성·열린 포트·hostname·연결 스위치.
+
+        계정 없이 확인 가능한 것만 본다. 수집과 같은 경로를 쓰되 자격증명을 주지 않는다.
+        """
+        try:
+            from core import server_collector
+            if _bad_id(server_id):
+                return jsonify({"error": "not found"}), 404
+            sv = db.get_server(db_path, server_id)
+            if not sv:
+                return jsonify({"error": "not found"}), 404
+            try:
+                validate_ipv4(sv.get("ip"), config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                return jsonify({"error": "IP 거부: %s" % e}), 400
+            res = server_collector.collect_server(db_path, server_id, None, None)
+            if res.get("status") == "skipped":
+                return jsonify({"error": "이미 수집이 진행 중입니다"}), 409
+            ports = res.get("open_ports") or ""
+            after = db.get_server(db_path, server_id) or {}
+            log_event("info", "server_diagnosed", server_id=server_id,
+                      status=res.get("status"))
+            return jsonify({"ok": True, "diag": {
+                "name": sv.get("name"), "ip": sv.get("ip"),
+                "reachable": bool(ports),
+                "open_ports": ports,
+                "ssh_port": server_collector.pick_ssh_port(
+                    [int(p) for p in ports.split(",") if p.strip().isdigit()]),
+                "hostname": after.get("hostname") or "",
+                "mac": after.get("mac") or "",
+                "switch_name": after.get("switch_name") or "",
+                "switch_port": after.get("switch_port") or "",
+                "os_type": after.get("os_type") or "",
+                "has_cred": bool(after.get("has_cred") or
+                                 db.get_server_credential(db_path, server_id)),
+                "status": res.get("status"),
+                "error": res.get("last_error") or "",
+            }}), 200
+        except Exception as e:
+            log_event("error", "diagnose_server_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/servers/collect-all", methods=["POST"])
     @rate_limit("collect_all_servers", max_requests=6, window_seconds=60)
     def collect_all_servers_endpoint():
@@ -2596,6 +2642,63 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "test_firewall_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/firewalls/<int:fid>/diagnose", methods=["POST"])
+    @rate_limit("diagnose_firewall", max_requests=20, window_seconds=60)
+    def diagnose_firewall_endpoint(fid):
+        """방화벽 1대 진단 — 관리 포트/SSH 도달성 + 저장 계정 인증 확인.
+
+        저장된 자격증명만 사용한다(요청으로 계정을 받지 않음).
+        FortiGate에 API 토큰만 저장돼 있으면 REST 인증까지 확인되지만
+        SSH 터미널에는 쓸 수 없으므로 그 사실을 함께 알린다.
+        """
+        try:
+            if _bad_id(fid):
+                return jsonify({"error": "not found"}), 404
+            fw = db.get_firewall(db_path, fid)
+            if not fw:
+                return jsonify({"error": "not found"}), 404
+            host = fw.get("host")
+            try:
+                host = validate_ipv4(host, config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                return jsonify({"error": "IP 거부: %s" % e}), 400
+            vendor = (fw.get("vendor") or "").lower()
+            mgmt_port = fw.get("port") or (443 if vendor == "fortigate" else 22)
+            token = username = password = ""
+            try:
+                blob = db.get_firewall_credential(db_path, fid)
+                if blob:
+                    dec = credentials.decrypt_text(blob)
+                    if dec:
+                        import json as _json
+                        saved = _json.loads(dec)
+                        token = saved.get("token", "")
+                        username = saved.get("username", "")
+                        password = saved.get("password", "")
+            except Exception:
+                pass
+            src = pcprofile.get_source_ip(db_path)
+            res = connectivity.test_firewall(vendor, host, mgmt_port, token=token,
+                                             username=username, password=password,
+                                             verify_ssl=False, source_ip=src)
+            log_event("info", "firewall_diagnosed", firewall_id=fid,
+                      ok=bool(res.get("ok")), stage=res.get("stage"))
+            return jsonify({"ok": True, "diag": {
+                "name": fw.get("name"), "host": host, "vendor": vendor,
+                "mgmt_port": mgmt_port,
+                "tcp_mgmt": connectivity.test_tcp(host, mgmt_port, 3, src),
+                "tcp_ssh": connectivity.test_tcp(host, 22, 3, src),
+                "has_token": bool(token),
+                "has_login": bool(username and password),
+                "auth_ok": bool(res.get("ok")) and res.get("stage") == "auth",
+                "stage": res.get("stage"), "detail": res.get("detail") or "",
+                "source_ip": src or "",
+            }}), 200
+        except Exception as e:
+            log_event("error", "diagnose_firewall_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/switches/<int:switch_id>", methods=["PUT"])
     @rate_limit("update_switch", max_requests=240, window_seconds=60)  # 구분 인라인 변경: 대당 1회 PUT — 연속 편집 허용
     def update_switch_endpoint(switch_id):
@@ -3447,8 +3550,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             expected = config.api_token
             return bool(expected and token and hmac.compare_digest(token, expected))
 
-        @sock.route("/ws/shell/<int:switch_id>")
-        def ws_shell(ws, switch_id):
+        def _run_ws_shell(ws, kind, target_id):
             token = request.args.get("token", "")
             if not _ws_authorized(token):
                 try:
@@ -3458,18 +3560,31 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return
             # 자격증명은 저장된 것(세션/DPAPI)만 사용 — 쿼리 파라미터로 받지 않는다
             # (URL 쿼리는 access log/프록시 로그에 남을 수 있어 자격증명 노출 위험).
-            username = ""
-            password = ""
             src = pcprofile.get_source_ip(db_path)
             ranges = config.collector.get("allowed_ip_ranges")
 
             def _vip(ip):
                 return validate_ipv4(ip, allowed_ip_ranges=ranges)
             try:
-                webshell.run_shell(ws, db_path, switch_id, username, password, src,
-                                   validate_ip=_vip, client_ip=_client_ip())
+                webshell.run_shell(ws, db_path, target_id, "", "", src,
+                                   validate_ip=_vip, client_ip=_client_ip(), kind=kind)
             except Exception as e:
                 log_event("error", "webshell_error", error=collector._sanitize_error_msg(str(e)))
+
+        @sock.route("/ws/shell/<int:switch_id>")
+        def ws_shell(ws, switch_id):
+            _run_ws_shell(ws, "switch", switch_id)
+
+        @sock.route("/ws/shell/<kind>/<int:target_id>")
+        def ws_shell_kind(ws, kind, target_id):
+            """스위치·방화벽·서버 공통 터미널. 종류가 이상하면 스위치로 떨어뜨리지 않고 거부."""
+            if kind not in webshell.KINDS:
+                try:
+                    ws.send("\r\n[NetDash] 알 수 없는 장비 종류입니다.\r\n")
+                except Exception:
+                    pass
+                return
+            _run_ws_shell(ws, kind, target_id)
         log_event("info", "webshell_enabled")
     except Exception as e:
         # flask-sock 미설치 등 → 터미널 비활성(나머지 기능은 정상)

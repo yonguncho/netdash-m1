@@ -449,12 +449,12 @@ def test_server_table_has_spec_headers():
     for th in ("<th>이름</th>", ">CPU</th>", ">메모리</th>", ">디스크</th>"):
         assert th in head, th
     # 헤더 수와 빈 목록 colspan이 어긋나면 표가 깨진다
-    assert head.count("</th>") == 17
-    assert 'colspan="17"' in html
+    assert head.count("</th>") == 16
+    assert 'colspan="16"' in html
 
 
 def test_server_row_renders_spec_cells():
     js = APPJS.read_text(encoding="utf-8")
     for fn in ("fmtCpu(s)", "fmtMem(s.mem_total_mb)", "fmtDisk(s)"):
         assert fn in js, fn
-    assert "colspan='17'" in js
+    assert "colspan='16'" in js

@@ -23,15 +23,18 @@ class _FakeWS:
 
 
 def test_resolve_credentials_saved(temp_db):
+    # 대상이 스위치·방화벽·서버로 확장되면서 (db_path, kind, id, user, pw) 시그니처가 됐다
     sid = db.save_switch(temp_db, "SW", "10.0.0.1", "cisco_ios")
     credentials.save_credential(sid, "admin", "pw123")   # 세션 저장
-    sw = db.get_switch(temp_db, sid)
-    u, p = webshell._resolve_credentials(temp_db, sw, "", "")
-    assert u == "admin" and p == "pw123"
-    # 전달된 계정이 우선
-    u2, p2 = webshell._resolve_credentials(temp_db, sw, "other", "x")
-    assert u2 == "other" and p2 == "x"
-    credentials.clear_session_switch(sid)
+    try:
+        u, p = webshell._resolve_credentials(temp_db, "switch", sid, "", "")
+        assert u == "admin" and p == "pw123"
+        # 전달된 계정이 우선
+        u2, p2 = webshell._resolve_credentials(temp_db, "switch", sid, "other", "x")
+        assert u2 == "other" and p2 == "x"
+    finally:
+        # 세션 저장소는 모듈 전역이라 정리하지 않으면 다음 테스트로 샌다
+        credentials.clear_session_switch(sid)
 
 
 def test_run_shell_rejects_unknown_switch(temp_db):
@@ -54,8 +57,11 @@ def test_run_shell_ssrf_block(temp_db):
 
     def _vip(ip):
         raise ValueError("공인 IP 차단")
-    webshell.run_shell(ws, temp_db, sid, "", "", None, validate_ip=_vip, client_ip="x")
-    assert any("허용되지 않는 IP" in s for s in ws.sent)
+    try:
+        webshell.run_shell(ws, temp_db, sid, "", "", None, validate_ip=_vip, client_ip="x")
+        assert any("허용되지 않는 IP" in s for s in ws.sent)
+    finally:
+        credentials.clear_session_switch(sid)
 
 
 def test_webshell_ui_present():

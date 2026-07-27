@@ -103,7 +103,11 @@ document.addEventListener("click", function (e) {
       break;
     case "detail-fw": showFirewallDetail(nid); break;
     case "edit-fw": editFirewall(obj); break;
+    case "diagnose-fw": diagnoseFirewall(nid); break;
+    case "terminal-fw": openTerminal(nid, "firewall"); break;
     case "delete-fw": deleteFirewall(nid); break;
+    case "diagnose-server": diagnoseServer(nid); break;
+    case "terminal-server": openTerminal(nid, "server"); break;
     case "vlan-toggle": toggleVlanGroup(btn); break;
   }
 });
@@ -410,6 +414,9 @@ document.addEventListener("click", function (e) {
       var mode = null;
       if (t === "IP" || t === "호스트" || t === "관리 IP" || t.indexOf("IP") === 0) mode = "ip";
       else if (t === "위치" || t === "랙" || t === "대역") mode = "text";
+      // 장비를 성격별로 모아 보기 위한 정렬(서버·스위치 공통)
+      else if (t === "MAC" || t === "OS" || t === "구분" || t === "연결 스위치" ||
+               t === "벤더" || t === "HOSTNAME") mode = "text";
       if (!mode) return;
       th.style.cursor = "pointer";
       th.title = "클릭: 오름차순 / 다시 클릭: 내림차순";
@@ -627,10 +634,19 @@ var _term = null, _termFit = null, _termWs = null;
   if (closeBtn) closeBtn.addEventListener("click", closeTerminal);
 })();
 
-function openTerminal(switchId) {
-  var sw = (_switches || []).find(function (s) { return s.id === switchId; });
+// kind: "switch"(기본) | "firewall" | "server"
+function openTerminal(targetId, kind) {
+  kind = kind || "switch";
+  var list = kind === "firewall" ? (_firewalls || [])
+    : kind === "server" ? (_servers || []) : (_switches || []);
+  var dev = list.find(function (s) { return s.id === targetId; });
+  var addr = dev ? (dev.ip || dev.host || "") : "";
+  var kindLabel = kind === "firewall" ? "방화벽" : kind === "server" ? "서버" : "스위치";
   var title = document.getElementById("term-title");
-  if (title) title.textContent = "💻 SSH 터미널 — " + (sw ? (sw.name + " (" + sw.ip + ")") : ("#" + switchId));
+  if (title) {
+    title.textContent = "💻 SSH 터미널 (" + kindLabel + ") — " +
+      (dev ? (dev.name + (addr ? " (" + addr + ")" : "")) : ("#" + targetId));
+  }
   var statusEl = document.getElementById("term-status");
   openModal("modal-terminal");
 
@@ -650,7 +666,7 @@ function openTerminal(switchId) {
   // 토큰(원격 접속 시 필요) — 로컬은 서버가 면제
   var token = (window._API_TOKEN || "");
   var proto = location.protocol === "https:" ? "wss" : "ws";
-  var url = proto + "://" + location.host + "/ws/shell/" + switchId +
+  var url = proto + "://" + location.host + "/ws/shell/" + kind + "/" + targetId +
     (token ? "?token=" + encodeURIComponent(token) : "");
   if (statusEl) statusEl.textContent = "연결 중...";
   try {
@@ -1544,6 +1560,66 @@ function diagnoseSwitch(id) {
   });
 }
 
+// 방화벽 진단 — 관리 포트/SSH 도달성 + 저장 계정 인증(스위치 진단 팝업 재사용)
+function diagnoseFirewall(id) {
+  var out = document.getElementById("diag-result");
+  openModal("modal-diagnose");
+  if (out) out.textContent = "진단 중... (관리 포트 도달성 → 저장 계정 인증, 최대 20초)";
+  fetch("/api/firewalls/" + id + "/diagnose", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!out) return;
+      if (!res.ok) { out.textContent = "진단 실패: " + (res.error || ""); return; }
+      var d = res.diag || {};
+      out.textContent =
+        d.name + " (" + d.host + ") · 벤더 " + (d.vendor || "-") + "\n" +
+        (d.source_ip ? "출발지 IP: " + d.source_ip + "\n" : "") +
+        "\n관리 포트 TCP-" + d.mgmt_port + ": " + (d.tcp_mgmt ? "도달" : "실패") + "\n" +
+        "SSH TCP-22: " + (d.tcp_ssh ? "도달" : "실패") + "\n" +
+        "저장된 자격증명: " +
+          (d.has_login ? "계정/비밀번호" : d.has_token ? "API 토큰만" : "없음") + "\n" +
+        "인증 확인: " + (d.auth_ok ? "성공" : (d.has_token || d.has_login ? "실패" : "미검증(자격증명 없음)")) + "\n" +
+        (d.detail ? "\n상세: " + d.detail + "\n" : "") +
+        (d.has_token && !d.has_login
+          ? "\n※ API 토큰은 수집에만 쓰입니다. SSH 터미널(💻)을 쓰려면 수집 팝업에서 계정/비밀번호를 저장하세요.\n"
+          : "") +
+        (!d.tcp_mgmt ? "\n※ 관리 포트가 막혔습니다. 방화벽 정책·관리 인터페이스 허용 IP를 확인하세요.\n" : "");
+    })
+    .catch(function (e) { if (out) out.textContent = "진단 오류: " + e; });
+}
+
+// 서버 진단 — 계정 없이 도달성·열린 포트·hostname·연결 스위치 확인
+function diagnoseServer(id) {
+  var out = document.getElementById("diag-result");
+  openModal("modal-diagnose");
+  if (out) out.textContent = "진단 중... (포트 스캔 → hostname → 연결 스위치 대조, 최대 30초)";
+  fetch("/api/servers/" + id + "/diagnose", { method: "POST" })
+    .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
+    .then(function (res) {
+      if (!out) return;
+      if (!res.ok || !res.b.ok) { out.textContent = "진단 실패: " + ((res.b && res.b.error) || ""); return; }
+      var d = res.b.diag || {};
+      out.textContent =
+        d.name + " (" + d.ip + ")\n" +
+        "\n도달성: " + (d.reachable ? "도달(열린 포트 있음)" : "열린 포트 미확인") + "\n" +
+        "열린 포트: " + (d.open_ports || "(없음)") + "\n" +
+        "SSH 포트: " + (d.ssh_port ? d.ssh_port : "미개방 — 상세(OS·사양) 수집 불가") + "\n" +
+        "hostname: " + (d.hostname || "(확인 안 됨 — 역DNS/NetBIOS 무응답)") + "\n" +
+        "MAC: " + (d.mac || "(스위치 ARP 테이블에 없음)") + "\n" +
+        "연결 스위치: " + (d.switch_name ? (d.switch_name + " " + (d.switch_port || "")) : "(미확인)") + "\n" +
+        "OS 추정: " + (d.os_type || "-") + "\n" +
+        "저장된 계정: " + (d.has_cred ? "있음" : "없음") + "\n" +
+        (d.error ? "\n비고: " + d.error + "\n" : "") +
+        (!d.switch_name
+          ? "\n※ 연결 스위치는 스위치 수집 데이터(ARP/MAC)와 대조해 찾습니다. 스위치를 먼저 수집하세요.\n"
+          : "") +
+        (d.ssh_port && !d.has_cred
+          ? "\n※ SSH가 열려 있습니다. 계정을 저장하면 OS·CPU·메모리·디스크까지 수집됩니다.\n"
+          : "");
+    })
+    .catch(function (e) { if (out) out.textContent = "진단 오류: " + e; });
+}
+
 function deleteSwitch(id) {
   if (!confirm("이 스위치를 삭제하시겠습니까?")) return;
   fetch("/api/switches/" + id, {method: "DELETE"})
@@ -2163,6 +2239,12 @@ function renderFirewalls(firewalls) {
         "data-action='detail-fw' data-id='" + f.id + "'>상세</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
         "data-action='edit-fw' data-payload='" + payloadAttr((f)) + "'>수정</button> " +
+        "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+        "title='관리 포트·SSH 도달성과 저장 계정 인증을 확인' " +
+        "data-action='diagnose-fw' data-id='" + f.id + "'>진단</button> " +
+        "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+        "title='SSH 터미널로 직접 접속(저장된 계정/비밀번호 필요 — API 토큰은 사용 불가)' " +
+        "data-action='terminal-fw' data-id='" + f.id + "'>💻</button> " +
         "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
         "data-action='delete-fw' data-id='" + f.id + "'>삭제</button>" +
       "</td></tr>";
@@ -5220,7 +5302,7 @@ function renderServers() {
     });
   });
   if (!rows.length) {
-    body.innerHTML = "<tr><td colspan='17' style='color:#64748b'>" +
+    body.innerHTML = "<tr><td colspan='16' style='color:#64748b'>" +
       (_servers.length ? "검색 결과가 없습니다." : "등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.") + "</td></tr>";
     return;
   }
@@ -5246,10 +5328,21 @@ function renderServers() {
       "<td>" + escHtml(s.location || "-") + "</td>" +
       "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(s.status || "new") + "</span>" +
         (s.status === "failed" && s.last_error ? "<div style='font-size:11px;color:#991b1b'>" + escHtml(s.last_error) + "</div>" : "") + "</td>" +
-      "<td><button class='btn btn--primary' style='font-size:11px;padding:2px 8px' data-action='collect-server' data-id='" + s.id + "'>수집</button></td>" +
-      "<td><button class='btn btn--secondary' style='font-size:11px;padding:2px 8px' data-action='edit-server' data-id='" + s.id + "'>수정</button> " +
-        "<button class='btn btn--ghost' style='font-size:11px;padding:2px 8px' data-action='delete-server' data-id='" + s.id + "'>삭제</button></td>" +
-      "</tr>";
+      // 작업 — 스위치 현황과 같은 구성(수집·수정·진단·터미널·삭제)
+      "<td style='white-space:nowrap'>" +
+        "<button class='btn btn--primary' style='font-size:11px;padding:2px 8px' " +
+        "title='계정을 입력해 이 서버를 재수집' data-action='collect-server' data-id='" + s.id + "'>수집</button> " +
+        "<button class='btn btn--secondary' style='font-size:11px;padding:2px 8px' " +
+        "data-action='edit-server' data-id='" + s.id + "'>수정</button> " +
+        "<button class='btn btn--secondary' style='font-size:11px;padding:2px 8px' " +
+        "title='계정 없이 도달성·열린 포트·hostname·연결 스위치를 확인' " +
+        "data-action='diagnose-server' data-id='" + s.id + "'>진단</button> " +
+        "<button class='btn btn--secondary' style='font-size:11px;padding:2px 8px' " +
+        "title='SSH 터미널로 직접 접속(저장된 계정 필요)' " +
+        "data-action='terminal-server' data-id='" + s.id + "'>💻</button> " +
+        "<button class='btn btn--ghost' style='font-size:11px;padding:2px 8px' " +
+        "data-action='delete-server' data-id='" + s.id + "'>삭제</button>" +
+      "</td></tr>";
   }).join("");
 }
 
