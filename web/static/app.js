@@ -1208,11 +1208,21 @@ function renderRoomRackView(switches, firewalls, servers) {
     host.innerHTML = "<p class='placeholder'>" + _ROOM_EMPTY + "</p>";
     return;
   }
-  var racks = {};   // {rack: {unit: device}}
+  // {rack: {unit: device}} — 다중 U 장비는 시작 유닛에 두고, 나머지 유닛은
+  // spans에 '주인 유닛'을 적어 빈 칸으로 그리지 않는다(한 덩어리로 보이게).
+  var racks = {}, spans = {};
   function _put(d) {
     var rk = d.o.room_rack, u = d.o.room_unit;
     if (!rk || !u) return;
-    (racks[rk] = racks[rk] || {})[u] = d;
+    var h = Math.max(1, _num(d.o.room_height) || 1);
+    d.h = h;
+    var slot = (racks[rk] = racks[rk] || {});
+    var span = (spans[rk] = spans[rk] || {});
+    for (var x = u; x < u + h; x++) {
+      if (slot[x] || span[x] != null) return;   // 이미 다른 장비가 차지 — 덮어쓰지 않음
+    }
+    slot[u] = d;
+    for (var y = u + 1; y < u + h; y++) span[y] = u;
   }
   switches.forEach(function (sw) { _put({ k: "sw", o: sw }); });
   firewalls.forEach(function (f) { _put({ k: "fw", o: f }); });
@@ -1227,28 +1237,42 @@ function renderRoomRackView(switches, firewalls, servers) {
   var RACK_U = 42;
 
   function _rackHtml(rk) {
-    var map = racks[rk];
+    var map = racks[rk], span = spans[rk] || {};
     var maxU = RACK_U;
-    Object.keys(map).forEach(function (u) { if (+u > maxU) maxU = +u; });
+    Object.keys(map).forEach(function (u) {
+      var top = +u + Math.max(1, map[u].h || 1) - 1;
+      if (top > maxU) maxU = top;
+    });
     var slots = "";
     for (var u = maxU; u >= 1; u--) {
+      if (span[u] != null) continue;          // 위 장비가 차지 중 — 칸을 만들지 않는다
       var d = map[u];
       if (d) {
         var k = _roomKind(d);
         var obj = d.o, isFw = d.k === "fw", isSrv = d.k === "srv";
+        var h = Math.max(1, d.h || 1);
         var down = obj.status === "failed" || obj.reachable === false;
         var act = isFw ? ("data-action='detail-fw' data-id='" + obj.id + "'")
                        : isSrv ? ""   // 서버는 랙뷰에서 클릭 상세 없음(서버 현황 탭에서 관리)
                        : ("data-action='detail-switch' data-payload='" + payloadAttr((obj)) + "'");
-        slots += "<div class='ru ru--dev' " + act +
-          " style='background:" + k.c + "22;border-left:4px solid " + k.c + "'" +
-          " title='" + escHtml((obj.name || "") + " · " + (obj.ip || obj.host || "") + " · U" + u) + "'>" +
-          "<span class='ru__u'>U" + u + "</span>" +
+        var uLabel = h > 1 ? ("U" + u + "-" + (u + h - 1)) : ("U" + u);
+        slots += "<div class='ru ru--dev" + (h > 1 ? " ru--multi" : "") + "' " + act +
+          " data-rack='" + escHtml(rk) + "' data-unit='" + u + "' data-h='" + h + "'" +
+          " data-kind='" + d.k + "' data-devid='" + obj.id + "'" +
+          " style='background:" + k.c + "22;border-left:4px solid " + k.c +
+          ";--ru-span:" + h + "'" +
+          " title='" + escHtml((obj.name || "") + " · " + (obj.ip || obj.host || "") +
+                               " · " + uLabel + (h > 1 ? (" (" + h + "U)") : "")) + "'>" +
+          "<span class='ru__u'>" + uLabel + "</span>" +
           "<span class='ru__tag' style='background:" + k.c + "'>" + (k.t || "") + "</span>" +
-          "<span class='ru__name'>" + (down ? "🔴 " : "") + escHtml(obj.name || "") + "</span>" +
+          "<span class='ru__name'>" + (down ? "🔴 " : "") + escHtml(obj.name || "") +
+            (h > 1 ? " <span class='ru__h'>" + h + "U</span>" : "") + "</span>" +
+          // 아래쪽 손잡이를 잡고 끌면 아래 유닛까지 늘어난다(랙 실장 높이 지정)
+          "<span class='ru__grip' title='드래그해서 장비 높이(U) 조절'></span>" +
           "</div>";
       } else {
-        slots += "<div class='ru ru--empty'><span class='ru__u'>U" + u + "</span></div>";
+        slots += "<div class='ru ru--empty' data-rack='" + escHtml(rk) + "' data-unit='" + u +
+          "'><span class='ru__u'>U" + u + "</span></div>";
       }
     }
     return "<div class='rackframe'>" +
@@ -1267,6 +1291,81 @@ function renderRoomRackView(switches, firewalls, servers) {
       " 열</div><div class='rack-row rack-row--frames'>" + racksHtml + "</div></div>";
   }).join("");
 }
+
+// ─── 랙 실장 높이(U) 드래그 조절 ─────────────────────────────────
+// 장비 아래 모서리 손잡이를 잡고 아래로 끌면 그만큼 유닛을 더 차지한다.
+// location을 "A09U13-U15" 형태로 저장하므로 새로고침해도 유지된다.
+var _RU_H = 21;   // 슬롯 한 칸(20px) + gap(1px)
+
+function _ruEndpoint(kind, id) {
+  if (kind === "fw") return "/api/firewalls/" + id;
+  if (kind === "srv") return "/api/servers/" + id;
+  return "/api/switches/" + id;
+}
+
+function _ruLocation(rack, unit, h) {
+  return h > 1 ? (rack + "U" + unit + "-U" + (unit + h - 1)) : (rack + "U" + unit);
+}
+
+document.addEventListener("mousedown", function (e) {
+  var grip = e.target.closest(".ru__grip");
+  if (!grip) return;
+  var cell = grip.closest(".ru--dev");
+  if (!cell) return;
+  e.preventDefault();
+  e.stopPropagation();          // 장비 상세가 열리지 않게
+
+  var rack = cell.getAttribute("data-rack");
+  var unit = parseInt(cell.getAttribute("data-unit"), 10);
+  var kind = cell.getAttribute("data-kind");
+  var devId = cell.getAttribute("data-devid");
+  var startH = Math.max(1, parseInt(cell.getAttribute("data-h"), 10) || 1);
+  var startY = e.clientY;
+  var curH = startH;
+
+  cell.classList.add("ru--resizing");
+  document.body.classList.add("ru-resizing");
+
+  function onMove(ev) {
+    // 아래로 끌수록(+dy) 아래 유닛을 더 차지 → 높이 증가
+    var dy = ev.clientY - startY;
+    var h = Math.max(1, Math.min(42, startH + Math.round(dy / _RU_H)));
+    if (h === curH) return;
+    curH = h;
+    cell.style.setProperty("--ru-span", h);
+    cell.classList.toggle("ru--multi", h > 1);
+    var lbl = cell.querySelector(".ru__u");
+    if (lbl) lbl.textContent = h > 1 ? ("U" + unit + "-" + (unit + h - 1)) : ("U" + unit);
+  }
+
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    cell.classList.remove("ru--resizing");
+    document.body.classList.remove("ru-resizing");
+    if (curH === startH) return;                 // 변화 없음
+    var loc = _ruLocation(rack, unit, curH);
+    fetch(_ruEndpoint(kind, devId), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ location: loc }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; })
+        .then(function (b) { return { ok: r.ok, b: b }; });
+    }).then(function (res) {
+      if (!res.ok) {
+        alert((res.b && res.b.error) || "높이 저장 실패");
+      }
+      // 성공·실패 모두 서버 상태로 다시 그린다(겹침 등은 서버 기준으로 확인)
+      if (typeof loadFirewalls === "function") loadFirewalls();
+      if (typeof loadServers === "function") loadServers();
+      pollState();
+    }).catch(function (err) { console.error(err); alert("높이 저장 오류: " + err); });
+  }
+
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+});
 
 function renderSwitchGrid(switches) {
   switches = _dashSwitches(switches);   // 현황판 = 현장 TPS 스위치 전용(서버실/서버/방화벽 제외)

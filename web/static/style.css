@@ -808,6 +808,37 @@ body.col-resizing { cursor: col-resize !important; user-select: none !important;
 .ru__u { color: #64748b; width: 26px; flex: none; font-size: 9px; }
 .ru__tag { color: #0f172a; font-weight: 700; font-size: 9px; padding: 0 4px; border-radius: 3px; flex: none; }
 .ru__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 다중 U 장비 — 실제 랙처럼 여러 유닛 높이를 한 덩어리로 차지한다.
+   슬롯 높이 20px + 슬롯 간 gap 1px 이므로 n U = 20n + (n-1) px */
+.ru--multi {
+  height: calc(20px * var(--ru-span, 1) + 1px * (var(--ru-span, 1) - 1));
+  align-items: flex-start; padding-top: 3px;
+}
+.ru--multi .ru__name { white-space: normal; line-height: 1.25; }
+.ru__h {
+  font-size: 9px; color: #cbd5e1; background: rgba(255,255,255,.14);
+  padding: 0 4px; border-radius: 3px; margin-left: 2px;
+}
+/* 아래 모서리를 잡고 끌면 높이(U) 조절. 평소엔 숨고 호버 시 보인다. */
+.ru--dev { position: relative; }
+.ru__grip {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 6px;
+  cursor: ns-resize; opacity: 0; transition: opacity .12s;
+}
+.ru__grip::after {
+  content: ""; position: absolute; left: 50%; bottom: 1px; width: 26px; height: 3px;
+  transform: translateX(-50%); border-radius: 2px; background: #e2e8f0;
+  box-shadow: 0 0 0 1px rgba(15,23,42,.5);
+}
+.ru--dev:hover .ru__grip { opacity: .9; }
+.ru__grip:hover { opacity: 1; }
+/* 드래그 중 미리보기 */
+.ru--resizing { outline: 2px dashed #38bdf8; outline-offset: -2px; }
+.ru--preview {
+  background: rgba(56,189,248,.18) !important;
+  outline: 1px dashed #38bdf8; outline-offset: -1px;
+}
+body.ru-resizing, body.ru-resizing * { cursor: ns-resize !important; user-select: none; }
 .rack-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 12px; font-size: 11px; color: #94a3b8; }
 .rack-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 

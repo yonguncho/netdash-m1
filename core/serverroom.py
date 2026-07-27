@@ -11,15 +11,25 @@ import re
 
 from . import utils
 
-# {랙: 영문1자이상+숫자1자이상}U{유닛: 숫자} — 접미 공백/대소문자 허용
-_PAT = re.compile(r"^\s*([A-Za-z]+\d+)\s*[Uu]\s*(\d+)\s*$")
+# {랙: 영문1자이상+숫자1자이상}U{유닛}[-[U]{끝유닛}]
+#   A09U27        → A09랙 27U 1개
+#   A09U13-U15    → A09랙 13~15U (3U 장비)
+#   A09U13-15     → 같음(U 생략 허용)
+# 접미 공백·대소문자·하이픈 주변 공백 허용.
+_PAT = re.compile(
+    r"^\s*([A-Za-z]+\d+)\s*[Uu]\s*(\d+)\s*(?:[-~]\s*[Uu]?\s*(\d+)\s*)?$")
+
+MAX_HEIGHT = 42       # 랙 하나 높이 — 그보다 큰 값은 오기로 본다
 
 
 def parse_rack(location):
-    """location에서 "{랙}U{유닛}" 패턴을 해석.
+    """location에서 "{랙}U{유닛}" 또는 "{랙}U{시작}-U{끝}" 패턴을 해석.
 
     일치하지 않으면 None(= 서버실 소속 아님).
-    Returns: {rack, unit, label} | None
+    Returns: {rack, unit, unit_end, height, label} | None
+      unit     — 시작 유닛(가장 작은 번호). 기존 코드가 쓰던 의미 그대로.
+      unit_end — 끝 유닛(단일이면 unit과 같음)
+      height   — 차지하는 U 수(1 이상)
     """
     if not location:
         return None
@@ -29,9 +39,39 @@ def parse_rack(location):
     rack = m.group(1).upper()
     try:
         unit = int(m.group(2))
+        end = int(m.group(3)) if m.group(3) else unit
     except ValueError:
         return None
-    return {"rack": rack, "unit": unit, "label": "%s랙 U%d" % (rack, unit)}
+    # 'U15-U13'처럼 거꾸로 적어도 받아들인다(사람이 흔히 하는 실수)
+    if end < unit:
+        unit, end = end, unit
+    height = end - unit + 1
+    if height > MAX_HEIGHT:
+        end = unit + MAX_HEIGHT - 1
+        height = MAX_HEIGHT
+    label = ("%s랙 U%d" % (rack, unit) if height == 1
+             else "%s랙 U%d-U%d (%dU)" % (rack, unit, end, height))
+    return {"rack": rack, "unit": unit, "unit_end": end,
+            "height": height, "label": label}
+
+
+def format_rack(rack, unit, height=1):
+    """랙/유닛/높이 → location 문자열. 드래그로 크기를 바꿀 때 쓴다."""
+    try:
+        unit = int(unit)
+        height = max(1, min(int(height or 1), MAX_HEIGHT))
+    except (TypeError, ValueError):
+        return ""
+    if height == 1:
+        return "%sU%d" % (str(rack).upper(), unit)
+    return "%sU%d-U%d" % (str(rack).upper(), unit, unit + height - 1)
+
+
+def occupied_units(info):
+    """parse_rack 결과 → 그 장비가 차지하는 유닛 번호 목록."""
+    if not info:
+        return []
+    return list(range(info["unit"], info.get("unit_end", info["unit"]) + 1))
 
 
 # 장비 종류 → 엑셀 셀 채움색(ARGB, 프론트 _RACK_KIND와 동일 팔레트)
@@ -75,21 +115,34 @@ def build_rack_xlsx(devices):
     # 같은 랙·유닛에 두 장비가 등록돼 있으면 예전엔 뒤엣것이 앞엣것을 조용히
     # 덮어써서 배치도에서 장비가 사라졌다(화면과 엑셀이 서로 다른 장비를 보여줌).
     # 덮어쓰지 않고 한 칸에 함께 적고, 중복 사실을 로그로 남긴다.
+    # 다중 U 장비(예: U13-U15)는 시작 유닛에 두고, 나머지 유닛은 'span'으로 표시해
+    # 그 칸을 비워 둔다(엑셀에서는 세로 병합으로 한 덩어리처럼 보인다).
     racks = {}
+    spans = {}          # {rack: {unit: 시작유닛}} — 이 유닛은 위 장비가 차지 중
     dup = []
     for d in devices:
         rk, u = d.get("rack"), d.get("unit")
         if not rk or not u:
             continue
+        h = max(1, min(int(d.get("height") or 1), MAX_HEIGHT))
         slot = racks.setdefault(rk, {})
-        if u in slot:
-            prev = slot[u]
-            dup.append("%s U%s: %s / %s" % (rk, u, prev.get("name"), d.get("name")))
-            prev["name"] = "%s + %s" % (prev.get("name") or "?", d.get("name") or "?")
-            prev["ip"] = "%s / %s" % (prev.get("ip") or "", d.get("ip") or "")
-            prev["dup"] = True
+        span = spans.setdefault(rk, {})
+        taken = [x for x in range(u, u + h) if x in slot or x in span]
+        if taken:
+            first = taken[0]
+            owner = slot.get(first) or slot.get(span.get(first))
+            dup.append("%s U%s: %s / %s" % (rk, first,
+                                            (owner or {}).get("name"), d.get("name")))
+            if owner is not None:
+                owner["name"] = "%s + %s" % (owner.get("name") or "?", d.get("name") or "?")
+                owner["ip"] = "%s / %s" % (owner.get("ip") or "", d.get("ip") or "")
+                owner["dup"] = True
             continue
-        slot[u] = dict(d)
+        dev = dict(d)
+        dev["height"] = h
+        slot[u] = dev
+        for x in range(u + 1, u + h):
+            span[x] = u
     if dup:
         utils.log_event("warning", "serverroom_duplicate_unit", count=len(dup),
                         samples=dup[:5])
@@ -126,9 +179,10 @@ def build_rack_xlsx(devices):
         # 이 줄에서 사용할 최대 U (기본 42, 초과 시 확장)
         max_u = _RACK_U
         for rk in chunk:
-            for u in racks[rk]:
-                if u > max_u:
-                    max_u = u
+            for u, dv in racks[rk].items():
+                top = u + max(1, dv.get("height") or 1) - 1
+                if top > max_u:
+                    max_u = top
         # 헤더(랙명) — U라벨+장비명 두 칸 병합
         for ci, rk in enumerate(chunk):
             c0 = 1 + ci * BLOCK_COLS  # U라벨 컬럼
@@ -154,13 +208,31 @@ def build_rack_xlsx(devices):
                 dc.border = border
                 dc.alignment = left
                 dev = racks[rk].get(u)
-                if dev:
-                    dc.value = dev.get("name") or ""
-                    dc.font = dev_font
-                    dt = dev.get("device_type") or _infer_dt(dev.get("name"))
-                    fill = _KIND_FILL.get(dt)
-                    if fill:
-                        dc.fill = PatternFill("solid", fgColor=fill)
+                if not dev:
+                    # 위 장비가 차지 중인 유닛이면 색만 이어 칠해 한 덩어리로 보이게
+                    owner_u = spans.get(rk, {}).get(u)
+                    if owner_u is not None:
+                        owner = racks[rk].get(owner_u) or {}
+                        dt = owner.get("device_type") or _infer_dt(owner.get("name"))
+                        fill = _KIND_FILL.get(dt)
+                        if fill:
+                            dc.fill = PatternFill("solid", fgColor=fill)
+                    continue
+                h = max(1, dev.get("height") or 1)
+                if h > 1:
+                    # 위쪽(U가 큰 쪽)이 행 번호가 작다 → 시작 유닛의 행이 아래쪽
+                    top_r = row0 + 1 + (max_u - (u + h - 1))
+                    ws.merge_cells(start_row=top_r, start_column=c1,
+                                   end_row=r, end_column=c1)
+                    dc = ws.cell(row=top_r, column=c1)
+                    dc.border = border
+                    dc.alignment = center
+                dc.value = (dev.get("name") or "") + (" (%dU)" % h if h > 1 else "")
+                dc.font = dev_font
+                dt = dev.get("device_type") or _infer_dt(dev.get("name"))
+                fill = _KIND_FILL.get(dt)
+                if fill:
+                    dc.fill = PatternFill("solid", fgColor=fill)
         row0 = row0 + 1 + max_u + 2  # 다음 랙-줄 블록(간격 2행)
 
     # 컬럼 너비 — 한 줄 최대 랙 수 기준

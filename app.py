@@ -850,6 +850,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     sw["room_rack"] = room["rack"]
                     sw["room_unit"] = room["unit"]
                     sw["room_label"] = room["label"]
+                    sw["room_height"] = room.get("height", 1)
 
             # 도달성 감시 결과 주입(True=도달, False=불가, 없으면 미확인)
             try:
@@ -1517,6 +1518,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         sv["room_rack"] = room["rack"]
                         sv["room_unit"] = room["unit"]
                         sv["room_label"] = room["label"]
+                        sv["room_height"] = room.get("height", 1)
             return jsonify({"servers": servers})
         except Exception as e:
             log_event("error", "list_servers_error", error=collector._sanitize_error_msg(str(e)))
@@ -2305,13 +2307,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 room = serverroom.parse_rack(sw.get("location"))
                 if room:
                     devices.append({"name": sw.get("name") or sw.get("hostname"),
-                                    "ip": sw.get("ip"), "rack": room["rack"], "unit": room["unit"],
+                                    "ip": sw.get("ip"), "rack": room["rack"], "unit": room["unit"], "height": room.get("height", 1),
                                     "device_type": sw.get("device_type")})
             for f in db.list_firewalls(db_path):
                 room = serverroom.parse_rack(f.get("location"))
                 if room:
                     devices.append({"name": f.get("name"), "ip": f.get("host"),
-                                    "rack": room["rack"], "unit": room["unit"],
+                                    "rack": room["rack"], "unit": room["unit"], "height": room.get("height", 1),
                                     "device_type": "Firewall"})
             # 물리 서버도 랙에 꽂혀 있다. 화면(카드뷰·랙뷰)과 CSV에는 나오는데
             # 엑셀만 빠져 있어서 랙 배치도를 인쇄하면 서버가 통째로 없었다.
@@ -2322,7 +2324,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 room = serverroom.parse_rack(s.get("location"))
                 if room:
                     devices.append({"name": s.get("name"), "ip": s.get("ip"),
-                                    "rack": room["rack"], "unit": room["unit"],
+                                    "rack": room["rack"], "unit": room["unit"], "height": room.get("height", 1),
                                     "device_type": "Server"})
             if not devices:
                 return jsonify({"error": "서버실 소속 장비가 없습니다. location에 'A03U36' 형식으로 랙/유닛을 기재하세요."}), 404
@@ -3247,6 +3249,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     f["room_rack"] = room["rack"]
                     f["room_unit"] = room["unit"]
                     f["room_label"] = room["label"]
+                    f["room_height"] = room.get("height", 1)
             # 도달성 감시 결과 주입(관리 포트 TCP — True 도달/False 불가/없으면 미확인)
             try:
                 from core import reachability
