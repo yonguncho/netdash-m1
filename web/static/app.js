@@ -236,28 +236,8 @@ function _applyLocFilter(list, inputId) {
   });
 })();
 
-// ─── 장비 일괄 등록(IP/SUBNET/HOSTNAME 엑셀) ─────────────────────
-(function () {
-  var btn = document.getElementById("btn-import-inventory");
-  var inp = document.getElementById("inventory-file-input");
-  if (!btn || !inp) return;
-  btn.addEventListener("click", function () { inp.click(); });
-  inp.addEventListener("change", function () {
-    if (!inp.files.length) return;
-    var fd = new FormData();
-    fd.append("file", inp.files[0]);
-    fetch("/api/switches/import-inventory", {method: "POST", body: fd})
-      .then(function (r) { return r.json(); })
-      .then(function (res) {
-        if (res.ok) {
-          alert("장비 일괄 등록 완료: " + res.imported + "건 등록" +
-            (res.skipped ? " (허용 대역 밖 " + res.skipped + "건 제외)" : "") + " / 전체 " + res.total + "행");
-          pollState();
-        } else alert(res.error || "등록 실패");
-        inp.value = "";
-      }).catch(function (e) { console.error(e); alert("서버 오류"); inp.value = ""; });
-  });
-})();
+// 장비 일괄 등록(IP/SUBNET/HOSTNAME 통합 엑셀) UI는 제거됐다 — 탭별 '엑셀 등록'
+// (스위치·서버·방화벽 각각)으로 대체. 바인딩할 버튼이 없어 죽은 코드였다.
 
 // ─── 서버/방화벽 엑셀 일괄 등록(공통 바인더) ─────────────────────
 function _bindExcelImport(btnId, inputId, url, label, reload) {
@@ -2152,8 +2132,7 @@ function _renderFacilityRows() {
   if (fs) fs.addEventListener("input", _renderFacilityRows);
   var ex = document.getElementById("btn-fac-export-xlsx");
   if (ex) ex.addEventListener("click", function () { downloadFile("/api/facility/export?format=xlsx"); });
-  var et = document.getElementById("btn-fac-export-txt");
-  if (et) et.addEventListener("click", function () { downloadFile("/api/facility/export?format=txt"); });
+  // 설비 TXT 전용 버튼은 제거됐다 — 툴바 '⬇ 다운로드'(형식 선택)로 통합
   var rf = document.getElementById("btn-fac-refresh");
   if (rf) rf.addEventListener("click", function () {
     rf.disabled = true;

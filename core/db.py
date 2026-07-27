@@ -2064,14 +2064,21 @@ def save_snapshot(db_path, switch_id, parsed_or_duration=_UNSET, duration_second
                 if old:
                     ids = [r[0] for r in old]
                     ph = ",".join("?" * len(ids))
-                    for tbl in ("ports", "mac_entries", "arp_entries", "port_channels"):
+                    # events.snapshot_id 가 snapshots(id)를 FK로 참조한다. 이 테이블을
+                    # 빼먹으면 부모 삭제가 IntegrityError로 실패하고, 바깥 except가
+                    # 삼켜 그 스위치의 세대 정리가 영구히 멈춘다(자식은 이미 지워진
+                    # 뒤라 빈 껍데기 스냅샷이 무한 누적 + IN(...) 플레이스홀더도 계속 증가).
+                    for tbl in ("ports", "mac_entries", "arp_entries", "port_channels",
+                                "events"):
                         try:
                             cursor.execute("DELETE FROM %s WHERE snapshot_id IN (%s)" % (tbl, ph), ids)
                         except Exception:
                             pass
                     cursor.execute("DELETE FROM snapshots WHERE id IN (%s)" % ph, ids)
-            except Exception:
-                pass
+            except Exception as _e:
+                # 조용히 삼키면 누적을 눈치챌 수 없다 — 원인을 남긴다
+                utils.log_event("warning", "snapshot_retention_failed",
+                                error=str(_e)[:160])
 
             # If parsed data provided, save all related entries
             if parsed:

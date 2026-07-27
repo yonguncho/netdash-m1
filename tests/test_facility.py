@@ -795,7 +795,10 @@ def test_facility_ui_present():
     assert "/api/facility/rematch" in js
     assert "_renderFacilityRows" in js
     assert 'id="btn-fac-export-xlsx"' in html
-    assert "/api/facility/export?format=txt" in js
+    # TXT 전용 버튼은 제거되고 툴바 '⬇ 다운로드'(형식 선택 팝업)로 통합됐다.
+    # 설비 TXT는 /api/export/facility?format=txt 경로로 받는다.
+    assert 'data-export="facility"' in html
+    assert "downloadFile(" in js
     # 대역 필터 + IP/대역/MAC(형식무관)/연결스위치 통합 검색
     assert 'id="fac-subnet-filter"' in html
     assert "_facMatchesSearch" in js

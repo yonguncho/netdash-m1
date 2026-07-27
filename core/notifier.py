@@ -18,6 +18,7 @@ import logging
 import queue
 import smtplib
 import threading
+import time as _time
 from email.mime.text import MIMEText
 from email.header import Header
 
@@ -122,11 +123,19 @@ def _mx_hosts(domain):
     return hosts
 
 
+_DIRECT_CONNECT_TIMEOUT = 5     # 후보 1개당 접속 대기(초)
+_DIRECT_DOMAIN_BUDGET = 20      # 도메인 하나에 쓸 총 시간 상한(초)
+
+
 def _direct_send(from_addr, recipients, msg_str, port):
     """SMTP 릴레이 없이 수신자 도메인의 메일 서버로 직접 전달(무인증).
 
     도메인별로 후보 메일 서버에 순서대로 접속을 시도해 첫 성공 시 그 도메인 완료.
     반환: (성공한 수신자 수, 마지막 오류 메시지).
+
+    후보가 4개(domain·mail.·smtp.·mx.)라 타임아웃이 15초면 도메인당 최대 60초,
+    수신 도메인이 여럿이면 그 배수만큼 블로킹됐다(설정창의 '테스트 발송'이 그동안
+    멈추고, 알림 루프도 그만큼 잡혀 큐가 찼다). 후보당 5초 + 도메인당 20초로 묶는다.
     """
     by_domain = {}
     for addr in recipients:
@@ -136,9 +145,14 @@ def _direct_send(from_addr, recipients, msg_str, port):
     last_err = ""
     for domain, addrs in by_domain.items():
         delivered = False
+        _deadline = _time.monotonic() + _DIRECT_DOMAIN_BUDGET
         for host in _mx_hosts(domain):
+            if _time.monotonic() >= _deadline:
+                last_err = "%s: 시간 초과(%d초) — 남은 후보 건너뜀" % (domain, _DIRECT_DOMAIN_BUDGET)
+                utils.log_event("warning", "email_direct_timeout", domain=domain)
+                break
             try:
-                with smtplib.SMTP(host, port, timeout=15) as s:
+                with smtplib.SMTP(host, port, timeout=_DIRECT_CONNECT_TIMEOUT) as s:
                     try:
                         s.ehlo()
                         if s.has_extn("starttls"):
@@ -214,7 +228,6 @@ def _format_digest(events):
 
 
 def _loop(db_path):
-    import time as _time
     pending = []
     last_flush = _time.monotonic()
     while not _stop:
