@@ -737,6 +737,21 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return "설정 변경"
             if p == "/api/alerts/ack":
                 return "알람 확인"
+            # 파괴적 작업·계정 보관은 반드시 남긴다(대역 수집 결과를 통째로 지움)
+            if p == "/api/facility/delete-subnet":
+                return "설비 대역 삭제"
+            if p == "/api/switches/bulk-set-type":
+                return "스위치 구분 일괄 변경"
+            if p == "/api/session/credential":
+                return "세션 수집 계정 보관"
+            if p == "/api/session/credential/lock":
+                return "세션 수집 계정 잠금"
+            if p == "/api/servers/diagnose-all":
+                return "서버 전체 진단"
+            if p == "/api/firewalls/diagnose-all":
+                return "방화벽 전체 진단"
+            if p == "/api/report/pptx":
+                return "보고서(PPTX) 생성"
         elif m == "PUT":
             if p.startswith("/api/switches/"):
                 return "스위치 수정"
@@ -756,6 +771,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return "보고서 다운로드"
             if p == "/api/facility/export":
                 return "설비 목록 추출"
+            # 화면별 ⬇ 다운로드 — 전체 자산 목록이 나가는 경로라 반드시 기록한다
+            # (기존엔 report/facility만 남기고 이것만 빠져 정책이 어긋났다)
+            if p.startswith("/api/export/"):
+                return "목록 다운로드(%s)" % p.rsplit("/", 1)[-1]
+            if p == "/api/serverroom/export":
+                return "랙배치 다운로드"
+            if p == "/api/configs/export-all":
+                return "설정 백업 일괄 다운로드"
             if p.startswith("/api/configs/") and "diff" not in p:
                 return "설정 백업 열람"
         return None

@@ -47,11 +47,20 @@ def _switch_location(sw):
     return sw.get("location") or ""
 
 
+def _location_raw(sw):
+    """DB에 저장된 location 원문 — 화면 표에 보이는 값과 같다.
+
+    라벨('A09랙 U27')만 내보내면 엑셀에서 화면 값('A09U27')으로 검색·VLOOKUP이
+    안 맞는다. 라벨과 원문을 함께 낸다.
+    """
+    return sw.get("location") or ""
+
+
 # ── 데이터셋별 컬럼·행 구성(화면 표와 동일한 순서) ─────────────
 # '이름'은 등록 시 사용자가 붙인 식별자다. 호스트네임은 수집에 성공해야 채워지므로
 # 미수집 스위치는 이름이 없으면 IP로만 식별된다 — 반드시 첫 컬럼으로 내보낸다.
 SWITCH_COLS = ["이름", "구분", "IP", "호스트네임", "벤더", "모델", "버전", "시리얼",
-               "위치", "상태", "경보", "마지막 수집", "비고"]
+               "위치", "위치(원문)", "상태", "경보", "마지막 수집", "비고"]
 
 
 def switches_rows(db_path):
@@ -69,6 +78,7 @@ def switches_rows(db_path):
             "구분": kind, "IP": sw.get("ip"), "호스트네임": sw.get("hostname"),
             "벤더": sw.get("vendor"), "모델": sw.get("model"), "버전": sw.get("os_version"),
             "시리얼": sw.get("serial"), "위치": _switch_location(sw),
+            "위치(원문)": _location_raw(sw),
             "상태": sw.get("status"),
             "경보": "" if (sw.get("alert") or "none") == "none" else sw.get("alert"),
             "마지막 수집": sw.get("last_collected"), "비고": sw.get("note"),
@@ -124,16 +134,22 @@ def servers_rows(db_path):
     return rows
 
 
-FIREWALL_COLS = ["이름", "벤더", "호스트", "포트", "위치", "상태", "마지막 수집"]
+FIREWALL_COLS = ["이름", "벤더", "호스트", "포트", "위치", "상태", "연결 상태",
+                 "마지막 수집"]
 
 
 def firewalls_rows(db_path):
     rows = []
     for f in db.list_firewalls(db_path):
+        # 화면 표에는 '연결 상태'(도달성 감시 결과) 컬럼이 있는데 내보내기에만 빠져 있었다
+        reach = f.get("reachable")
         rows.append({
             "이름": f.get("name"), "벤더": f.get("vendor"), "호스트": f.get("host"),
             "포트": f.get("port"), "위치": f.get("location"),
-            "상태": f.get("status"), "마지막 수집": f.get("last_collected"),
+            "상태": f.get("status"),
+            "연결 상태": ("연결됨" if reach is True else
+                      "끊김" if reach is False else "확인 중"),
+            "마지막 수집": f.get("last_collected"),
         })
     return rows
 
