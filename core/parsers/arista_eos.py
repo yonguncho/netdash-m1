@@ -113,7 +113,14 @@ def _parse_ports(status_output, desc_output, switch_id):
         parts = line.split()
         if len(parts) >= 2:
             port_name = parts[0]
-            desc = " ".join(parts[3:]) if len(parts) > 3 else ""
+            # Status 컬럼은 'up' 한 단어일 수도, 'admin down' 두 단어일 수도 있다.
+            # 고정 인덱스(parts[3:])로 자르면 admin-down 포트의 설명이 한 칸 밀려
+            # 'down reserved-for-AP' 처럼 상태 단어가 설명에 섞이고, 설명이 없는
+            # 포트는 'down' 자체가 설명이 됐다.
+            rest = parts[1:]
+            if len(rest) >= 2 and rest[0].lower() == "admin":
+                rest = rest[1:]                      # 'admin down' → 'down'
+            desc = " ".join(rest[2:]) if len(rest) > 2 else ""
             descriptions[port_name] = desc.strip()[:256]
 
     # ① 상세 형식(show interfaces) — 괄호 상태로 세분화(connected/notconnect/

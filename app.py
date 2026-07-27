@@ -11,7 +11,7 @@ import sqlite3
 import time
 import threading
 from functools import wraps
-from flask import Flask, jsonify, request, render_template, Response, make_response
+from flask import Flask, jsonify, request, render_template, Response, make_response, redirect
 from pathlib import Path
 
 from config import get_config, reset_config
@@ -34,6 +34,53 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _file_log_attached = False
+
+
+def _safe_stdout():
+    """콘솔 출력이 인코딩 오류로 프로세스를 죽이지 않게 한다.
+
+    한국어 Windows 콘솔은 cp949라 '—'(em dash) 같은 문자가 UnicodeEncodeError를
+    낸다. 배너·안내문을 찍다가 죽으면 사용자는 원인 안내는커녕 창이 닫히는 것만
+    본다(안내를 넣은 목적이 정확히 그 반대다). 인코딩 불가 문자는 '?'로 대체한다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
+class _RedactTokenFilter(logging.Filter):
+    """접근 로그의 `token=<값>` 을 가린다.
+
+    werkzeug는 요청 라인을 그대로 찍으므로 누가 `?token=...` 으로 접속하면
+    netdash.log(공유폴더)에 API 토큰이 평문으로 남는다. 정상 경로는 POST라
+    발생하지 않지만, 주소창에 직접 입력하는 경우를 위한 안전망이다.
+    """
+
+    _PAT = re.compile(r"(token=)[^\s&\"']+", re.I)
+
+    def filter(self, record):
+        try:
+            if record.args:
+                record.args = tuple(
+                    self._PAT.sub(r"\1<redacted>", a) if isinstance(a, str) else a
+                    for a in record.args)
+            if isinstance(record.msg, str):
+                record.msg = self._PAT.sub(r"\1<redacted>", record.msg)
+        except Exception:
+            pass
+        return True
+
+
+def _install_log_redaction():
+    """werkzeug 접근 로그와 루트 로거에 토큰 마스킹 필터를 건다(중복 무해)."""
+    f = _RedactTokenFilter()
+    for name in ("werkzeug", ""):
+        lg = logging.getLogger(name)
+        if not any(isinstance(x, _RedactTokenFilter) for x in lg.filters):
+            lg.addFilter(f)
 
 
 def _attach_file_logger(path):
@@ -402,6 +449,20 @@ def _server_eth_ip():
     return _SERVER_ETH_IP
 
 
+def _trusted_proxies():
+    """XFF/X-Real-IP를 신뢰할 프록시 주소 목록(config `app.trusted_proxies`).
+
+    비어 있으면(기본) 어떤 요청의 포워딩 헤더도 신뢰하지 않는다.
+    """
+    try:
+        from config import get_config as _gc
+        app_cfg = _gc().app
+        vals = app_cfg.get("trusted_proxies") if isinstance(app_cfg, dict) else None
+        return {str(v).strip() for v in (vals or []) if str(v).strip()}
+    except Exception:
+        return set()
+
+
 def _client_ip():
     """실사용자 IP 판별 — 프록시/포워딩 뒤에서도 이더넷 IP가 기록되도록.
 
@@ -409,17 +470,17 @@ def _client_ip():
     remote_addr가 루프백(127.0.0.1/localhost/::1 = 같은 PC 접속)이면 접근 로그에
     127.0.0.1 대신 서버 PC의 이더넷 IP로 표기(사용자 구분 목적).
 
-    보안: XFF/X-Real-IP는 클라이언트가 위조할 수 있으므로 remote_addr가 신뢰
-    가능한(로컬/사설) 프록시일 때만 채택한다. 외부에서 직접 접속(공인 remote_addr)한
-    경우 헤더를 무시하고 remote_addr를 기록해 감사 로그 위조를 막는다.
+    보안: XFF/X-Real-IP는 클라이언트가 위조할 수 있으므로 **설정에 명시한 프록시**
+    (`app.trusted_proxies`)에서 온 요청일 때만 채택한다. 기본값은 빈 목록 = 절대
+    신뢰하지 않음.
+
+    예전엔 remote_addr가 사설(RFC1918)이면 신뢰했는데, 이 제품은 폐쇄망 전용이라
+    **모든 정상 클라이언트가 사설 IP**다. 즉 그 조건은 공격자 집단과 정확히 일치했고,
+    아무 사용자나 `X-Forwarded-For`를 붙여 감사 로그의 행위자를 위조하고
+    (감사 추적의 유일한 근거) 레이트리밋 키까지 바꿔 제한을 우회할 수 있었다.
     """
     ra = request.remote_addr or "unknown"
-    _trusted = ra in ("127.0.0.1", "localhost", "::1")
-    if not _trusted:
-        try:
-            _trusted = ipaddress.ip_address(ra).is_private
-        except ValueError:
-            _trusted = False
+    _trusted = ra in _trusted_proxies()
     if _trusted:
         xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
         if xff:
@@ -480,6 +541,7 @@ def _start_primary_services(config, db_path):
     정상 기동(주 서버)과 읽기 전용 → 주 서버 자동 승격 양쪽에서 재사용.
     """
     # 런타임 로그를 파일로도 보존(서버 오류 진단용) — DB 옆 netdash.log
+    _install_log_redaction()   # 접근 로그의 token= 값 마스킹(파일 핸들러보다 먼저)
     try:
         from pathlib import Path as _Path
         _attach_file_logger(_Path(str(db_path)).parent / "netdash.log")
@@ -564,7 +626,13 @@ def _watch_and_promote(app, config, db_path, url):
             # allow_unlocked=False: 락 파일을 확인하지 못했으면 승격하지 않는다.
             # (공유폴더 순단 때 '획득 성공'으로 오인해 주 서버가 둘이 되면
             #  같은 SQLite에 두 PC가 동시 쓰기를 한다)
-            acquired, _ = instance_lock.acquire(get_data_dir(), url, allow_unlocked=False)
+            # 잠금 위치는 기동 경로와 동일하게 DB 폴더 기준이어야 한다
+            # (다르면 승격 판정이 다른 파일을 보게 된다)
+            try:
+                _ld = config.get_db_path().parent
+            except Exception:
+                _ld = get_data_dir()
+            acquired, _ = instance_lock.acquire(_ld, url, allow_unlocked=False)
         except Exception as e:
             log_event("warning", "promote_watch_error",
                       error=collector._sanitize_error_msg(str(e)))
@@ -627,6 +695,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # (승격되면 IS_READONLY=False가 되어 게이트가 열린다)
             if not app.config.get("IS_READONLY"):
                 return None
+            # 로그인(토큰 제출)은 DB를 쓰지 않는다 — 읽기 전용 모드에서도 허용해야
+            # 원격 사용자가 조회조차 못 하는 상태가 되지 않는다.
+            if request.path == "/session":
+                return None
             if request.method in ("POST", "PUT", "DELETE", "PATCH"):
                 return jsonify({
                     "error": "다른 사용자(주 서버: %s)가 DB를 사용 중입니다. "
@@ -659,11 +731,16 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     # API Token validation for production mode (CWE-306 fix: enforce authentication on all API routes)
     @app.before_request
     def validate_api_token():
-        # Skip token validation only for page shells ("/", "/wall") and health checks
-        if request.path in ("/", "/health", "/wall"):
+        # Skip token validation only for page shells ("/", "/wall"), the token
+        # submission form ("/session"), and health checks. 페이지 셸은 자체적으로
+        # 토큰을 확인한다(_render_page) — /session은 그 확인 자체를 수행한다.
+        if request.path in ("/", "/health", "/wall", "/session"):
             return
-        # In demo mode, skip validation only if explicitly enabled in config
-        if config.app.get("demo_mode"):
+        # 데모 모드는 인증을 건너뛴다 — 단, **토큰이 설정돼 있으면 건너뛰지 않는다.**
+        # 예전엔 무조건 통과라, 운영 폴더에서 환경변수 하나(DEMO_MODE=true)로 띄우면
+        # 같은 config를 읽어 **실제 운영 DB가 인증 없이 전부 열렸다**
+        # (자산 목록·감사 이력 조회, 웹 SSH 터미널 포함).
+        if config.app.get("demo_mode") and not config.api_token:
             return
         # Loopback-only bind + request originating from localhost is exempt:
         # a closed-network single-host tool is reachable only by the same machine's
@@ -822,8 +899,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     # `/api/*`는 X-API-Token을 요구하는데 페이지 셸(/, /wall)은 면제라, 0.0.0.0
     # 바인드로 원격 접속하면 화면은 뜨고 그 안의 모든 fetch가 401이 됐다
     # (window._API_TOKEN을 넣어주는 코드가 어디에도 없었다).
-    # 이제 셸도 토큰을 요구하고(쿼리 ?token= 또는 쿠키), 통과한 페이지에만
+    # 이제 셸도 토큰을 요구하고(POST 제출 → 쿠키), 통과한 페이지에만
     # window._API_TOKEN을 심어 준다.
+    #
+    # 토큰은 반드시 POST로 받는다. `?token=` 쿼리로 받으면 werkzeug 접근 로그
+    # ("GET /?token=... HTTP/1.1")에 **토큰이 평문으로 남는다** — netdash.log는
+    # 공유폴더(DB 옆)에 쌓이므로 공유 접근 권한자 전원에게 토큰이 새어 토큰의
+    # 존재 의의가 사라진다. 쿼리 방식은 하위호환으로 남기되 즉시 쿠키로 옮기고
+    # 리다이렉트하며, 로그 필터가 쿼리의 토큰 값을 가린다(_redact_token_in_logs).
     _TOKEN_COOKIE = "netdash_token"
 
     def _is_local_request():
@@ -831,7 +914,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
     def _api_needs_token():
         """validate_api_token과 같은 판정 — 이 요청의 /api 호출에 토큰이 필요한가."""
-        if config.app.get("demo_mode"):
+        if config.app.get("demo_mode") and not config.api_token:
             return False
         bind_host = config.app.get("host", "127.0.0.1")
         return not (bind_host in ("127.0.0.1", "localhost", "::1") and _is_local_request())
@@ -844,21 +927,63 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         if not expected:
             log_event("error", "api_token_not_configured", path=request.path)
             return jsonify({"error": "server configuration error"}), 500
-        # 같은 PC에서 온 요청은 토큰을 묻지 않는다(그 사용자는 config.yaml을
-        # 직접 읽을 수 있어 토큰이 방어하는 대상이 아니다). 원격만 확인한다.
-        token = expected
-        set_cookie = False
-        if not _is_local_request():
-            given = request.args.get("token") or request.cookies.get(_TOKEN_COOKIE) or ""
-            if not given or not hmac.compare_digest(
-                    given.encode("utf-8", "replace"), expected.encode("utf-8", "replace")):
-                log_event("warning", "page_missing_token", path=request.path)
-                return render_template("token_required.html"), 401
-            token, set_cookie = given, True
-        resp = make_response(render_template(template, api_token=token, **kw))
-        if set_cookie:
-            resp.set_cookie(_TOKEN_COOKIE, token, httponly=True,
+        # 토큰이 필요한 배포(0.0.0.0 바인드)에서는 **로컬 요청도 예외로 두지 않는다.**
+        # 예전엔 "같은 PC 사용자는 config.yaml을 읽을 수 있다"는 이유로 면제했는데,
+        # 그러면 `/api/state`는 401로 막는 바로 그 요청자에게 페이지가 토큰을
+        # 넘겨준다(권한 없는 로컬 프로세스·리버스 프록시 뒤 전원). API 게이트
+        # (validate_api_token)와 판정을 일치시킨다.
+        q_token = request.args.get("token") or ""
+        given = q_token or request.cookies.get(_TOKEN_COOKIE) or ""
+        if not given or not hmac.compare_digest(
+                given.encode("utf-8", "replace"), expected.encode("utf-8", "replace")):
+            log_event("warning", "page_missing_token", path=request.path)
+            return render_template("token_required.html",
+                                   next_path=_safe_next(request.path)), 401
+        if q_token:
+            # 쿼리로 들어왔으면 쿠키로 옮기고 URL에서 즉시 지운다(브라우저
+            # 히스토리·리퍼러·접근 로그에 토큰이 남지 않도록).
+            resp = redirect(_safe_next(request.path))
+            resp.set_cookie(_TOKEN_COOKIE, q_token, httponly=True,
                             samesite="Strict", path="/")
+            return resp
+        resp = make_response(render_template(template, api_token=given, **kw))
+        resp.set_cookie(_TOKEN_COOKIE, given, httponly=True,
+                        samesite="Strict", path="/")
+        return resp
+
+    def _safe_next(path):
+        """리다이렉트 대상은 우리가 아는 페이지로만 — 오픈 리다이렉트 차단."""
+        return path if path in ("/", "/wall") else "/"
+
+    def _ws_page_same_origin():
+        """폼 POST의 출처 확인 — 다른 사이트가 이 엔드포인트를 대신 호출하지 못하게.
+        Origin이 없는 요청(curl 등)은 토큰 검증에 맡긴다."""
+        origin = request.headers.get("Origin")
+        if not origin:
+            return True
+        host = request.host or ""
+        return origin in ("http://" + host, "https://" + host)
+
+    @app.route("/session", methods=["POST"])
+    def submit_token():
+        """토큰 제출(POST) — 쿼리스트링을 쓰지 않아 접근 로그에 남지 않는다."""
+        expected = config.api_token
+        nxt = _safe_next(request.form.get("next") or "/")
+        if not _api_needs_token():
+            return redirect(nxt)
+        if not _ws_page_same_origin():
+            log_event("warning", "page_token_bad_origin")
+            return jsonify({"error": "forbidden"}), 403
+        given = request.form.get("token") or ""
+        if not expected or not given or not hmac.compare_digest(
+                given.encode("utf-8", "replace"), expected.encode("utf-8", "replace")):
+            log_event("warning", "page_token_rejected", path=nxt)
+            return render_template("token_required.html", next_path=nxt,
+                                   error="토큰이 올바르지 않습니다."), 401
+        resp = redirect(nxt)
+        resp.set_cookie(_TOKEN_COOKIE, given, httponly=True,
+                        samesite="Strict", path="/")
+        log_event("info", "page_token_accepted", path=nxt)
         return resp
 
     @app.route("/", methods=["GET"])
@@ -1762,7 +1887,17 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": "이미 서버 수집/진단이 진행 중입니다"}), 409
             # ids(선택): 서버실 화면처럼 일부만 진단할 때 대상 한정.
             data = request.get_json(silent=True) or {}
-            ids = [int(i) for i in (data.get("ids") or []) if str(i).isdigit()] or None
+            raw_ids = data.get("ids")
+            if raw_ids is not None and not isinstance(raw_ids, list):
+                return jsonify({"error": "ids는 정수 배열이어야 합니다"}), 400
+            ids = None
+            if raw_ids:
+                # 전부 무효면 조용히 "전체 진단"으로 확대되던 fail-open을 막는다.
+                ids = [int(i) for i in raw_ids if str(i).isdigit()]
+                if not ids:
+                    return jsonify({"error": "ids에 유효한 정수가 없습니다"}), 400
+                if len(ids) > 1000:
+                    return jsonify({"error": "한 번에 최대 1000대까지 지정할 수 있습니다"}), 400
             threading.Thread(
                 target=server_collector.collect_all_servers,
                 kwargs={"db_path": db_path, "no_cred": True, "ids": ids},
@@ -3577,7 +3712,17 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                             message="시작 중", results=[])
         src = pcprofile.get_source_ip(db_path)
         data = request.get_json(silent=True) or {}
-        ids = [int(i) for i in (data.get("ids") or []) if str(i).isdigit()] or None
+        raw_ids = data.get("ids")
+        if raw_ids is not None and not isinstance(raw_ids, list):
+            return jsonify({"error": "ids는 정수 배열이어야 합니다"}), 400
+        ids = None
+        if raw_ids:
+            # 전부 무효면 조용히 "전체 진단"으로 확대되던 fail-open을 막는다.
+            ids = [int(i) for i in raw_ids if str(i).isdigit()]
+            if not ids:
+                return jsonify({"error": "ids에 유효한 정수가 없습니다"}), 400
+            if len(ids) > 1000:
+                return jsonify({"error": "한 번에 최대 1000대까지 지정할 수 있습니다"}), 400
         threading.Thread(target=_run_diagnose_all_firewalls,
                          args=(db_path, src, ids), daemon=True).start()
         log_event("info", "firewalls_diagnose_all_started", count=len(ids or []))
@@ -3875,18 +4020,45 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         from core import webshell
         sock = Sock(app)
 
+        def _ws_same_origin():
+            """CSWSH(교차 사이트 WebSocket 하이재킹) 방어.
+
+            WebSocket에는 동일 출처 정책이 적용되지 않는다 — 브라우저는 크로스
+            오리진 연결도 프리플라이트 없이 보낸다. Origin 검사가 없으면 운영자가
+            연 아무 웹페이지나 ws://127.0.0.1:8082/ws/shell/<id> 를 열어 **저장된
+            장비 계정으로 실제 SSH 세션**을 잡을 수 있다(로컬 면제 탓에 토큰도 불필요).
+
+            Origin이 없는 요청(브라우저가 아닌 클라이언트)은 아래 토큰 검사에 맡긴다.
+            """
+            origin = request.headers.get("Origin")
+            if not origin:
+                return True
+            host = request.host or ""
+            return origin in ("http://" + host, "https://" + host)
+
         def _ws_authorized(token):
             """WS 인증: 로컬 루프백은 면제, 원격은 토큰 검증(before_request와 동일 정책)."""
-            if config.app.get("demo_mode"):
+            if config.app.get("demo_mode") and not config.api_token:
                 return True
             bind_host = config.app.get("host", "127.0.0.1")
             if bind_host in ("127.0.0.1", "localhost", "::1") and request.remote_addr in ("127.0.0.1", "::1"):
                 return True
             expected = config.api_token
-            return bool(expected and token and hmac.compare_digest(token, expected))
+            # bytes 비교: 비ASCII 토큰이 오면 compare_digest가 TypeError를 던져
+            # try 밖에서 터진다(HTTP 경로는 이미 같은 이유로 encode 처리됨).
+            return bool(expected and token and hmac.compare_digest(
+                token.encode("utf-8", "replace"), expected.encode("utf-8", "replace")))
 
         def _run_ws_shell(ws, kind, target_id):
             token = request.args.get("token", "")
+            if not _ws_same_origin():
+                log_event("warning", "webshell_bad_origin",
+                          origin=str(request.headers.get("Origin"))[:80])
+                try:
+                    ws.send("\r\n[NetDash] 허용되지 않은 출처입니다.\r\n")
+                except Exception:
+                    pass
+                return
             if not _ws_authorized(token):
                 try:
                     ws.send("\r\n[NetDash] 인증 실패(토큰).\r\n")
@@ -3972,6 +4144,7 @@ def _warm_openpyxl():
 
 if __name__ == "__main__":
     import traceback
+    _safe_stdout()          # 콘솔 인코딩 오류로 배너가 프로세스를 죽이지 않게
     try:
         parser = argparse.ArgumentParser(description="NetDash - Network switch current status dashboard")
         parser.add_argument("--demo", action="store_true", help="Run in demo mode with sample data")
@@ -3982,7 +4155,37 @@ if __name__ == "__main__":
 
         # Create config with determined demo_mode
         reset_config()
-        config = get_config(demo_mode=demo_mode)
+        try:
+            config = get_config(demo_mode=demo_mode)
+        except (ValueError, TypeError, AttributeError, RuntimeError) as _cfg_err:
+            # 설정 오류는 사용자가 고칠 수 있는 문제다. 파이썬 트레이스백을 던지면
+            # 콘솔이 닫히며 아무것도 못 보고 끝난다 — 원인과 조치를 한글로 안내한다.
+            # (특히 원격 접속용 host: 0.0.0.0 만 바꾸고 api_token을 빠뜨리는 경우)
+            # ValueError 외에도 섹션을 빈 값으로 둔 편집(`collector:` 만 남김 →
+            # TypeError)·YAML 문법 오류(RuntimeError)가 흔해 함께 잡는다.
+            _m = str(_cfg_err)
+            print("=" * 60)
+            print("  NetDash 를 시작할 수 없습니다 - 설정(config.yaml) 문제")
+            print("-" * 60)
+            if "api_token" in _m:
+                print("  원인: 외부 접속(host: 0.0.0.0)으로 설정했는데")
+                print("        접속 토큰(api_token)이 비어 있습니다.")
+                print()
+                print("  조치: config.yaml 을 열어 아래처럼 32자 이상 토큰을 넣으세요.")
+                print('        api_token: "여기에-32자-이상의-임의-문자열"')
+                print()
+                print("  참고: host 를 127.0.0.1 로 두면 토큰 없이 이 PC에서만 씁니다.")
+            else:
+                print("  원인: " + _m)
+                print()
+                print("  조치: config.yaml 의 해당 항목을 확인하세요.")
+            print("=" * 60, flush=True)
+            log_event("error", "app_start_config_error", reason=_m[:200])
+            try:
+                input("계속하려면 Enter 를 누르세요...")
+            except (EOFError, OSError):
+                pass
+            sys.exit(1)
 
         # 단일 인스턴스 보장 — DB를 열기 전에(create_app 이전) 검사해야 한다.
         # 다른 PC가 같은 공유폴더의 exe/DB로 이미 실행 중이면 SQLite(WAL)가
@@ -3990,10 +4193,18 @@ if __name__ == "__main__":
         from core import instance_lock
         from core.config_loader import get_data_dir
         _lk_host = config.app.get("host", "127.0.0.1")
-        _lk_port = config.app.get("port", 8082)
+        _lk_port = config.app.get("port", 8082) or 8082
         _lk_open_host = "127.0.0.1" if _lk_host in ("0.0.0.0", "::") else _lk_host
+        # 잠금은 **DB가 있는 폴더**에 건다. 예전엔 exe 폴더(get_data_dir())에 걸었는데,
+        # 각 PC가 자기 로컬에 exe를 두고 db_path만 공유 절대경로로 가리키면
+        # (문서상 자연스러운 구성) 서로의 잠금을 보지 못해 **두 PC가 동시에 주
+        # 서버가 되어 같은 SQLite에 쓴다** — 이 모듈이 막으려던 바로 그 상황이다.
+        try:
+            _lock_dir = config.get_db_path().parent
+        except Exception:
+            _lock_dir = get_data_dir()
         _acquired, _other = instance_lock.acquire(
-            get_data_dir(), url=f"http://{_lk_open_host}:{_lk_port}")
+            _lock_dir, url=f"http://{_lk_open_host}:{_lk_port}")
         _readonly_info = None
         if not _acquired:
             # 주 서버가 다른 곳에서 실행 중 → 종료하지 않고 '읽기 전용'으로 기동.
@@ -4005,7 +4216,7 @@ if __name__ == "__main__":
             print("  이 프로그램은 [읽기 전용 모드]로 시작합니다.")
             print("-" * 56)
             print("  - 현황 조회: 가능 (수집된 정보 실시간 확인)")
-            print("  - 정보 수집·수정: 불가 — 주 서버(" + str(_o_host) + ")에서 하세요.")
+            print("  - 정보 수집·수정: 불가 - 주 서버(" + str(_o_host) + ")에서 하세요.")
             print("  - 주 서버가 종료되면 이 프로그램이 자동으로 주 서버가 됩니다.")
             print("=" * 56, flush=True)
             log_event("warning", "app_start_readonly",

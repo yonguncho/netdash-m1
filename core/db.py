@@ -1240,10 +1240,21 @@ def get_port_descriptions(db_path):
         try:
             cur.execute(
                 """SELECT switch_id, name, description FROM ports
-                   WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id)
+                   WHERE snapshot_id IN (SELECT MAX(snapshot_id) FROM ports GROUP BY switch_id)
                      AND description IS NOT NULL AND description != ''""")
+            from .parsers.cisco_ios import _abbr as _abbrev
             for r in cur.fetchall():
-                descs[(r["switch_id"], (r["name"] or "").lower())] = r["description"]
+                name = (r["name"] or "")
+                descs[(r["switch_id"], name.lower())] = r["description"]
+                # 축약형 키도 함께 등록한다. Arista 상세 파서는 'Ethernet1'로
+                # 저장하는데 MAC 테이블은 'Et1'로 오므로, 조회 키가 어긋나
+                # 설비 현황의 '연결 포트 설명'이 Arista에서 항상 비어 있었다.
+                try:
+                    short = _abbrev(name)
+                except Exception:
+                    short = ""
+                if short and short.lower() != name.lower():
+                    descs.setdefault((r["switch_id"], short.lower()), r["description"])
         except Exception:
             pass
     return descs
@@ -1534,9 +1545,13 @@ def get_port_channel_members(db_path):
     with get_db(db_path) as conn:
         cur = conn.cursor()
         try:
+            # 기준 세대를 get_mac_to_switchport와 맞춘다(= 데이터가 실제로 담긴
+            # 최신 세대). MAC 명령만 실패한 수집이 새 스냅샷을 만들면 기준이
+            # 어긋나 Po → 물리 멤버 해석이 통째로 실패했다.
             cur.execute(
                 "SELECT switch_id, port_channel, members FROM port_channels "
-                "WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id)")
+                "WHERE snapshot_id IN (SELECT MAX(snapshot_id) FROM port_channels "
+                "                      GROUP BY switch_id)")
             for r in cur.fetchall():
                 pc = (r["port_channel"] or "").lower()
                 if not pc:
@@ -1591,6 +1606,45 @@ def clear_facility_subnet(db_path, subnet):
                 conn.execute("DELETE FROM facility_hosts WHERE subnet=?", (subnet,))
             except Exception:
                 pass
+
+
+def replace_facility_subnet(db_path, subnet, hosts):
+    """대역의 설비 목록을 **한 트랜잭션에서** 교체한다.
+
+    예전에는 clear_facility_subnet() 후 save_facility_hosts()를 따로 호출했는데,
+    둘이 별도 트랜잭션이라 삭제만 성공하고 저장이 실패하면(공유폴더 SQLite 경합)
+    그 대역 설비가 통째로 사라졌다. 게다가 호출부는 예외를 삼켜 정상값을 반환해
+    60초마다 도는 감시 루프에서 **아무도 모르게** 이력이 날아갔다.
+
+    실패하면 예외를 그대로 올린다 — 호출부가 '이전 상태 유지'를 선택할 수 있도록.
+    """
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            has_desc = False
+            try:
+                cols = {r[1] for r in cur.execute("PRAGMA table_info(facility_hosts)").fetchall()}
+                has_desc = "port_desc" in cols
+            except Exception:
+                pass
+            cur.execute("DELETE FROM facility_hosts WHERE subnet=?", (subnet,))
+            for h in (hosts or []):
+                if has_desc:
+                    cur.execute(
+                        """INSERT OR REPLACE INTO facility_hosts
+                           (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, port_desc, updated)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))""",
+                        (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
+                         h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
+                         1 if h.get("direct", 1) else 0, h.get("via"), h.get("port_desc")))
+                else:
+                    cur.execute(
+                        """INSERT OR REPLACE INTO facility_hosts
+                           (subnet, ip, mac, switch_id, switch_name, port, online, direct, via, updated)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))""",
+                        (h.get("subnet"), h.get("ip"), h.get("mac"), h.get("switch_id"),
+                         h.get("switch_name"), h.get("port"), 1 if h.get("online") else 0,
+                         1 if h.get("direct", 1) else 0, h.get("via")))
 
 
 def get_facility_hosts(db_path):
@@ -1665,6 +1719,9 @@ def get_vlan_summary(db_path):
 
     MAC이 학습된 VLAN(mac_entries)과 show vlan brief로 수집한 VLAN(vlan_names)을
     합집합으로 보여준다(MAC 0개인 VLAN도 이름과 함께 표시).
+
+    MAC 수는 **최신 스냅샷 1세대만** 센다. 예전엔 스냅샷 필터가 없어 보관 중인
+    세대(최대 50) 전부를 합산해 실제의 최대 50배로 표시됐다(화면에 그대로 노출되는 값).
     """
     with get_db(db_path) as conn:
         cursor = conn.cursor()
@@ -1673,7 +1730,9 @@ def get_vlan_summary(db_path):
                       IFNULL(s.hostname, '') AS switch_hostname,
                       v.name AS vlan_name, v.status AS vlan_status,
                       (SELECT COUNT(*) FROM mac_entries m
-                       WHERE m.switch_id = v.switch_id AND m.vlan = v.vlan) AS mac_count
+                       WHERE m.switch_id = v.switch_id AND m.vlan = v.vlan
+                         AND m.snapshot_id = (SELECT MAX(m2.snapshot_id) FROM mac_entries m2
+                                              WHERE m2.switch_id = v.switch_id)) AS mac_count
                FROM vlan_names v
                JOIN switches s ON v.switch_id = s.id
                UNION
@@ -1688,6 +1747,8 @@ def get_vlan_summary(db_path):
                JOIN switches s ON m.switch_id = s.id
                WHERE NOT EXISTS (SELECT 1 FROM vlan_names vn2
                                  WHERE vn2.switch_id = m.switch_id AND vn2.vlan = m.vlan)
+                 AND m.snapshot_id = (SELECT MAX(m3.snapshot_id) FROM mac_entries m3
+                                      WHERE m3.switch_id = m.switch_id)
                GROUP BY m.vlan, m.switch_id
                ORDER BY vlan, switch_name""",
         )
@@ -2380,10 +2441,14 @@ def update_firewall(db_path, firewall_id, name=None, vendor=None, host=None, por
 # 포함 running-config)·neighbors·vlan_names·switch_logs·port_channels·device_events·
 # facility_hosts가 잔존 → 삭제된 스위치 config가 /api/configs/<id>로 계속 다운로드
 # 가능했다. app_settings의 enable_secret_<id>·nbrsrc_<id> 설정도 함께 제거.
+# switches(id)를 FK로 참조하는 테이블은 **빠짐없이** 여기 있어야 한다.
+# 하나라도 빠지면 foreign_keys=ON 때문에 DELETE FROM switches가 IntegrityError를
+# 내는데, 그 예외를 삼키면 "삭제 성공"을 반환하면서 수집 데이터만 지워진다.
+# (events는 _detect_disconnected가 MAC 1개 사라질 때마다 넣으므로 운영 DB엔 항상 있다)
 _SWITCH_CHILD_TABLES = [
     "ports", "mac_entries", "arp_entries", "snapshots", "port_events",
     "config_backups", "neighbors", "vlan_names", "switch_logs",
-    "port_channels", "device_events", "facility_hosts",
+    "port_channels", "device_events", "events",
 ]
 
 
@@ -2393,11 +2458,18 @@ def _purge_switch_children(cur, switch_id):
             cur.execute("DELETE FROM %s WHERE switch_id=?" % tbl, (switch_id,))
         except Exception:
             pass
-    # hosts는 인벤토리이므로 보존하되 위치(측정) 무효화
-    try:
-        cur.execute("UPDATE hosts SET switch_id=NULL, located=0 WHERE switch_id=?", (switch_id,))
-    except Exception:
-        pass
+    # hosts·facility_hosts는 인벤토리(스캔 결과)이므로 보존하되 위치만 무효화한다.
+    # facility_hosts를 행째로 지우면 스위치 1대를 지웠다고 그 스위치에 붙어 있던
+    # 설비의 IP·MAC·대역·온라인 여부가 통째로 사라졌다(대역 재스캔 전까지 복구 불가).
+    for sql in (
+        "UPDATE hosts SET switch_id=NULL, located=0 WHERE switch_id=?",
+        "UPDATE facility_hosts SET switch_id=NULL, switch_name=NULL, port=NULL, "
+        "direct=0 WHERE switch_id=?",
+    ):
+        try:
+            cur.execute(sql, (switch_id,))
+        except Exception:
+            pass
     # 스위치별 설정(enable secret·이웃 소스) 제거
     for key in ("enable_secret_%d" % switch_id, "nbrsrc_%d" % switch_id):
         try:
@@ -2415,11 +2487,15 @@ def delete_switch(db_path, switch_id):
             if not cur.fetchone():
                 return False
             _purge_switch_children(cur, switch_id)
+            # 실패를 삼키면 안 된다 — 화면은 "삭제 완료"인데 스위치가 그대로 남고
+            # 수집 데이터만 사라진 상태가 된다(재시도해도 영원히 같은 결과).
             try:
                 cur.execute("DELETE FROM switches WHERE id=?", (switch_id,))
-            except Exception:
-                pass
-            ok = True
+                ok = True
+            except Exception as e:
+                utils.log_event("error", "switch_delete_failed",
+                                switch_id=switch_id, error=str(e)[:200])
+                raise
     # mac_entries가 사라졌으므로 '과거 연결' 캐시 무효화(삭제된 스위치명 잔류 방지)
     invalidate_mac_last_cache(db_path)
     return ok
@@ -2446,8 +2522,11 @@ def delete_switches_bulk(db_path, switch_ids):
                 _purge_switch_children(cur, sid)
                 try:
                     cur.execute("DELETE FROM switches WHERE id=?", (sid,))
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 개별 실패는 건너뛰되 개수에 세지 않는다(허위 성공 방지)
+                    utils.log_event("error", "switch_delete_failed",
+                                    switch_id=sid, error=str(e)[:200])
+                    continue
                 deleted += 1
     if deleted:
         invalidate_mac_last_cache(db_path)   # 삭제된 스위치의 '과거 연결' 잔류 방지

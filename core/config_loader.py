@@ -114,8 +114,14 @@ class Config:
         return resolved
 
     def get_raw_outputs_path(self) -> Path:
-        """Get raw outputs path from config."""
-        return Path(self.raw_outputs.get("path", "raw_outputs"))
+        """수집 원문 저장 경로.
+
+        상대경로면 DB와 같은 데이터 디렉터리 기준으로 고정한다(get_db_path와 동일 규칙).
+        예전엔 CWD 기준이라 exe를 바로가기·관리자 권한으로 띄우면(cwd=System32 등)
+        **스위치 running-config(평문 enable secret 포함)가 엉뚱한 폴더에 쌓였다.**
+        """
+        p = Path((self.raw_outputs or {}).get("path", "raw_outputs"))
+        return p if p.is_absolute() else (get_data_dir() / p)
 
     def get_max_concurrent(self) -> int:
         """Get max concurrent workers from config."""
@@ -341,13 +347,21 @@ def load_config(path: str = "config.yaml", demo_mode: bool = False) -> Config:
     if not isinstance(app_config, dict):
         app_config = {}
     app_config = {**{"debug": False, "host": "127.0.0.1", "port": 8082}, **app_config}
+    # `port:` 처럼 키만 두고 값을 비우면 dict 병합에서 None이 그대로 남는다.
+    # 그러면 Flask가 기본 5000번에 뜨는데 콘솔 안내·브라우저 열기·server.info는
+    # 전부 ':None'이라 접속 주소를 아무도 알 수 없었다. 빈 값은 기본값으로 되돌린다.
+    for _k, _dflt in (("host", "127.0.0.1"), ("port", 8082), ("debug", False)):
+        if app_config.get(_k) is None:
+            app_config[_k] = _dflt
     app_config["demo_mode"] = demo_mode  # Override with computed demo_mode
+
+    db_path = data.get("db_path", "netdash.db")
 
     return Config(
         switches=data.get("switches") or [],
         flap_threshold=data.get("flap_threshold", 3),
         upload_max_mb=data.get("upload_max_mb", 16),
-        db_path=data.get("db_path", "netdash.db"),
+        db_path=db_path,
         api_token=api_token,
         app=app_config,
         collector=_merge_collector_config(data.get("collector", {})),
@@ -405,6 +419,10 @@ def _merge_collector_config(from_yaml: dict) -> dict:
     이를 통해 allowed_ip_ranges 등 보안 기본값이 항상 보장됨.
     """
     default = _get_default_collector_config()
+    # `collector:` 처럼 섹션 키만 남기고 내용을 주석 처리하면 None이 온다.
+    # 예전엔 여기서 TypeError가 나 기동이 원시 트레이스백으로 끝났다(흔한 편집).
+    if not isinstance(from_yaml, dict):
+        from_yaml = {}
     merged = {**default, **from_yaml}
     # commands는 벤더별로 병합 (YAML에 일부 벤더만 있어도 나머지 유지)
     if "commands" in from_yaml and isinstance(from_yaml["commands"], dict):

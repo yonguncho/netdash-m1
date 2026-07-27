@@ -1430,6 +1430,15 @@ document.addEventListener("mousedown", function (e) {
 });
 
 function renderSwitchGrid(switches) {
+  // 현황판 카드 선택(_bulkSel)에서 더 이상 존재하지 않는 id를 걷어낸다.
+  // 예전엔 정리 코드가 없어, 스위치를 삭제하거나 구분을 Server/Firewall로 바꾸거나
+  // 위치를 서버실로 지정해 목록에서 빠져도 선택이 남았다 → 버튼은 "정보 수집 (2)"
+  // 인데 화면 체크는 1개, 실제 요청에는 없는 id가 실려 갔다.
+  var _known = {};
+  (_switches || []).forEach(function (s) { _known[s.id] = true; });
+  if (Object.keys(_known).length) {
+    Object.keys(_bulkSel).forEach(function (id) { if (!_known[id]) delete _bulkSel[id]; });
+  }
   switches = _dashSwitches(switches);   // 현황판 = 현장 TPS 스위치 전용(서버실/서버/방화벽 제외)
   _updateStatusCounts(_applyLocFilter(switches, "loc-filter-dash"));
   switches = _applyStatusFilter(_applyLocFilter(switches, "loc-filter-dash"));
@@ -1660,10 +1669,15 @@ function renderSwitchTable(switches) {
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
       "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button></td></tr>";
   }).join("");
-  // _tblSel에 있으나 현재 목록에 없는 id는 정리(삭제된 스위치)
-  var visible = {};
-  switches.forEach(function (s) { visible[s.id] = true; });
-  Object.keys(_tblSel).forEach(function (id) { if (!visible[id]) delete _tblSel[id]; });
+  // _tblSel에 있으나 **등록 목록 전체**에 없는 id만 정리(삭제된 스위치).
+  // 예전엔 검색으로 걸러진 목록(switches)을 기준으로 지워서, 검색어를 치는
+  // 순간 화면 밖 선택이 사라지고 검색어를 지워도 돌아오지 않았다
+  // (여러 번 검색하며 체크 → 마지막에 일괄 수집이 표준 조작인데 되돌릴 수 없음).
+  var known = {};
+  (_switches || []).forEach(function (s) { known[s.id] = true; });
+  if (Object.keys(known).length) {
+    Object.keys(_tblSel).forEach(function (id) { if (!known[id]) delete _tblSel[id]; });
+  }
   var allChk = document.getElementById("sw-check-all");
   if (allChk) allChk.checked = switches.length > 0 &&
     switches.every(function (s) { return _tblSel[s.id]; });
@@ -2471,6 +2485,15 @@ function showFirewallDetail(fid) {
     .then(function(data) {
       var el = document.getElementById("firewall-detail");
       if (!el) return;
+      // 404/500이면 data.firewall이 없다. 예전엔 그대로 .name을 읽어 예외가 나고
+      // **직전에 보던 다른 방화벽의 인터페이스·ARP가 화면에 그대로 남았다**
+      // (다른 PC에서 삭제됐거나 읽기전용/DB 오류일 때 발생 — 무반응보다 나쁘다).
+      if (!data || !data.firewall) {
+        el.innerHTML = "<p style='color:#b91c1c;margin:16px 0'>방화벽 정보를 불러오지 못했습니다 — " +
+          escHtml((data && data.error) || "알 수 없는 오류") +
+          "<br><span style='color:#64748b;font-size:12px'>다른 사용자가 삭제했거나 서버 오류일 수 있습니다. 목록을 새로고침하세요.</span></p>";
+        return;
+      }
       var ifaces = data.interfaces || [];
       var arp = data.arp || [];
       var ifHtml = ifaces.length
@@ -6105,6 +6128,9 @@ var _ALERT_KIND = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
   device_moved: "설비 이동", config_changed: "설정 변경",
   switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
+  // 방화벽 이벤트는 백엔드가 실제로 발생시키는데(core/reachability.py) 여기에
+  // 없어 알람 목록에 영문 키 그대로 노출됐다(관제 월보드에는 한글이 있었다).
+  firewall_unreachable: "방화벽 연결 실패", firewall_recovered: "방화벽 복구",
   flapping: "포트 flapping", looping: "포트 looping",
 };
 

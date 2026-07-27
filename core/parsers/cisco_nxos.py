@@ -101,6 +101,15 @@ def _parse_port_channels(pc_output, switch_id):
              "members": [m for m in v if m]} for k, v in result.items()]
 
 
+# NX-OS `show interface description` 는 인터페이스 종류에 따라 컬럼 수가 다르다.
+#   Eth1/1   eth   10G   to-core-sw01     (Port · Type · Speed · Description)
+#   Po10     uplink-bundle                (Port · Description)  — 포트채널/논리 IF
+# 예전 정규식은 컬럼 하나(Type)만 건너뛰어 Speed가 설명 앞에 붙고("10G  to-core"),
+# 2컬럼 형식(Po10)은 아예 매칭되지 않아 통째로 유실됐다.
+# 포트 설명은 설비 현황의 '연결 포트 설명'으로 그대로 노출되는 값이다.
+_NX_SPEED = re.compile(r"^(?:\d+(?:\.\d+)?[GMT]?|auto|--)$", re.I)
+
+
 def _parse_descriptions(desc_output):
     """show interface description → {port: description}."""
     descriptions = {}
@@ -109,12 +118,21 @@ def _parse_descriptions(desc_output):
     for i, line in enumerate(desc_output.split("\n")):
         if i > 10000 or len(line) > 500:
             continue
-        m = re.match(r"^" + _IFACE + r"\s+\S+\s+(.+)$", line)
-        if m:
-            port, desc = m.groups()
-            p = utils.normalize_port(port)
-            if p:
-                descriptions[p] = desc.strip()[:256]
+        m = re.match(r"^" + _IFACE + r"\s+(.*)$", line)
+        if not m:
+            continue
+        port, rest = m.groups()
+        p = utils.normalize_port(port)
+        if not p:
+            continue
+        toks = rest.split()
+        # Type·Speed로 보이는 선행 토큰을 걷어낸다(설명은 그 뒤 전부).
+        if len(toks) >= 2 and _NX_SPEED.match(toks[1] or ""):
+            toks = toks[2:]                      # Port Type Speed Description
+        desc = " ".join(toks).strip()
+        if desc in ("--", "-"):                  # NX-OS의 '설명 없음' 표기
+            desc = ""
+        descriptions[p] = desc[:256]
     return descriptions
 
 

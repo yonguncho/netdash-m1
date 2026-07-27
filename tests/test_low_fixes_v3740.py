@@ -53,8 +53,10 @@ def test_app_low_fixes_static():
     assert '@rate_limit("collect_switch"' in src
     # device_type 화이트리스트 단건 PUT
     assert "invalid device_type" in src
-    # XFF 신뢰 조건화
-    assert "is_private" in src
+    # XFF 신뢰 조건화 — 폐쇄망에선 '사설이면 신뢰'가 공격자 집단과 같은 조건이라
+    # 명시 설정(app.trusted_proxies)에 있는 주소에서 온 요청만 헤더를 채택한다.
+    assert "_trusted_proxies" in src
+    assert "is_private" not in src, "사설 IP 자동 신뢰가 되살아나면 감사 로그 위조가 가능해진다"
 
 
 # ── UI 정적 검증 ──

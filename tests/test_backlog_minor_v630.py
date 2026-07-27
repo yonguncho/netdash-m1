@@ -225,12 +225,14 @@ def test_remote_page_requires_token(tmp_path, monkeypatch):
     c = application.test_client()
     r = c.get("/", environ_overrides={"REMOTE_ADDR": "192.168.0.50"})
     assert r.status_code == 401, "토큰 없이 셸이 열리면 그 안의 fetch는 전부 401이 된다"
-    r2 = c.get("/?token=" + token, environ_overrides={"REMOTE_ADDR": "192.168.0.50"})
-    assert r2.status_code == 200
-    assert token.encode() in r2.data, "토큰이 페이지에 안 실리면 fetch가 401"
-    # 쿠키가 발급돼 다음 요청은 쿼리 없이도 통과
+    # 토큰은 POST로 제출한다(쿼리스트링은 접근 로그에 평문으로 남는다 — C-2)
+    r2 = c.post("/session", data={"token": token, "next": "/"},
+                environ_overrides={"REMOTE_ADDR": "192.168.0.50"})
+    assert r2.status_code == 302
+    assert "netdash_token" in r2.headers.get("Set-Cookie", "")
     r3 = c.get("/", environ_overrides={"REMOTE_ADDR": "192.168.0.50"})
     assert r3.status_code == 200
+    assert token.encode() in r3.data, "토큰이 페이지에 안 실리면 fetch가 401"
     reset_config()
 
 

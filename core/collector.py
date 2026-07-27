@@ -555,8 +555,14 @@ def cancel_pending():
             credentials.clear_session_switch(sid)
         except Exception:
             pass
+        # 대기 중이던 항목은 아직 수집을 시작하지 않았으므로 **이전 상태를 그대로 둔다.**
+        # 예전엔 무조건 "new"로 썼는데, 큐에 있던 스위치는 아직 'collecting'이 아니라
+        # 직전 결과(done/failed)를 갖고 있었다. 그래서 중지 한 번에 수집 완료 장비가
+        # '미수집'으로 바뀌고, 장애(failed) 장비는 관제의 '수집 실패' 목록에서 사라졌다.
         try:
-            db.set_switch_status(_dbp, sid, "new")
+            cur = db.get_switch(_dbp, sid)
+            if (cur or {}).get("status") == "collecting":
+                db.set_switch_status(_dbp, sid, "new")
         except Exception:
             pass
         cancelled += 1
@@ -572,349 +578,388 @@ def collecting_ids():
 
 
 def _worker_loop():
+    """워커 스레드 본체.
+
+    한 항목의 처리 실패는 절대 스레드를 죽이지 못한다. 예전엔 `except` 핸들러
+    안의 `db.set_switch_status(..., "failed")` 가 던지면(공유폴더 SQLite 경합 시
+    get_db가 재시도 후 OperationalError를 올린다) 그 예외가 while 밖으로 나가
+    **워커 3개가 전부 죽고 수집 큐가 영구 정지**했다. 게다가 `_collecting_switches`
+    가 비워지지 않아 그 스위치는 재시작 전까지 "이미 수집 중"으로 영원히 잠겼다.
+    """
     global _worker_queue, _collecting_switches
 
     while True:
-        # MEDIUM FIX (CPU optimization): Remove timeout to prevent unnecessary wakeups (busy-wait)
-        # Worker will block indefinitely until task arrives, reducing CPU usage
-        # Note: No timeout means queue.Empty will never be raised (unreachable code removed)
-        # M5 (async_credential): payload carries no credentials, only identifiers.
-        item = _worker_queue.get()
-        # 종료 sentinel: None을 받으면 스레드 종료. 테스트가 남긴 워커가
-        # 다음 테스트의 격리 큐를 가로채 자격증명을 지우는 오염 방지
-        # (프로덕션은 sentinel을 넣지 않으므로 동작 불변).
-        if item is None:
-            return
-        db_path, switch_id = item
-
-        username = None
-        password = None
-        cred = None
-        prev_status = None
-        prev_alert = None
-        sw_name = str(switch_id)
-        sw_disp = sw_name            # 알람 메시지용(이름+IP) — 예외 조기 발생 대비 초기화
         try:
-            utils.log_event("info", "collect_start", switch_id=switch_id)
-            # 이전 상태/경보를 먼저 확보(전이 감지용) 후 collecting 표시
-            _sw0 = db.get_switch(db_path, switch_id)
-            if not _sw0:
-                raise ValueError(f"Switch {switch_id} not found")
-            prev_status = _sw0.get("status")
-            prev_alert = _sw0.get("alert")
-            sw_name = _sw0.get("name") or sw_name
-            # 알람 메시지 표기용: 이름 + IP (label은 이름 그대로 유지)
-            sw_disp = ("%s (%s)" % (sw_name, _sw0["ip"])) if _sw0.get("ip") else sw_name
-            db.set_switch_status(db_path, switch_id, "collecting")
+            if _worker_loop_once() is False:
+                return
+        except Exception as e:              # noqa: BLE001 — 어떤 예외로도 죽지 않는다
+            try:
+                utils.log_event("error", "collect_worker_recovered",
+                                error=_sanitize_error_msg(str(e)),
+                                error_type=type(e).__name__)
+            except Exception:
+                pass
+            time.sleep(0.5)                 # 폭주 방지(연속 실패 시 CPU 점유 억제)
 
-            switch = db.get_switch(db_path, switch_id)
-            if not switch:
-                raise ValueError(f"Switch {switch_id} not found")
 
-            # 벤더 정규화(cisco→cisco_ios 등): device_type/commands/parser 일관 사용
-            raw_vendor = switch["vendor"]
-            is_unknown = _is_unknown_vendor(raw_vendor)
-            vendor = _norm_vendor(raw_vendor)
-            config = get_config()
+def _worker_loop_once():
+    """큐에서 한 건 처리. 종료 sentinel을 받으면 False를 반환한다."""
+    global _worker_queue, _collecting_switches
 
-            if config.app.get("demo_mode"):
-                outputs = fixtures.get_demo_outputs_for_vendor(vendor)
-                utils.log_event("info", "demo_mode_outputs", switch_id=switch_id, vendor=vendor)
+    # MEDIUM FIX (CPU optimization): Remove timeout to prevent unnecessary wakeups (busy-wait)
+    # Worker will block indefinitely until task arrives, reducing CPU usage
+    # Note: No timeout means queue.Empty will never be raised (unreachable code removed)
+    # M5 (async_credential): payload carries no credentials, only identifiers.
+    item = _worker_queue.get()
+    # 종료 sentinel: None을 받으면 스레드 종료. 테스트가 남긴 워커가
+    # 다음 테스트의 격리 큐를 가로채 자격증명을 지우는 오염 방지
+    # (프로덕션은 sentinel을 넣지 않으므로 동작 불변).
+    if item is None:
+        return False
+    db_path, switch_id = item
+
+    username = None
+    password = None
+    cred = None
+    prev_status = None
+    prev_alert = None
+    sw_name = str(switch_id)
+    sw_disp = sw_name            # 알람 메시지용(이름+IP) — 예외 조기 발생 대비 초기화
+    try:
+        utils.log_event("info", "collect_start", switch_id=switch_id)
+        # 이전 상태/경보를 먼저 확보(전이 감지용) 후 collecting 표시
+        _sw0 = db.get_switch(db_path, switch_id)
+        if not _sw0:
+            raise ValueError(f"Switch {switch_id} not found")
+        prev_status = _sw0.get("status")
+        prev_alert = _sw0.get("alert")
+        sw_name = _sw0.get("name") or sw_name
+        # 알람 메시지 표기용: 이름 + IP (label은 이름 그대로 유지)
+        sw_disp = ("%s (%s)" % (sw_name, _sw0["ip"])) if _sw0.get("ip") else sw_name
+        db.set_switch_status(db_path, switch_id, "collecting")
+
+        switch = db.get_switch(db_path, switch_id)
+        if not switch:
+            raise ValueError(f"Switch {switch_id} not found")
+
+        # 벤더 정규화(cisco→cisco_ios 등): device_type/commands/parser 일관 사용
+        raw_vendor = switch["vendor"]
+        is_unknown = _is_unknown_vendor(raw_vendor)
+        vendor = _norm_vendor(raw_vendor)
+        config = get_config()
+
+        if config.app.get("demo_mode"):
+            outputs = fixtures.get_demo_outputs_for_vendor(vendor)
+            utils.log_event("info", "demo_mode_outputs", switch_id=switch_id, vendor=vendor)
+        else:
+            # M5 (CWE-522): Load credentials from the session store at the
+            # moment of use; fail explicitly if none were supplied.
+            cred = credentials.load_credential(switch_id)
+            if not cred:
+                raise ValueError(f"No credentials available for switch {switch_id}")
+            username = cred.get("username")
+            password = cred.get("password")
+            # enable secret: 세션 우선, 없으면 영속 blob(app_settings) 복호화.
+            # 미설정이면 _ssh_collect가 로그인 비밀번호를 secret으로 사용(기존 동작).
+            enable_secret = cred.get("enable_secret")
+            if not enable_secret:
+                try:
+                    _es_blob = db.get_setting(db_path, "enable_secret_%d" % switch_id)
+                    if _es_blob:
+                        enable_secret = credentials.decrypt_text(_es_blob)
+                except Exception:
+                    enable_secret = None
+            # M12: 출발지 IP 바인딩(장비 ACL 통과) — 이 PC 프로필 우선,
+            # 없으면 전역 설정, 그것도 없으면 OS 기본 라우팅.
+            from . import pcprofile
+            source_ip = pcprofile.get_source_ip(db_path)
+            # 응답 없는 장비는 즉시 실패(재시도 낭비 없이 다음 장비로)
+            if not _tcp_precheck(switch["ip"], source_ip=source_ip):
+                raise ConnectionError(
+                    "TCP-22 도달 불가(응답 없음) — 즉시 실패 처리, 다음 장비 진행")
+            # 장비당 하드 타임아웃(기본 480초, config collector.hard_timeout).
+            # SSH 무한대기·명령 타임아웃 연쇄로 '수집중' 고착 → 큐 정지 방지.
+            hard_to = int(config.collector.get("hard_timeout", 480) or 480)
+            if vendor == "alteon":
+                # Alteon은 메뉴형 CLI(netmiko 미지원) → 전용 paramiko 수집
+                outputs = _run_with_timeout(
+                    _alteon_collect, hard_to,
+                    switch, username, password, source_ip=source_ip)
+                eff_vendor = "alteon"
             else:
-                # M5 (CWE-522): Load credentials from the session store at the
-                # moment of use; fail explicitly if none were supplied.
-                cred = credentials.load_credential(switch_id)
-                if not cred:
-                    raise ValueError(f"No credentials available for switch {switch_id}")
-                username = cred.get("username")
-                password = cred.get("password")
-                # enable secret: 세션 우선, 없으면 영속 blob(app_settings) 복호화.
-                # 미설정이면 _ssh_collect가 로그인 비밀번호를 secret으로 사용(기존 동작).
-                enable_secret = cred.get("enable_secret")
-                if not enable_secret:
-                    try:
-                        _es_blob = db.get_setting(db_path, "enable_secret_%d" % switch_id)
-                        if _es_blob:
-                            enable_secret = credentials.decrypt_text(_es_blob)
-                    except Exception:
-                        enable_secret = None
-                # M12: 출발지 IP 바인딩(장비 ACL 통과) — 이 PC 프로필 우선,
-                # 없으면 전역 설정, 그것도 없으면 OS 기본 라우팅.
-                from . import pcprofile
-                source_ip = pcprofile.get_source_ip(db_path)
-                # 응답 없는 장비는 즉시 실패(재시도 낭비 없이 다음 장비로)
-                if not _tcp_precheck(switch["ip"], source_ip=source_ip):
-                    raise ConnectionError(
-                        "TCP-22 도달 불가(응답 없음) — 즉시 실패 처리, 다음 장비 진행")
-                # 장비당 하드 타임아웃(기본 480초, config collector.hard_timeout).
-                # SSH 무한대기·명령 타임아웃 연쇄로 '수집중' 고착 → 큐 정지 방지.
-                hard_to = int(config.collector.get("hard_timeout", 480) or 480)
-                if vendor == "alteon":
-                    # Alteon은 메뉴형 CLI(netmiko 미지원) → 전용 paramiko 수집
-                    outputs = _run_with_timeout(
-                        _alteon_collect, hard_to,
-                        switch, username, password, source_ip=source_ip)
-                    eff_vendor = "alteon"
-                else:
-                    # 항상 show version부터 실행해 실제 OS를 확인하고, 그 OS의
-                    # 명령셋으로 수집한다. 등록 벤더가 틀려도(예: EXOS인데 cisco로
-                    # 등록) 자동 교정된다. 판별 실패 시엔 등록 벤더 그대로.
-                    try:
-                        outputs, eff_vendor = _run_with_timeout(
-                            _ssh_collect, hard_to,
-                            switch, username, password, vendor,
-                            source_ip=source_ip, detect_vendor=True,
-                            enable_secret=enable_secret)
-                    except Exception as first_err:
-                        # Alteon 프롬프트를 이미 감지했다면 프로브(추가 로그인) 없이
-                        # 전용 수집으로 직행 — 구형 Alteon은 동시 관리 세션 제한이
-                        # 있어 연속 로그인(프로브)이 거부될 수 있다.
-                        if "alteon" in str(first_err).lower():
-                            utils.log_event("info", "alteon_direct_fallback",
-                                            switch_id=switch_id)
-                            # 벤더를 먼저 저장 — 이번 재수집이 (세션 제한 등으로)
-                            # 실패해도 다음 수집부터는 처음부터 alteon 경로
-                            # (로그인 1회)로 동작한다.
-                            try:
-                                db.update_switch(db_path, switch_id, vendor="alteon")
-                            except Exception:
-                                pass
-                            time.sleep(3)   # 직전 세션 정리 대기(관리 세션 제한 회피)
+                # 항상 show version부터 실행해 실제 OS를 확인하고, 그 OS의
+                # 명령셋으로 수집한다. 등록 벤더가 틀려도(예: EXOS인데 cisco로
+                # 등록) 자동 교정된다. 판별 실패 시엔 등록 벤더 그대로.
+                try:
+                    outputs, eff_vendor = _run_with_timeout(
+                        _ssh_collect, hard_to,
+                        switch, username, password, vendor,
+                        source_ip=source_ip, detect_vendor=True,
+                        enable_secret=enable_secret)
+                except Exception as first_err:
+                    # Alteon 프롬프트를 이미 감지했다면 프로브(추가 로그인) 없이
+                    # 전용 수집으로 직행 — 구형 Alteon은 동시 관리 세션 제한이
+                    # 있어 연속 로그인(프로브)이 거부될 수 있다.
+                    if "alteon" in str(first_err).lower():
+                        utils.log_event("info", "alteon_direct_fallback",
+                                        switch_id=switch_id)
+                        # 벤더를 먼저 저장 — 이번 재수집이 (세션 제한 등으로)
+                        # 실패해도 다음 수집부터는 처음부터 alteon 경로
+                        # (로그인 1회)로 동작한다.
+                        try:
+                            db.update_switch(db_path, switch_id, vendor="alteon")
+                        except Exception:
+                            pass
+                        time.sleep(3)   # 직전 세션 정리 대기(관리 세션 제한 회피)
+                        outputs = _run_with_timeout(
+                            _alteon_collect, hard_to,
+                            switch, username, password, source_ip=source_ip)
+                        eff_vendor = "alteon"
+                        probed, probe_ver = "alteon", ""
+                        raise_skip = True
+                    else:
+                        raise_skip = False
+                    # netmiko 드라이버가 프롬프트 매칭에 실패하는 장비
+                    # (EXOS 증가형 프롬프트 → 'pattern not detected') 폴백:
+                    # 드라이버 무관 원시 셸로 OS 탐지 → 올바른 드라이버로 재시도.
+                    if not raise_skip:
+                        probed, probe_ver = _probe_os(switch, username, password,
+                                                      source_ip=source_ip)
+                        if not probed or probed == vendor:
+                            raise
+                        utils.log_event("info", "vendor_probe_retry",
+                                        switch_id=switch_id, probed=probed,
+                                        first_error=_sanitize_error_msg(str(first_err)))
+                        if probed == "alteon":
+                            # Alteon은 netmiko 드라이버가 없음 → 전용 메뉴 CLI 수집
                             outputs = _run_with_timeout(
                                 _alteon_collect, hard_to,
                                 switch, username, password, source_ip=source_ip)
                             eff_vendor = "alteon"
-                            probed, probe_ver = "alteon", ""
-                            raise_skip = True
                         else:
-                            raise_skip = False
-                        # netmiko 드라이버가 프롬프트 매칭에 실패하는 장비
-                        # (EXOS 증가형 프롬프트 → 'pattern not detected') 폴백:
-                        # 드라이버 무관 원시 셸로 OS 탐지 → 올바른 드라이버로 재시도.
-                        if not raise_skip:
-                            probed, probe_ver = _probe_os(switch, username, password,
-                                                          source_ip=source_ip)
-                            if not probed or probed == vendor:
-                                raise
-                            utils.log_event("info", "vendor_probe_retry",
-                                            switch_id=switch_id, probed=probed,
-                                            first_error=_sanitize_error_msg(str(first_err)))
-                            if probed == "alteon":
-                                # Alteon은 netmiko 드라이버가 없음 → 전용 메뉴 CLI 수집
-                                outputs = _run_with_timeout(
-                                    _alteon_collect, hard_to,
-                                    switch, username, password, source_ip=source_ip)
-                                eff_vendor = "alteon"
-                            else:
-                                outputs, eff_vendor = _run_with_timeout(
-                                    _ssh_collect, hard_to,
-                                    switch, username, password, probed,
-                                    source_ip=source_ip, detect_vendor=False, max_retries=1,
-                                    enable_secret=enable_secret)
-                                eff_vendor = probed
-                            # 프로브에서 읽은 show version을 버전/모델 파싱에 재활용
-                            if probe_ver and not outputs.get("version"):
-                                outputs["version"] = probe_ver
-                # 실제 OS 판별: 세션 show version 출력 우선, 없으면(원시 셸 프로브
-                # 폴백 경로) eff_vendor. FIX: 예전엔 '정규화된 접속 벤더'와 비교해
-                # unknown→cisco_ios처럼 정규화 결과와 감지가 같으면 DB 갱신을
-                # 건너뛰어 화면에 unknown이 남았다 → '저장된 원래 벤더'와 비교.
-                detected = _detect_vendor_from_version(outputs.get("version", ""))
-                # Alteon(메뉴형 CLI)은 프롬프트가 '#'로 끝나 cisco 접속이 '성공'하고
-                # 명령은 오류 텍스트만 받아 예외 없이 끝난다(unknown+빈 데이터).
-                # 출력에 Alteon 시그니처가 보이면 전용 수집으로 즉시 재수집.
-                if not detected and eff_vendor != "alteon" and _looks_like_alteon(outputs):
-                    utils.log_event("info", "alteon_signature_recollect",
-                                    switch_id=switch_id)
-                    outputs = _run_with_timeout(
-                        _alteon_collect, hard_to,
-                        switch, username, password, source_ip=source_ip)
-                    eff_vendor = "alteon"
-                    detected = "alteon"
-                if not detected and eff_vendor and eff_vendor != vendor:
-                    detected = eff_vendor
-                if detected:
-                    vendor = detected  # 이번 파싱도 실제 OS 파서로
-                    if detected != (raw_vendor or "").strip().lower():
-                        try:
-                            db.update_switch(db_path, switch_id, vendor=detected)
-                            utils.log_event("info",
-                                            "vendor_learned" if is_unknown else "vendor_corrected",
-                                            switch_id=switch_id,
-                                            from_vendor=raw_vendor, vendor=detected)
-                        except Exception as _e:
-                            utils.log_event("warning", "vendor_update_failed",
-                                            switch_id=switch_id, error=_sanitize_error_msg(str(_e)))
-                elif eff_vendor:
-                    vendor = eff_vendor
-
-            raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
-            utils.log_event("info", "raw_outputs_saved", path=str(raw_outputs_path))
-
-            # show version(+EXOS는 show switch) 출력에서 OS 버전/모델명 추출
-            ver_out = outputs.get("version", "")
-            osv = _parse_os_version(vendor, ver_out) if ver_out else None
-            if not osv and outputs.get("boot"):
-                # Alteon 일부 장비: 버전이 /info/sys/general이 아니라 /boot/cur에
-                osv = _parse_os_version(vendor, outputs.get("boot", ""))
-            model = _parse_model(vendor, ver_out) if ver_out else None
-            if not model and outputs.get("sysinfo"):
-                # EXOS 모델(System Type:)은 show version이 아니라 show switch에 있음
-                model = _parse_model(vendor, outputs.get("sysinfo", ""))
-            if not model and outputs.get("inventory"):
-                # NX-OS 모델은 show inventory의 PID가 가장 확실(표기 변형 무관)
-                model = _parse_model(vendor, outputs.get("inventory", ""))
-            # 시리얼 번호: show version → inventory → sysinfo 순으로 시도
-            serial = _parse_serial(vendor, ver_out) if ver_out else None
-            for _src in ("inventory", "sysinfo"):
-                if not serial and outputs.get(_src):
-                    serial = _parse_serial(vendor, outputs.get(_src, ""))
-            if osv or model or serial:
-                try:
-                    db.update_switch(db_path, switch_id, os_version=osv,
-                                     model=model, serial=serial)
-                except Exception:
-                    pass
-
-            parsed_data = _parse_outputs(vendor, outputs, switch_id)
-
-            # M3: Detect disconnected MAC entries before saving new snapshot
-            prev_snapshot_id = db.latest_snapshot_id(db_path, switch_id)
-            if prev_snapshot_id is not None:
-                # BUGFIX: 'mac' 명령이 실패(타임아웃 등)하면 outputs["mac"]="" →
-                # curr_macs=[]가 되어 이전 스냅샷의 모든 MAC이 허위 disconnect
-                # 이벤트(수천 건)로 저장된다. 원시 mac 출력이 비었으면(수집 실패)
-                # disconnect 판정을 건너뛴다(진짜 빈 MAC 테이블도 헤더는 남으므로
-                # 완전 공백 = 명령 실패로 간주).
-                mac_raw = (outputs.get("mac", "") or "").strip()
-                if mac_raw:
-                    curr_macs = [(m.get("vlan"), m.get("mac"), m.get("port"))
-                                for m in parsed_data.get("macs", [])]
-                    db._detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs)
-                else:
-                    # MAC 명령 실패는 수집 자체는 성공(status=done)으로 남기 때문에
-                    # 조용히 지나가면 원인 추적이 어렵다. 설비 대조는 'MAC이 담긴
-                    # 마지막 스냅샷'으로 폴백하므로(db.get_mac_to_switchport) 끊김
-                    # 오탐은 나지 않지만, 계속 비면 MAC 명령 설정을 봐야 한다.
-                    utils.log_event("warning", "mac_table_empty_keeping_previous",
-                                    switch_id=switch_id,
-                                    hint="MAC 명령 출력이 비어 이번 스냅샷의 MAC은 0건입니다. "
-                                         "설비 대조는 직전 MAC 스냅샷을 계속 사용합니다.")
-
-            snapshot_id = db.save_snapshot(db_path, switch_id)
-            db.save_ports(db_path, snapshot_id, switch_id, parsed_data.get("ports", []))
-            db.save_mac_entries(db_path, snapshot_id, switch_id, parsed_data.get("macs", []))
-            db.save_arp_entries(db_path, snapshot_id, switch_id, parsed_data.get("arps", []))
-            # NX-OS 포트채널 멤버(Po → 물리 멤버포트) 저장 — 설비 대조 해석용
-            db.save_port_channels(db_path, snapshot_id, switch_id, parsed_data.get("port_channels", []))
-            # CDP/LLDP 이웃(물리 연결) 저장 — 토폴로지 정확도 향상
-            if "neighbors" in parsed_data:
-                nbr_list = parsed_data.get("neighbors", [])
-                db.save_neighbors(db_path, switch_id, nbr_list)
-                # 수집 방식 진단: CDP/LLDP/비활성(추론) 어느 경로인지 로그 + 저장
-                try:
-                    from .parsers import neighbors as _nb
-                    from .parsers.cisco_ios import parse_cdp_detail as _pc  # noqa
-                except Exception:
-                    _nb = None
-                if _nb is not None:
-                    n_cdp = len(_nb.parse_cdp_detail(outputs.get("neighbors", "")))
-                    n_lldp = len(_nb.parse_lldp_detail(outputs.get("lldp", "")))
-                    source, note = _nb.neighbor_source_status(
-                        outputs.get("neighbors", ""), outputs.get("lldp", ""), n_cdp, n_lldp)
-                    utils.log_event("info", "neighbor_source", switch_id=switch_id,
-                                    source=source, count=len(nbr_list), note=note)
+                            outputs, eff_vendor = _run_with_timeout(
+                                _ssh_collect, hard_to,
+                                switch, username, password, probed,
+                                source_ip=source_ip, detect_vendor=False, max_retries=1,
+                                enable_secret=enable_secret)
+                            eff_vendor = probed
+                        # 프로브에서 읽은 show version을 버전/모델 파싱에 재활용
+                        if probe_ver and not outputs.get("version"):
+                            outputs["version"] = probe_ver
+            # 실제 OS 판별: 세션 show version 출력 우선, 없으면(원시 셸 프로브
+            # 폴백 경로) eff_vendor. FIX: 예전엔 '정규화된 접속 벤더'와 비교해
+            # unknown→cisco_ios처럼 정규화 결과와 감지가 같으면 DB 갱신을
+            # 건너뛰어 화면에 unknown이 남았다 → '저장된 원래 벤더'와 비교.
+            detected = _detect_vendor_from_version(outputs.get("version", ""))
+            # Alteon(메뉴형 CLI)은 프롬프트가 '#'로 끝나 cisco 접속이 '성공'하고
+            # 명령은 오류 텍스트만 받아 예외 없이 끝난다(unknown+빈 데이터).
+            # 출력에 Alteon 시그니처가 보이면 전용 수집으로 즉시 재수집.
+            if not detected and eff_vendor != "alteon" and _looks_like_alteon(outputs):
+                utils.log_event("info", "alteon_signature_recollect",
+                                switch_id=switch_id)
+                outputs = _run_with_timeout(
+                    _alteon_collect, hard_to,
+                    switch, username, password, source_ip=source_ip)
+                eff_vendor = "alteon"
+                detected = "alteon"
+            if not detected and eff_vendor and eff_vendor != vendor:
+                detected = eff_vendor
+            if detected:
+                vendor = detected  # 이번 파싱도 실제 OS 파서로
+                if detected != (raw_vendor or "").strip().lower():
                     try:
-                        db.set_setting(db_path, "nbrsrc_%d" % switch_id,
-                                       source + ("|" + note if note else ""))
-                    except Exception:
-                        pass
-            # VLAN 이름(show vlan brief)은 스냅샷 무관 최신값으로 교체 저장
-            if parsed_data.get("vlans"):
-                db.save_vlan_names(db_path, switch_id, parsed_data.get("vlans", []))
+                        db.update_switch(db_path, switch_id, vendor=detected)
+                        utils.log_event("info",
+                                        "vendor_learned" if is_unknown else "vendor_corrected",
+                                        switch_id=switch_id,
+                                        from_vendor=raw_vendor, vendor=detected)
+                    except Exception as _e:
+                        utils.log_event("warning", "vendor_update_failed",
+                                        switch_id=switch_id, error=_sanitize_error_msg(str(_e)))
+            elif eff_vendor:
+                vendor = eff_vendor
 
-            # show logging/show log 분석: 최근 15줄 + flapping/looping/err 탐지
-            log_out = outputs.get("logging", "")
-            if log_out:
+        raw_outputs_path = _save_raw_outputs(db_path, switch_id, switch["name"], outputs)
+        utils.log_event("info", "raw_outputs_saved", path=str(raw_outputs_path))
+
+        # show version(+EXOS는 show switch) 출력에서 OS 버전/모델명 추출
+        ver_out = outputs.get("version", "")
+        osv = _parse_os_version(vendor, ver_out) if ver_out else None
+        if not osv and outputs.get("boot"):
+            # Alteon 일부 장비: 버전이 /info/sys/general이 아니라 /boot/cur에
+            osv = _parse_os_version(vendor, outputs.get("boot", ""))
+        model = _parse_model(vendor, ver_out) if ver_out else None
+        if not model and outputs.get("sysinfo"):
+            # EXOS 모델(System Type:)은 show version이 아니라 show switch에 있음
+            model = _parse_model(vendor, outputs.get("sysinfo", ""))
+        if not model and outputs.get("inventory"):
+            # NX-OS 모델은 show inventory의 PID가 가장 확실(표기 변형 무관)
+            model = _parse_model(vendor, outputs.get("inventory", ""))
+        # 시리얼 번호: show version → inventory → sysinfo 순으로 시도
+        serial = _parse_serial(vendor, ver_out) if ver_out else None
+        for _src in ("inventory", "sysinfo"):
+            if not serial and outputs.get(_src):
+                serial = _parse_serial(vendor, outputs.get(_src, ""))
+        if osv or model or serial:
+            try:
+                db.update_switch(db_path, switch_id, os_version=osv,
+                                 model=model, serial=serial)
+            except Exception:
+                pass
+
+        parsed_data = _parse_outputs(vendor, outputs, switch_id)
+
+        # M3: Detect disconnected MAC entries before saving new snapshot
+        prev_snapshot_id = db.latest_snapshot_id(db_path, switch_id)
+        if prev_snapshot_id is not None:
+            # BUGFIX: 'mac' 명령이 실패(타임아웃 등)하면 outputs["mac"]="" →
+            # curr_macs=[]가 되어 이전 스냅샷의 모든 MAC이 허위 disconnect
+            # 이벤트(수천 건)로 저장된다. 원시 mac 출력이 비었으면(수집 실패)
+            # disconnect 판정을 건너뛴다(진짜 빈 MAC 테이블도 헤더는 남으므로
+            # 완전 공백 = 명령 실패로 간주).
+            mac_raw = (outputs.get("mac", "") or "").strip()
+            if mac_raw:
+                curr_macs = [(m.get("vlan"), m.get("mac"), m.get("port"))
+                            for m in parsed_data.get("macs", [])]
+                db._detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs)
+            else:
+                # MAC 명령 실패는 수집 자체는 성공(status=done)으로 남기 때문에
+                # 조용히 지나가면 원인 추적이 어렵다. 설비 대조는 'MAC이 담긴
+                # 마지막 스냅샷'으로 폴백하므로(db.get_mac_to_switchport) 끊김
+                # 오탐은 나지 않지만, 계속 비면 MAC 명령 설정을 봐야 한다.
+                utils.log_event("warning", "mac_table_empty_keeping_previous",
+                                switch_id=switch_id,
+                                hint="MAC 명령 출력이 비어 이번 스냅샷의 MAC은 0건입니다. "
+                                     "설비 대조는 직전 MAC 스냅샷을 계속 사용합니다.")
+
+        snapshot_id = db.save_snapshot(db_path, switch_id)
+        db.save_ports(db_path, snapshot_id, switch_id, parsed_data.get("ports", []))
+        db.save_mac_entries(db_path, snapshot_id, switch_id, parsed_data.get("macs", []))
+        db.save_arp_entries(db_path, snapshot_id, switch_id, parsed_data.get("arps", []))
+        # NX-OS 포트채널 멤버(Po → 물리 멤버포트) 저장 — 설비 대조 해석용
+        db.save_port_channels(db_path, snapshot_id, switch_id, parsed_data.get("port_channels", []))
+        # CDP/LLDP 이웃(물리 연결) 저장 — 토폴로지 정확도 향상
+        if "neighbors" in parsed_data:
+            nbr_list = parsed_data.get("neighbors", [])
+            # 빈 목록은 저장하지 않는다 — 파서들은 실패해도 항상 "neighbors": []를
+            # 넣으므로, SSH 타임아웃이나 CDP 비활성 1회로 그 스위치의 연결선이
+            # 구성도에서 통째로 사라졌다(MAC·VLAN 경로는 이미 같은 방어가 있다).
+            if nbr_list:
+                db.save_neighbors(db_path, switch_id, nbr_list)
+            else:
+                existing = 0
                 try:
-                    import json as _json
-                    from . import log_analyzer
-                    la = log_analyzer.analyze(log_out, tail=15)
-                    db.save_switch_logs(
-                        db_path, switch_id, "\n".join(la["recent"]),
-                        _json.dumps(la["events"], ensure_ascii=False), la["alert"])
-                    if la["alert"] in ("warning", "critical"):
-                        utils.log_event("warning", "log_anomaly_detected",
-                                        switch_id=switch_id, alert=la["alert"],
-                                        events=len(la["events"]))
-                        # 경보 전이 시에만 알람 이벤트(매 수집 스팸 방지)
-                        if la["alert"] != prev_alert:
-                            _kind = "looping" if la["alert"] == "critical" else "flapping"
-                            # 어떤 포트가 문제인지 로그 분석 결과에서 추출해 메시지에 포함
-                            _ports = _extract_event_ports(la["events"], _kind)
-                            _pstr = (" [%s]" % ", ".join(_ports)) if _ports else ""
-                            _kko = "루프(looping)" if _kind == "looping" else "플래핑(flapping)"
-                            db.save_device_event(db_path, _kind, la["alert"], switch_id=switch_id,
-                                                 label=sw_name,
-                                                 message="%s 감지: %s%s" % (_kko, sw_disp, _pstr))
-                except Exception as e:
-                    utils.log_event("warning", "log_analyze_skipped",
-                                    error=_sanitize_error_msg(str(e)))
-
-            # 설정(running-config) 백업 + 변경 diff 알람
-            cfg_out = outputs.get("config", "")
-            if cfg_out and db.get_setting(db_path, "config_backup_enabled", "1") != "0":
-                try:
-                    changed, first = db.save_config_backup(db_path, switch_id, cfg_out)
-                    if changed and not first:
-                        db.save_device_event(db_path, "config_changed", "warning",
-                                             switch_id=switch_id, label=sw_name,
-                                             message="설정 변경 감지: " + sw_disp)
-                except Exception as _e:
-                    utils.log_event("warning", "config_backup_skipped",
-                                    error=_sanitize_error_msg(str(_e)))
-
-            db.set_switch_status(db_path, switch_id, "done")
-            # 이전에 실패였다가 이번에 성공 → 복구 알람
-            if prev_status == "failed":
-                db.save_device_event(db_path, "switch_recovered", "info", switch_id=switch_id,
-                                     label=sw_name, message="스위치 복구: " + sw_disp)
-            utils.log_event("info", "collect_done", switch_id=switch_id, snapshot_id=snapshot_id)
-
-        except Exception as e:
-            # Sanitize error messages to prevent credential/path exposure in logs (security fix: CVE-style issue)
-            sanitized_error = _sanitize_error_msg(str(e))
-            utils.log_event("error", "collect_error", switch_id=switch_id, error_type=type(e).__name__, error=sanitized_error)
-            db.set_switch_status(db_path, switch_id, "failed",
-                                 error=_friendly_fail_reason(sanitized_error))
-            # 직전에 실패 상태가 아니었으면(정상→실패, 신규→실패) 연결 실패 알람
-            if prev_status != "failed":
-                try:
-                    db.save_device_event(db_path, "switch_unreachable", "warning",
-                                         switch_id=switch_id, label=sw_name,
-                                         message="스위치 연결 실패: " + sw_disp)
+                    existing = len([n for n in db.get_all_neighbors(db_path)
+                                    if n.get("switch_id") == switch_id])
                 except Exception:
                     pass
-        finally:
-            # CWE-522 fix: Explicitly clear credentials from memory to prevent plaintext exposure
-            # M5 (W2): cred is a defensive copy from load_credential; emptying the
-            # dict drops the plaintext references it holds.
-            if isinstance(cred, dict):
-                cred.clear()
-            cred = None
-            username = None
-            password = None
-            # M5 (async_credential): Worker owns credential disposal. Clear the
-            # session store entry regardless of success/failure/exception.
-            credentials.clear_session_switch(switch_id)
-            with _collector_lock:
-                _collecting_switches.discard(switch_id)
-            # CRITICAL: Safely call task_done() even if queue was replaced during test teardown
+                if existing:
+                    utils.log_event("warning", "neighbors_empty_keeping_previous",
+                                    switch_id=switch_id, kept=existing)
+            # 수집 방식 진단: CDP/LLDP/비활성(추론) 어느 경로인지 로그 + 저장
             try:
-                _worker_queue.task_done()
-            except ValueError:
-                # Queue was replaced during reinit; ignore this error (happens in tests)
+                from .parsers import neighbors as _nb
+                from .parsers.cisco_ios import parse_cdp_detail as _pc  # noqa
+            except Exception:
+                _nb = None
+            if _nb is not None:
+                n_cdp = len(_nb.parse_cdp_detail(outputs.get("neighbors", "")))
+                n_lldp = len(_nb.parse_lldp_detail(outputs.get("lldp", "")))
+                source, note = _nb.neighbor_source_status(
+                    outputs.get("neighbors", ""), outputs.get("lldp", ""), n_cdp, n_lldp)
+                utils.log_event("info", "neighbor_source", switch_id=switch_id,
+                                source=source, count=len(nbr_list), note=note)
+                try:
+                    db.set_setting(db_path, "nbrsrc_%d" % switch_id,
+                                   source + ("|" + note if note else ""))
+                except Exception:
+                    pass
+        # VLAN 이름(show vlan brief)은 스냅샷 무관 최신값으로 교체 저장
+        if parsed_data.get("vlans"):
+            db.save_vlan_names(db_path, switch_id, parsed_data.get("vlans", []))
+
+        # show logging/show log 분석: 최근 15줄 + flapping/looping/err 탐지
+        log_out = outputs.get("logging", "")
+        if log_out:
+            try:
+                import json as _json
+                from . import log_analyzer
+                la = log_analyzer.analyze(log_out, tail=15)
+                db.save_switch_logs(
+                    db_path, switch_id, "\n".join(la["recent"]),
+                    _json.dumps(la["events"], ensure_ascii=False), la["alert"])
+                if la["alert"] in ("warning", "critical"):
+                    utils.log_event("warning", "log_anomaly_detected",
+                                    switch_id=switch_id, alert=la["alert"],
+                                    events=len(la["events"]))
+                    # 경보 전이 시에만 알람 이벤트(매 수집 스팸 방지)
+                    if la["alert"] != prev_alert:
+                        _kind = "looping" if la["alert"] == "critical" else "flapping"
+                        # 어떤 포트가 문제인지 로그 분석 결과에서 추출해 메시지에 포함
+                        _ports = _extract_event_ports(la["events"], _kind)
+                        _pstr = (" [%s]" % ", ".join(_ports)) if _ports else ""
+                        _kko = "루프(looping)" if _kind == "looping" else "플래핑(flapping)"
+                        db.save_device_event(db_path, _kind, la["alert"], switch_id=switch_id,
+                                             label=sw_name,
+                                             message="%s 감지: %s%s" % (_kko, sw_disp, _pstr))
+            except Exception as e:
+                utils.log_event("warning", "log_analyze_skipped",
+                                error=_sanitize_error_msg(str(e)))
+
+        # 설정(running-config) 백업 + 변경 diff 알람
+        cfg_out = outputs.get("config", "")
+        if cfg_out and db.get_setting(db_path, "config_backup_enabled", "1") != "0":
+            try:
+                changed, first = db.save_config_backup(db_path, switch_id, cfg_out)
+                if changed and not first:
+                    db.save_device_event(db_path, "config_changed", "warning",
+                                         switch_id=switch_id, label=sw_name,
+                                         message="설정 변경 감지: " + sw_disp)
+            except Exception as _e:
+                utils.log_event("warning", "config_backup_skipped",
+                                error=_sanitize_error_msg(str(_e)))
+
+        db.set_switch_status(db_path, switch_id, "done")
+        # 이전에 실패였다가 이번에 성공 → 복구 알람
+        if prev_status == "failed":
+            db.save_device_event(db_path, "switch_recovered", "info", switch_id=switch_id,
+                                 label=sw_name, message="스위치 복구: " + sw_disp)
+        utils.log_event("info", "collect_done", switch_id=switch_id, snapshot_id=snapshot_id)
+
+    except Exception as e:
+        # Sanitize error messages to prevent credential/path exposure in logs (security fix: CVE-style issue)
+        sanitized_error = _sanitize_error_msg(str(e))
+        utils.log_event("error", "collect_error", switch_id=switch_id, error_type=type(e).__name__, error=sanitized_error)
+        db.set_switch_status(db_path, switch_id, "failed",
+                             error=_friendly_fail_reason(sanitized_error))
+        # 직전에 실패 상태가 아니었으면(정상→실패, 신규→실패) 연결 실패 알람
+        if prev_status != "failed":
+            try:
+                db.save_device_event(db_path, "switch_unreachable", "warning",
+                                     switch_id=switch_id, label=sw_name,
+                                     message="스위치 연결 실패: " + sw_disp)
+            except Exception:
                 pass
+    finally:
+        # CWE-522 fix: Explicitly clear credentials from memory to prevent plaintext exposure
+        # M5 (W2): cred is a defensive copy from load_credential; emptying the
+        # dict drops the plaintext references it holds.
+        if isinstance(cred, dict):
+            cred.clear()
+        cred = None
+        username = None
+        password = None
+        # M5 (async_credential): Worker owns credential disposal. Clear the
+        # session store entry regardless of success/failure/exception.
+        credentials.clear_session_switch(switch_id)
+        with _collector_lock:
+            _collecting_switches.discard(switch_id)
+        # CRITICAL: Safely call task_done() even if queue was replaced during test teardown
+        try:
+            _worker_queue.task_done()
+        except ValueError:
+            # Queue was replaced during reinit; ignore this error (happens in tests)
+            pass
 
 
 def _ssh_collect(switch, username, password, vendor, max_retries=3, source_ip=None,

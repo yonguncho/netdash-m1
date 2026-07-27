@@ -21,10 +21,12 @@ def test_client_ip_loopback_uses_eth(client, monkeypatch):
     ctx_app = client.application
     with ctx_app.test_request_context(environ_base={"REMOTE_ADDR": "127.0.0.1"}):
         assert _app._client_ip() == "10.92.170.5"
-    # XFF가 있으면 그것이 우선
+    # XFF는 기본적으로 **무시**한다. 폐쇄망에선 모든 정상 클라이언트가 사설 IP라
+    # "사설이면 신뢰"는 공격자 집단과 같은 조건이었고, 아무나 헤더를 붙여
+    # 감사 로그의 행위자를 위조할 수 있었다(감사 추적의 유일한 근거).
     with ctx_app.test_request_context(headers={"X-Forwarded-For": "10.1.2.3"},
                                       environ_base={"REMOTE_ADDR": "127.0.0.1"}):
-        assert _app._client_ip() == "10.1.2.3"
+        assert _app._client_ip() == "10.92.170.5"
 
 
 def test_extract_event_ports():

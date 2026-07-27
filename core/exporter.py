@@ -140,9 +140,16 @@ FIREWALL_COLS = ["이름", "벤더", "호스트", "포트", "위치", "상태", 
 
 def firewalls_rows(db_path):
     rows = []
+    # 도달성은 DB 컬럼이 아니라 감시 스레드의 메모리 상태다. 예전엔 여기서
+    # f.get("reachable")를 읽었는데 그 키가 존재할 수 없어 **항상 '확인 중'**이었다
+    # (화면은 연결됨/끊김을 정확히 아는데 엑셀만 고정값). 감시 상태를 직접 읽는다.
+    try:
+        from . import reachability
+        fw_state = reachability.get_fw_state()
+    except Exception:
+        fw_state = {}
     for f in db.list_firewalls(db_path):
-        # 화면 표에는 '연결 상태'(도달성 감시 결과) 컬럼이 있는데 내보내기에만 빠져 있었다
-        reach = f.get("reachable")
+        reach = fw_state.get(f.get("id"))
         rows.append({
             "이름": f.get("name"), "벤더": f.get("vendor"), "호스트": f.get("host"),
             "포트": f.get("port"), "위치": f.get("location"),

@@ -24,32 +24,48 @@ def test_last_collected_set_on_done(temp_db):
     assert db.get_switch(temp_db, sid)["last_collected"] == ts
 
 
-def test_client_ip_prefers_forwarded(client):
-    """접근 로그 IP: 신뢰(로컬/사설) 프록시 경유 시에만 XFF/X-Real-IP 채택.
+def test_client_ip_ignores_forwarded_headers_by_default(client, monkeypatch):
+    """포워딩 헤더는 **설정에 명시한 프록시**에서 온 요청일 때만 채택한다.
 
-    보안(L): 외부 직접 접속에서 클라이언트가 헤더를 위조해 감사 로그를 오염시키지
-    않도록 remote_addr가 사설/루프백일 때만 포워딩 헤더를 신뢰한다.
+    보안: 이 제품은 폐쇄망 전용이라 정상 클라이언트가 전부 사설 IP다. 예전처럼
+    "remote_addr가 사설이면 신뢰"하면 그 조건이 공격자 집단과 정확히 일치해,
+    누구나 X-Forwarded-For를 붙여 감사 로그의 행위자를 위조하고(감사 추적의 유일한
+    근거) 레이트리밋 키까지 바꿔 제한을 우회할 수 있었다.
     """
     import app as _app
     ctx_app = client.application
-    # 신뢰 프록시(사설 remote_addr) → XFF 실사용자 IP 기록
+    # 기본(신뢰 프록시 미설정) → 헤더 무시, 소켓 주소 기록
     with ctx_app.test_request_context(
             headers={"X-Forwarded-For": "10.92.170.55, 10.0.0.1"},
-            environ_base={"REMOTE_ADDR": "127.0.0.1"}):
-        assert _app._client_ip() == "10.92.170.55"
+            environ_base={"REMOTE_ADDR": "10.0.0.9"}):
+        assert _app._client_ip() == "10.0.0.9"
     with ctx_app.test_request_context(
             headers={"X-Real-IP": "10.92.170.66"},
             environ_base={"REMOTE_ADDR": "10.0.0.1"}):
-        assert _app._client_ip() == "10.92.170.66"
-    # 외부(공인) 직접 접속 → XFF 위조 무시하고 remote_addr 기록
-    # (8.8.8.8은 실제 공인 = is_private False; 203.0.113.x 문서대역은 파이썬이
-    #  is_private True로 취급하므로 부적합)
+        assert _app._client_ip() == "10.0.0.1"
+    # 공인 직접 접속도 동일하게 위조 무시
     with ctx_app.test_request_context(
             headers={"X-Forwarded-For": "1.2.3.4"},
             environ_base={"REMOTE_ADDR": "8.8.8.8"}):
         assert _app._client_ip() == "8.8.8.8"
     with ctx_app.test_request_context(environ_base={"REMOTE_ADDR": "10.0.0.5"}):
         assert _app._client_ip()  # remote_addr 폴백
+
+
+def test_client_ip_honors_configured_trusted_proxy(client, monkeypatch):
+    """리버스 프록시를 쓰는 배포는 app.trusted_proxies로 명시하면 동작한다."""
+    import app as _app
+    monkeypatch.setattr(_app, "_trusted_proxies", lambda: {"10.0.0.1"})
+    ctx_app = client.application
+    with ctx_app.test_request_context(
+            headers={"X-Forwarded-For": "10.92.170.55, 10.0.0.1"},
+            environ_base={"REMOTE_ADDR": "10.0.0.1"}):
+        assert _app._client_ip() == "10.92.170.55"
+    # 목록에 없는 주소에서 온 헤더는 여전히 무시
+    with ctx_app.test_request_context(
+            headers={"X-Forwarded-For": "10.92.170.55"},
+            environ_base={"REMOTE_ADDR": "10.0.0.2"}):
+        assert _app._client_ip() == "10.0.0.2"
 
 
 def test_reachability_covers_firewalls(temp_db, monkeypatch):

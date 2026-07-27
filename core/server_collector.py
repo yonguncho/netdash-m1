@@ -1167,6 +1167,18 @@ def collect_server(db_path, server_id, username=None, password=None):
         _inflight.add(server_id)
     try:
         return _collect_server_locked(db_path, server_id, sv, username, password)
+    except Exception as e:
+        # 예외가 나가면 status가 'collecting'인 채로 남아 화면에 영구 '수집중'
+        # 배지가 붙는다(일괄 수집은 예외를 잡아 '실패'라고 보고하는데 DB는 수집중).
+        # 복구는 앱 재시작(reset_stale_collecting)뿐이었다.
+        try:
+            db.update_server(db_path, server_id, status="failed",
+                             last_error=str(e)[:200])
+        except Exception:
+            pass
+        utils.log_event("error", "server_collect_error", server_id=server_id,
+                        error=str(e)[:200], error_type=type(e).__name__)
+        raise
     finally:
         with _inflight_lock:
             _inflight.discard(server_id)

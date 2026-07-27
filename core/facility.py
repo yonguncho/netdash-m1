@@ -435,6 +435,14 @@ def _find_vrf_for_subnet(conn, net):
     return None
 
 
+def new_hosts_expected(db_path, subnet):
+    """이 대역에 아직 등록된 설비가 없는가(=0건이 정상일 수 있는 신규 대역인가)."""
+    try:
+        return not any(h.get("subnet") == subnet for h in db.get_facility_hosts(db_path))
+    except Exception:
+        return False
+
+
 def collect_band(db_path, switch_id, subnet, username, password, source_ip=None):
     """동기 수집(백그라운드 스레드에서 호출). 진행 상태는 _status로 갱신."""
     from netmiko import ConnectHandler
@@ -675,6 +683,21 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
             scanned_ips = (set(ips) - unscanned) | set(by_ip.keys())
         else:
             scanned_ips -= (unscanned - set(by_ip.keys()))
+    # ARP 결과가 0건이면 스캔 자체가 실패한 것으로 본다(VRF 오지정, 벤더별 명령
+    # 형식 차이, 권한 부족 등). 예전엔 이걸 '정상 완료'로 적용해 **그 대역 설비
+    # 전부를 연결 끊김으로 바꾸고 대량 오탐 알람을 보냈다.** 기존 상태를 보존한다.
+    # (이미 등록된 설비가 있는 대역에 한함 — 신규 대역의 0건은 정상일 수 있다)
+    if not by_ip and not new_hosts_expected(db_path, subnet):
+        utils.log_event("warning", "facility_zero_arp_kept_previous", subnet=subnet,
+                        vrf=vrf or "(global)", arp_sample=last_arp_sample)
+        with _lock:
+            _stop_requested = False
+        _set(running=False,
+             message="ARP 정보를 얻지 못해 이전 상태를 유지했습니다(대역: %s). "
+                     "스위치 계정 권한과 VRF 설정을 확인하세요." % subnet)
+        return {"subnet": subnet, "pinged": len(ips), "arp": 0, "saved": 0,
+                "new": 0, "offline": 0, "partial": True, "stopped": False,
+                "unscanned": len(unscanned), "zero_arp": True}
     saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip, scanned_ips=scanned_ips)
     utils.log_event("info", "facility_collected", subnet=subnet, pinged=len(ips),
                     arp=len(arp), saved=saved, new=new_cnt, offline=off_cnt,
@@ -785,8 +808,8 @@ def _apply_scan(db_path, subnet, by_ip, scanned_ips=None):
             off_cnt += 1
             removed_ips.append(ip)
 
-    db.clear_facility_subnet(db_path, subnet)
-    db.save_facility_hosts(db_path, merged)
+    # 삭제+저장을 한 트랜잭션으로 — 중간 실패 시 대역이 통째로 사라지던 것 방지
+    db.replace_facility_subnet(db_path, subnet, merged)
     # 완료 배너용 diff 스냅샷(설비 페이지에서 추가/끊김을 한눈에)
     _set(last_subnet=subnet, last_added=added_ips[:50], last_removed=removed_ips[:50])
     return len(merged), new_cnt, off_cnt
@@ -826,8 +849,7 @@ def reconcile_online_by_mac(db_path):
             for x in allh:
                 if any(x.get("ip") == it.get("ip") for it in items):
                     x["online"] = 1
-            db.clear_facility_subnet(db_path, subnet)
-            db.save_facility_hosts(db_path, allh)
+            db.replace_facility_subnet(db_path, subnet, allh)
             for it in items:
                 restored += 1
                 db.save_device_event(db_path, "device_online", "info", subnet=subnet,
@@ -953,8 +975,7 @@ def monitor_known_hosts(db_path):
         try:
             rows = [{k: x.get(k) for k in _KEEP_COLS + ("online",)}
                     for x in hosts if x.get("subnet") == subnet]
-            db.clear_facility_subnet(db_path, subnet)
-            db.save_facility_hosts(db_path, rows)
+            db.replace_facility_subnet(db_path, subnet, rows)
         except Exception as e:
             utils.log_event("warning", "facility_monitor_save_skip", subnet=subnet,
                             error=_collector._sanitize_error_msg(str(e)))
