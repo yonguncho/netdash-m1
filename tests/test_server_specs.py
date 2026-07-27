@@ -263,11 +263,18 @@ def test_specs_from_windows_powershell_fallback():
 def test_windows_powershell_runs_only_when_wmic_insufficient(monkeypatch):
     """PowerShell 콜드 스타트 비용 — wmic으로 다 채워지면 2차 실행을 하지 않는다."""
     calls = []
+    # 장착 구성(DIMM·물리 디스크)까지 wmic으로 전부 얻은 상태
     full_wmic = {
         "hostname": "WIN-01", "ver": "Microsoft Windows [Version 10.0.17763.1]",
         sc._CMD_WIN_CPU: "Name=Intel Xeon Gold 6248\r\nNumberOfLogicalProcessors=40\r\n",
         sc._CMD_WIN_MEM: "TotalPhysicalMemory=68719476736\r\n",
         sc._CMD_WIN_DISK: "DeviceID=C:\r\nFreeSpace=53687091200\r\nSize=107374182400\r\n",
+        sc._CMD_WIN_DIMM: ("Capacity=34359738368\r\nDeviceLocator=DIMM1\r\n"
+                           "Manufacturer=Samsung\r\nPartNumber=M393\r\n"
+                           "SMBIOSMemoryType=26\r\nSpeed=2666\r\n"),
+        sc._CMD_WIN_SLOTS: "MemoryDevices=4\r\n",
+        sc._CMD_WIN_PDISK: ("InterfaceType=SCSI\r\nModel=Samsung SSD\r\n"
+                            "Size=107374182400\r\n"),
     }
 
     def fake_exec(ip, u, p, cmds, timeout=15, port=22):

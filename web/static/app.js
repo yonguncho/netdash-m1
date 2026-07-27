@@ -108,6 +108,10 @@ document.addEventListener("click", function (e) {
     case "delete-fw": deleteFirewall(nid); break;
     case "diagnose-server": diagnoseServer(nid); break;
     case "terminal-server": openTerminal(nid, "server"); break;
+    case "hw-detail":
+      e.preventDefault();
+      showHwDetail(nid, btn.getAttribute("data-hw"));
+      break;
     case "vlan-toggle": toggleVlanGroup(btn); break;
   }
 });
@@ -5271,6 +5275,58 @@ function _num(v) {
   var n = Number(v);
   return isFinite(n) ? n : 0;
 }
+// 장착 구성(JSON 문자열) → 배열. 깨진 값이 표 전체 렌더를 막지 않도록 항상 배열 반환.
+function _hwList(v) {
+  if (Array.isArray(v)) return v;
+  try {
+    var a = JSON.parse(v || "[]");
+    return Array.isArray(a) ? a : [];
+  } catch (e) { return []; }
+}
+function _sizeLabel(mb) {
+  mb = _num(mb);
+  if (!mb) return "-";
+  if (mb >= 1048576) return (mb / 1048576).toFixed(1) + " TB";
+  return mb >= 1024 ? (mb / 1024).toFixed(mb % 1024 ? 1 : 0) + " GB" : mb + " MB";
+}
+// 요약용 압축 라벨(공백 없음) — 좁은 셀용이자 CSV(백엔드 summarize_modules)와 표기 통일
+function _sizeLabelCompact(mb) {
+  mb = _num(mb);
+  if (!mb) return "-";
+  if (mb >= 1048576) return +(mb / 1048576).toFixed(1) + "TB";
+  return mb >= 1024 ? +(mb / 1024).toFixed(mb % 1024 ? 1 : 0) + "GB" : mb + "MB";
+}
+// 모듈 목록 → '16GB×4 (DDR4)' 요약 (백엔드 summarize_modules와 같은 규칙)
+function summarizeModules(mods, slotsTotal) {
+  if (!mods.length) return "";
+  var counts = {}, order = [];
+  mods.forEach(function (m) {
+    var k = _num(m.size_mb);
+    if (!(k in counts)) { counts[k] = 0; order.push(k); }
+    counts[k]++;
+  });
+  order.sort(function (a, b) { return b - a; });
+  var parts = order.map(function (k) { return _sizeLabelCompact(k) + "×" + counts[k]; });
+  var types = [];
+  mods.forEach(function (m) {
+    if (m.type && types.indexOf(m.type) < 0) types.push(m.type);
+  });
+  var out = parts.join(" + ");
+  if (types.length) out += " (" + types.sort().join(", ") + ")";
+  slotsTotal = _num(slotsTotal);
+  if (slotsTotal > mods.length) out += " · " + mods.length + "/" + slotsTotal + " 슬롯";
+  return out;
+}
+function summarizeDisks(disks) {
+  if (!disks.length) return "";
+  var counts = {}, order = [];
+  disks.forEach(function (d) {
+    var k = d.kind || "디스크";
+    if (!(k in counts)) { counts[k] = 0; order.push(k); }
+    counts[k]++;
+  });
+  return order.sort().map(function (k) { return k + " " + counts[k]; }).join(" · ");
+}
 function fmtMem(mb) {
   mb = _num(mb);
   if (!mb) return "-";
@@ -5288,6 +5344,89 @@ function fmtDisk(s) {
   var color = pct >= 90 ? "#dc2626" : (pct >= 80 ? "#d97706" : "#64748b");
   return fmtSize(used) + " / " + fmtSize(total) +
     " <span style='color:" + color + "'>(" + pct + "%)</span>";
+}
+
+// 표 셀 — 총량(굵게) + 장착 구성 요약. 구성이 있으면 클릭해 상세를 연다.
+function memCell(s) {
+  var mods = _hwList(s.mem_modules);
+  var summary = summarizeModules(mods, s.mem_slots_total);
+  var head = fmtMem(s.mem_total_mb);
+  if (!summary) return head;
+  return "<a href='#' data-action='hw-detail' data-id='" + s.id + "' data-hw='mem' " +
+    "title='메모리 모듈 상세 보기' style='color:inherit;text-decoration:none'>" + head +
+    "<div style='color:#2563eb'>" + escHtml(summary) + " ▸</div></a>";
+}
+function diskCell(s) {
+  var disks = _hwList(s.disk_devices);
+  var summary = summarizeDisks(disks);
+  var head = fmtDisk(s);
+  if (!summary) return head;
+  return "<a href='#' data-action='hw-detail' data-id='" + s.id + "' data-hw='disk' " +
+    "title='물리 디스크 상세 보기' style='color:inherit;text-decoration:none'>" + head +
+    "<div style='color:#2563eb'>" + escHtml(summary) + " ▸</div></a>";
+}
+
+// 장착 구성 상세 팝업 — 메모리 모듈 / 물리 디스크 목록
+function showHwDetail(id, which) {
+  var s = (_servers || []).find(function (x) { return x.id === id; });
+  if (!s) return;
+  var mods = _hwList(s.mem_modules), disks = _hwList(s.disk_devices);
+  var t = document.getElementById("hw-detail-title");
+  if (t) t.textContent = "장착 구성 — " + s.name + " (" + s.ip + ")";
+  var html = "";
+
+  html += "<h4 style='margin:0 0 6px;font-size:13px'>메모리 " +
+    escHtml(fmtMem(s.mem_total_mb)) +
+    (_num(s.mem_slots_total) ? " · " + mods.length + "/" + _num(s.mem_slots_total) + " 슬롯 사용" : "") +
+    "</h4>";
+  if (mods.length) {
+    html += "<table class='data-table' style='font-size:12px;margin-bottom:14px'><thead><tr>" +
+      "<th>슬롯</th><th>용량</th><th>규격</th><th>속도</th><th>제조사</th><th>파트번호</th>" +
+      "</tr></thead><tbody>" +
+      mods.map(function (m) {
+        return "<tr><td>" + escHtml(m.locator || "-") + "</td>" +
+          "<td>" + escHtml(_sizeLabel(m.size_mb)) + "</td>" +
+          "<td>" + escHtml(m.type || "-") + "</td>" +
+          "<td>" + escHtml(m.speed || "-") + "</td>" +
+          "<td>" + escHtml(m.maker || "-") + "</td>" +
+          "<td>" + escHtml(m.part || "-") + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  } else {
+    html += "<p style='font-size:12px;color:#64748b;margin:0 0 14px'>" +
+      "모듈 정보가 없습니다. 리눅스는 <code>dmidecode</code>가 <b>root 권한</b>을 요구하므로 " +
+      "일반 계정으로 수집하면 총량만 보입니다.</p>";
+  }
+
+  html += "<h4 style='margin:0 0 6px;font-size:13px'>디스크 " + escHtml(fmtDisk(s)) +
+    (disks.length ? " · " + disks.length + "개 장착" : "") + "</h4>";
+  if (disks.length) {
+    html += "<table class='data-table' style='font-size:12px'><thead><tr>" +
+      "<th>장치</th><th>모델</th><th>용량</th>" +
+      "<th title='SSD / HDD / NVMe'>종류</th>" +
+      "<th title='연결 버스(SCSI·IDE·USB) — 저장매체 종류가 아님'>인터페이스</th>" +
+      "</tr></thead><tbody>" +
+      disks.map(function (d) {
+        return "<tr><td>" + escHtml(d.name || "-") + "</td>" +
+          "<td>" + escHtml(d.model || "-") + "</td>" +
+          "<td>" + escHtml(_num(d.size_gb) >= 1024
+            ? (_num(d.size_gb) / 1024).toFixed(1) + " TB"
+            : _num(d.size_gb) + " GB") + "</td>" +
+          "<td>" + escHtml(d.kind || "-") + "</td>" +
+          "<td>" + escHtml(d.bus || "-") + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  } else {
+    html += "<p style='font-size:12px;color:#64748b;margin:0'>" +
+      "물리 디스크 목록이 없습니다. 위 용량은 마운트된 파일시스템 합계입니다.</p>";
+  }
+
+  var box = document.getElementById("hw-detail-body");
+  if (box) box.innerHTML = html;
+  openModal("modal-hw-detail");
+  // 클릭한 쪽으로 스크롤
+  if (which === "disk" && box) {
+    var hs = box.querySelectorAll("h4");
+    if (hs.length > 1) hs[1].scrollIntoView({ block: "start" });
+  }
 }
 
 function renderServers() {
@@ -5319,8 +5458,8 @@ function renderServers() {
       "<td><code style='font-size:11px'>" + escHtml(s.mac || "-") + "</code></td>" +
       "<td>" + escHtml(s.os_info || s.os_type || "-") + "</td>" +
       "<td style='font-size:11px;max-width:200px'>" + fmtCpu(s) + "</td>" +
-      "<td style='font-size:11px;white-space:nowrap'>" + fmtMem(s.mem_total_mb) + "</td>" +
-      "<td style='font-size:11px;white-space:nowrap'>" + fmtDisk(s) + "</td>" +
+      "<td style='font-size:11px;white-space:nowrap'>" + memCell(s) + "</td>" +
+      "<td style='font-size:11px;white-space:nowrap'>" + diskCell(s) + "</td>" +
       "<td>" + kind + "</td>" +
       "<td style='font-size:11px;max-width:180px'>" + escHtml(s.open_ports || "-") + "</td>" +
       "<td>" + escHtml(s.switch_name || "-") + "</td>" +

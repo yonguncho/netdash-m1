@@ -316,6 +316,9 @@ CREATE TABLE IF NOT EXISTS servers (
     mem_total_mb INTEGER,
     disk_total_gb REAL,
     disk_used_gb REAL,
+    mem_modules TEXT,
+    mem_slots_total INTEGER,
+    disk_devices TEXT,
     switch_name TEXT,
     switch_port TEXT,
     status TEXT DEFAULT 'new',
@@ -666,6 +669,10 @@ def init_schema(db_path):
                 ("mem_total_mb", "INTEGER"),
                 ("disk_total_gb", "REAL"),
                 ("disk_used_gb", "REAL"),
+                # 장착 구성(JSON 문자열) — 메모리 모듈 목록 / 물리 디스크 목록
+                ("mem_modules", "TEXT"),
+                ("mem_slots_total", "INTEGER"),
+                ("disk_devices", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE servers ADD COLUMN {col} {definition}")
@@ -2677,7 +2684,8 @@ _SERVER_FIELDS = ("name", "ip", "os_type", "hostname", "mac", "is_vm",
                   "switch_port", "status", "last_error",
                   # 하드웨어 사양(SSH 상세 수집)
                   "cpu_model", "cpu_cores", "mem_total_mb",
-                  "disk_total_gb", "disk_used_gb")
+                  "disk_total_gb", "disk_used_gb",
+                  "mem_modules", "mem_slots_total", "disk_devices")
 
 
 def list_servers(db_path):

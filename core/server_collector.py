@@ -9,6 +9,8 @@
 
 VM 판정: MAC OUI(가상화 벤더 대역)로 자동 추정. 수동 지정이 항상 우선.
 """
+import base64
+import json
 import re
 import socket
 import threading
@@ -445,6 +447,158 @@ def _parse_esxcli_hw(text):
     return cores, mem_mb
 
 
+# ── 장착 구성(메모리 모듈 · 물리 디스크) ──────────────────────────
+_MAX_MODULES = 64        # DIMM 슬롯/디스크 개수 상한(출력 폭주 방어)
+
+
+def _size_token_to_mb(tok):
+    """'16384 MB' / '16 GB' / '894.3G' / '1.8T' / '512M' → MB(정수). 못 읽으면 0."""
+    m = re.match(r"\s*([\d.]+)\s*([KMGTP])", str(tok or "").strip(), re.I)
+    if not m:
+        return 0
+    try:
+        v = float(m.group(1))
+    except ValueError:
+        return 0
+    unit = m.group(2).upper()
+    mult = {"K": 1 / 1024.0, "M": 1, "G": 1024, "T": 1024 * 1024, "P": 1024 * 1024 * 1024}
+    return int(v * mult[unit])
+
+
+def parse_dmidecode_memory(text):
+    """`dmidecode -t 17` → (모듈 목록, 전체 슬롯 수).
+
+    슬롯이 비어 있으면 'Size: No Module Installed'이라 슬롯 수에만 반영한다.
+    dmidecode는 root 권한이 필요하다 — 권한이 없으면 출력이 비어 (빈 목록, 0)이 된다.
+    """
+    modules, slots = [], 0
+    for block in re.split(r"\n(?=Handle |Memory Device)", text or ""):
+        if "Memory Device" not in block:
+            continue
+        kv = {}
+        for ln in block.splitlines():
+            if ":" in ln:
+                k, v = ln.split(":", 1)
+                kv[k.strip().lower()] = v.strip()
+        if "size" not in kv:
+            continue
+        slots += 1
+        size_mb = _size_token_to_mb(kv["size"])
+        if not size_mb:                       # 'No Module Installed' 등 빈 슬롯
+            continue
+        modules.append({
+            "size_mb": size_mb,
+            "locator": kv.get("locator", "")[:40],
+            "type": kv.get("type", "")[:20],
+            "speed": kv.get("speed", "")[:24],
+            "maker": _unknown_to_blank(kv.get("manufacturer", ""))[:40],
+            "part": _unknown_to_blank(kv.get("part number", ""))[:40],
+        })
+        if len(modules) >= _MAX_MODULES:
+            break
+    return modules, min(slots, _MAX_MODULES)
+
+
+def _unknown_to_blank(s):
+    """'Unknown'·'Not Specified'·'To Be Filled By O.E.M.' 같은 무의미 값은 빈 문자열로."""
+    v = str(s or "").strip()
+    if v.lower() in ("unknown", "not specified", "none", "no module installed",
+                     "to be filled by o.e.m.", "n/a", "[empty]", "other"):
+        return ""
+    return v
+
+
+def parse_lsblk_disks(text):
+    """`lsblk -dn -P -o NAME,MODEL,SIZE,ROTA,TYPE` → 물리 디스크 목록.
+
+    -P(key="value") 형식을 쓰는 이유: 모델명에 공백이 있어 컬럼 분해가 깨진다.
+    """
+    disks = []
+    for ln in (text or "").splitlines():
+        kv = dict(re.findall(r'(\w+)="([^"]*)"', ln))
+        if not kv or kv.get("TYPE") != "disk":
+            continue
+        name = kv.get("NAME", "")
+        size_mb = _size_token_to_mb(kv.get("SIZE", ""))
+        if not size_mb:
+            continue
+        if name.startswith("nvme"):
+            kind = "NVMe"
+        elif kv.get("ROTA") == "0":
+            kind = "SSD"
+        elif kv.get("ROTA") == "1":
+            kind = "HDD"
+        else:
+            kind = ""
+        disks.append({"name": name[:32], "model": _unknown_to_blank(kv.get("MODEL"))[:60],
+                      "size_gb": round(size_mb / 1024.0, 1), "kind": kind})
+        if len(disks) >= _MAX_MODULES:
+            break
+    return disks
+
+
+def parse_iostat_disks(text):
+    """Solaris `iostat -En` → 물리 디스크 목록.
+
+    형식: 'c0t0d0  Soft Errors: ...' / 'Vendor: SEAGATE Product: ST973402 ...' /
+          'Size: 73.40GB <73400057856 bytes>'
+    """
+    disks = []
+    cur = None
+    for ln in (text or "").splitlines():
+        s = ln.rstrip()
+        if not s:
+            continue
+        if not s[0].isspace() and "Soft Errors:" in s:
+            if cur and cur.get("size_gb"):
+                disks.append(cur)
+            cur = {"name": s.split()[0][:32], "model": "", "size_gb": 0, "kind": ""}
+            continue
+        if cur is None:
+            continue
+        m = re.search(r"Vendor:\s*(\S+)\s+Product:\s*(.+?)\s+Revision:", s)
+        if m:
+            cur["model"] = ("%s %s" % (m.group(1), m.group(2).strip()))[:60]
+            continue
+        m = re.search(r"Size:\s*([\d.]+)\s*([KMGTP])B", s, re.I)
+        if m:
+            cur["size_gb"] = round(_size_token_to_mb(m.group(1) + m.group(2)) / 1024.0, 1)
+    if cur and cur.get("size_gb"):
+        disks.append(cur)
+    return disks[:_MAX_MODULES]
+
+
+def summarize_modules(modules, slots_total=0):
+    """모듈 목록 → '16GB×4 (DDR4)' 같은 한 줄 요약. 빈 목록이면 빈 문자열."""
+    if not modules:
+        return ""
+    counts = {}
+    for m in modules:
+        counts[m.get("size_mb", 0)] = counts.get(m.get("size_mb", 0), 0) + 1
+    parts = []
+    for size_mb in sorted(counts, reverse=True):
+        gb = size_mb / 1024.0
+        label = ("%gGB" % gb) if size_mb >= 1024 else ("%dMB" % size_mb)
+        parts.append("%s×%d" % (label, counts[size_mb]))
+    types = [t for t in {_unknown_to_blank(m.get("type")) for m in modules} if t]
+    out = " + ".join(parts)
+    if types:
+        out += " (%s)" % ", ".join(sorted(types))
+    if slots_total and slots_total > len(modules):
+        out += " · %d/%d 슬롯" % (len(modules), slots_total)
+    return out
+
+
+def summarize_disks(disks):
+    """디스크 목록 → 'SSD 2 · HDD 2' 같은 한 줄 요약. 빈 목록이면 빈 문자열."""
+    if not disks:
+        return ""
+    counts = {}
+    for d in disks:
+        counts[d.get("kind") or "디스크"] = counts.get(d.get("kind") or "디스크", 0) + 1
+    return " · ".join("%s %d" % (k, counts[k]) for k in sorted(counts))
+
+
 # 플랫폼 무관 폴백 명령 — 되는 것만 결과로 취한다(없는 명령은 빈 출력).
 # LC_ALL=C: 한글 로케일 서버에서 lscpu가 '모델명:'/'CPU:'로 나와 파싱이 전멸하는 것 방지.
 _CMD_LSCPU = "LC_ALL=C lscpu"
@@ -456,6 +610,11 @@ _CMD_DF = "LC_ALL=C df -Pk"
 # (AIX는 df -P를 지원하므로 여기 넣지 않는다 — AIX `df -k`는 3번째가 Used가 아니라 Free)
 _CMD_DF_XPG4 = "LC_ALL=C /usr/xpg4/bin/df -Pk"     # Solaris
 _CMD_DF_BDF = "LC_ALL=C bdf"                        # HP-UX
+# 장착 구성 — dmidecode는 root 권한이 필요하다(일반 계정이면 빈 출력 → 총량만 표시).
+_CMD_DIMM = "LC_ALL=C dmidecode -t 17"
+# -P(key="value") 형식: 모델명 공백 때문에 컬럼 분해가 깨지는 것 방지
+_CMD_LSBLK = "LC_ALL=C lsblk -dn -P -o NAME,MODEL,SIZE,ROTA,TYPE"
+_CMD_IOSTAT = "LC_ALL=C iostat -En"                 # Solaris 물리 디스크
 
 _UNIX_CMDS = [
     "hostname", "uname -n",                       # hostname
@@ -473,6 +632,8 @@ _UNIX_CMDS = [
     _CMD_ESXHW,                                   # ESXi
     # 디스크 — POSIX 우선, 안 되는 OS만 대체 명령이 값을 채운다
     _CMD_DF, _CMD_DF_XPG4, _CMD_DF_BDF,
+    # 장착 구성 — 메모리 모듈 / 물리 디스크
+    _CMD_DIMM, _CMD_LSBLK, _CMD_IOSTAT,
 ]
 
 
@@ -518,6 +679,16 @@ def _specs_from_unix(o):
             spec["disk_total_gb"] = min(_kb_to_gb(total_kb), _MAX_DISK_GB)
             spec["disk_used_gb"] = min(_kb_to_gb(used_kb), _MAX_DISK_GB)
             break
+
+    # 장착 구성 — 얻지 못하면 키를 넣지 않는다(기존 값 보존)
+    mods, slots = parse_dmidecode_memory(o.get(_CMD_DIMM))
+    if mods:
+        spec["mem_modules"] = json.dumps(mods, ensure_ascii=False)
+    if slots:
+        spec["mem_slots_total"] = slots
+    disks = parse_lsblk_disks(o.get(_CMD_LSBLK)) or parse_iostat_disks(o.get(_CMD_IOSTAT))
+    if disks:
+        spec["disk_devices"] = json.dumps(disks, ensure_ascii=False)
     return spec
 
 
@@ -526,8 +697,23 @@ def _specs_from_unix(o):
 _CMD_WIN_CPU = "wmic cpu get Name,NumberOfLogicalProcessors /format:list"
 _CMD_WIN_MEM = "wmic ComputerSystem get TotalPhysicalMemory /format:list"
 _CMD_WIN_DISK = "wmic logicaldisk where DriveType=3 get DeviceID,Size,FreeSpace /format:list"
-_CMD_WIN_PS = (
-    'powershell -NoProfile -Command "'
+def _ps_command(script):
+    """PowerShell 스크립트 → `powershell -EncodedCommand <base64>` 한 줄.
+
+    따옴표로 감싸 넘기면(`powershell -Command "...$_..."`) cmd.exe와 SSH 계층을
+    지나며 `$` 변수가 통째로 사라지고, PowerShell이 명령을 실행하지 않은 채
+    문자열만 되돌려준다(rc=0이라 성공처럼 보여 더 위험하다). base64(UTF-16LE)로
+    넘기면 따옴표·$·파이프가 어느 계층도 건드리지 못한다.
+    """
+    return ("powershell -NoProfile -NonInteractive -EncodedCommand "
+            + base64.b64encode(script.encode("utf-16-le")).decode("ascii"))
+
+
+# 진행률 표시가 stderr로 CLIXML을 뿜어 로그를 어지럽히므로 끈다.
+_PS_PREFIX = "$ProgressPreference='SilentlyContinue';"
+
+_CMD_WIN_PS = _ps_command(
+    _PS_PREFIX +
     "$c=Get-WmiObject Win32_Processor|Select-Object -First 1;"
     "$s=Get-WmiObject Win32_ComputerSystem;"
     "$d=Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3';"
@@ -536,12 +722,163 @@ _CMD_WIN_PS = (
     "Write-Output ('MEM=' + $s.TotalPhysicalMemory);"
     "Write-Output ('DTOTAL=' + ($d|Measure-Object Size -Sum).Sum);"
     "Write-Output ('DFREE=' + ($d|Measure-Object FreeSpace -Sum).Sum)"
-    '"'
 )
-# 1차(항상): hostname/버전 + wmic. PowerShell은 wmic이 없을 때만 2차로 실행한다
-# — PowerShell 콜드 스타트가 서버당 0.5~2초라 매번 돌리면 일괄 수집이 크게 느려진다.
-_WIN_CMDS = ["hostname", "ver", _CMD_WIN_CPU, _CMD_WIN_MEM, _CMD_WIN_DISK]
+# 장착 구성 — 메모리 슬롯(모듈별) / 물리 디스크
+_CMD_WIN_DIMM = ("wmic memorychip get Capacity,DeviceLocator,Manufacturer,PartNumber,"
+                 "Speed,SMBIOSMemoryType /format:list")
+_CMD_WIN_SLOTS = "wmic memphysical get MemoryDevices /format:list"
+_CMD_WIN_PDISK = "wmic diskdrive get Model,Size,InterfaceType /format:list"
+# PowerShell 폴백은 wmic이 없거나 MediaType(SSD/HDD)이 필요할 때만 2차로 실행한다.
+# 한 줄에 하나씩 '|' 구분으로 뽑아 파싱을 단순화한다.
+_CMD_WIN_PS_HW = _ps_command(
+    _PS_PREFIX +
+    "Get-WmiObject Win32_PhysicalMemory|ForEach-Object{"
+    "Write-Output ('DIMM|'+$_.Capacity+'|'+$_.DeviceLocator+'|'+$_.Manufacturer"
+    "+'|'+$_.PartNumber+'|'+$_.Speed+'|'+$_.SMBIOSMemoryType)};"
+    "Get-WmiObject Win32_PhysicalMemoryArray|ForEach-Object{"
+    "Write-Output ('SLOTS|'+$_.MemoryDevices)};"
+    "try{Get-PhysicalDisk -ErrorAction Stop|ForEach-Object{"
+    "Write-Output ('DISK|'+$_.FriendlyName+'|'+$_.Size+'|'+$_.MediaType)}}"
+    "catch{Get-WmiObject Win32_DiskDrive|ForEach-Object{"
+    "Write-Output ('DISK|'+$_.Model+'|'+$_.Size+'|')}}"
+)
+# 1차: hostname/버전 + wmic + 장착구성 PowerShell.
+# 장착구성 PS(_CMD_WIN_PS_HW)를 1차에 둔 이유 — wmic의 InterfaceType은 버스 종류라
+# SSD/HDD를 알 수 없다. 그 정보는 Get-PhysicalDisk(MediaType)에만 있으므로 어차피
+# 매번 필요하다. 같은 연결에서 함께 실행해 SSH 인증이 2회로 늘어나는 것을 막는다.
+# 요약 PS(_CMD_WIN_PS)만 wmic이 실패했을 때 2차로 실행한다.
+_WIN_CMDS = ["hostname", "ver", _CMD_WIN_CPU, _CMD_WIN_MEM, _CMD_WIN_DISK,
+             _CMD_WIN_DIMM, _CMD_WIN_SLOTS, _CMD_WIN_PDISK, _CMD_WIN_PS_HW]
 _WIN_CMDS_PS = [_CMD_WIN_PS]
+
+# SMBIOS 메모리 타입 코드 → 표기(자주 쓰이는 것만)
+_SMBIOS_MEM_TYPE = {"20": "DDR", "21": "DDR2", "24": "DDR3", "26": "DDR4",
+                    "34": "DDR5", "27": "LPDDR", "29": "LPDDR3", "30": "LPDDR4"}
+
+# wmic Win32_PhysicalMemory.Manufacturer는 제조사명이 아니라 JEDEC ID를 16진 문자열로
+# 주는 경우가 많다(예: '80CE000080CE' = Samsung). 그대로 두면 화면에 의미 없는 코드가
+# 뜨므로, 아는 코드는 이름으로 바꾸고 모르는 16진 코드는 비운다.
+_JEDEC_VENDOR = {
+    "80CE": "Samsung", "CE00": "Samsung",
+    "802C": "Micron", "2C00": "Micron",
+    "80AD": "SK Hynix", "AD00": "SK Hynix",
+    "859B": "Crucial", "9B85": "Crucial",
+    "04CB": "A-DATA", "CB04": "A-DATA",
+    "0198": "Kingston", "9801": "Kingston",
+    "82FE": "Elpida", "FE02": "Elpida",
+    "830B": "Transcend", "014F": "Transcend",
+    "80B5": "Kingmax", "8551": "Qimonda",
+}
+
+
+def _clean_maker(s):
+    """메모리 제조사 표기 정리 — JEDEC 16진 코드는 이름으로, 모르면 빈 문자열."""
+    v = _unknown_to_blank(s)
+    if not v:
+        return ""
+    hexs = re.sub(r"[^0-9A-Fa-f]", "", v)
+    # 전체가 16진수이고 4자리 이상이면 JEDEC 코드로 본다(제조사명은 보통 글자를 포함)
+    if len(hexs) == len(v.replace(" ", "")) and len(hexs) >= 4:
+        return _JEDEC_VENDOR.get(hexs[:4].upper(), "")
+    return v
+
+
+def parse_win_memorychip(text):
+    """`wmic memorychip ... /format:list` → 메모리 모듈 목록."""
+    modules = []
+    cur = {}
+
+    def _flush():
+        if not cur:
+            return
+        size_mb = int(_int(cur.get("Capacity")) / 1048576)
+        if size_mb:
+            speed = cur.get("Speed", "")
+            modules.append({
+                "size_mb": size_mb,
+                "locator": _unknown_to_blank(cur.get("DeviceLocator"))[:40],
+                "type": _SMBIOS_MEM_TYPE.get(cur.get("SMBIOSMemoryType", ""), ""),
+                "speed": ("%s MT/s" % speed) if speed.isdigit() else "",
+                "maker": _clean_maker(cur.get("Manufacturer"))[:40],
+                "part": _unknown_to_blank(cur.get("PartNumber"))[:40],
+            })
+
+    for k, v in _parse_kv_lines(text):
+        if k in cur:                      # 같은 키가 다시 나오면 다음 모듈 블록
+            _flush()
+            cur = {}
+        cur[k] = v
+    _flush()
+    return modules[:_MAX_MODULES]
+
+
+def parse_win_diskdrive(text):
+    """`wmic diskdrive ... /format:list` → 물리 디스크 목록.
+
+    wmic의 InterfaceType은 버스 종류(SCSI/IDE/USB)이지 SSD/HDD가 아니다.
+    실제로 NVMe SSD가 'SCSI'로 나오므로 이를 '종류'로 쓰면 오해를 부른다 →
+    bus에 따로 담고 kind(SSD/HDD)는 비워 둔다(PowerShell MediaType이 채운다).
+    """
+    disks = []
+    cur = {}
+
+    def _flush():
+        size = _int(cur.get("Size"))
+        if size:
+            disks.append({"name": "", "model": _unknown_to_blank(cur.get("Model"))[:60],
+                          "size_gb": _bytes_to_gb(size), "kind": "",
+                          "bus": _unknown_to_blank(cur.get("InterfaceType"))[:12]})
+
+    for k, v in _parse_kv_lines(text):
+        if k in cur:
+            _flush()
+            cur = {}
+        cur[k] = v
+    _flush()
+    return disks[:_MAX_MODULES]
+
+
+def parse_win_ps_hw(text):
+    """PowerShell 폴백('DIMM|...' / 'SLOTS|n' / 'DISK|...') → (모듈, 슬롯수, 디스크)."""
+    modules, disks, slots = [], [], 0
+    for ln in (text or "").splitlines():
+        f = ln.strip().split("|")
+        if f[0] == "DIMM" and len(f) >= 7:
+            size_mb = int(_int(f[1]) / 1048576)
+            if size_mb:
+                modules.append({
+                    "size_mb": size_mb, "locator": _unknown_to_blank(f[2])[:40],
+                    "type": _SMBIOS_MEM_TYPE.get(f[6].strip(), ""),
+                    "speed": ("%s MT/s" % f[5].strip()) if f[5].strip().isdigit() else "",
+                    "maker": _clean_maker(f[3])[:40],
+                    "part": _unknown_to_blank(f[4])[:40]})
+        elif f[0] == "SLOTS" and len(f) >= 2:
+            slots += _int(f[1], _MAX_MODULES)
+        elif f[0] == "DISK" and len(f) >= 4:
+            size = _int(f[2])
+            if size:
+                disks.append({"name": "", "model": _unknown_to_blank(f[1])[:60],
+                              "size_gb": _bytes_to_gb(size),
+                              "kind": _unknown_to_blank(f[3])[:12], "bus": ""})
+    return modules[:_MAX_MODULES], min(slots, _MAX_MODULES), disks[:_MAX_MODULES]
+
+
+def _merge_disks(wmic_disks, ps_disks):
+    """wmic(버스 종류) + PowerShell(SSD/HDD) 결과 합치기.
+
+    PowerShell 쪽이 MediaType(SSD/HDD)을 아는 유일한 경로라 이를 기준으로 삼고,
+    같은 용량의 wmic 항목이 있으면 버스 종류만 옮겨 붙인다.
+    """
+    if not ps_disks:
+        return wmic_disks
+    by_size = {}
+    for d in wmic_disks or []:
+        by_size.setdefault(d.get("size_gb"), d)
+    merged = []
+    for d in ps_disks:
+        w = by_size.get(d.get("size_gb"))
+        merged.append(dict(d, bus=(w or {}).get("bus", "")))
+    return merged
 
 
 def _parse_kv_lines(text):
@@ -605,6 +942,26 @@ def _specs_from_windows(o):
         # 뜬다(가짜 용량 경보). 총량만 알고 사용량은 모르는 상태로 둔다.
         if saw_free:
             spec["disk_used_gb"] = min(_bytes_to_gb(max(dtotal - dfree, 0)), _MAX_DISK_GB)
+
+    # 장착 구성 — wmic 우선, PowerShell 결과는 항상 겹쳐 본다.
+    # (조건부로 두면 wmic이 '다 채웠다'고 판정돼 SSD/HDD가 영영 비는데,
+    #  그 정보는 Get-PhysicalDisk에만 있어 wmic으로는 절대 알 수 없다)
+    modules = parse_win_memorychip(o.get(_CMD_WIN_DIMM))
+    slots = 0
+    for k, v in _parse_kv_lines(o.get(_CMD_WIN_SLOTS)):
+        if k == "MemoryDevices":
+            slots += _int(v, _MAX_MODULES)
+    pdisks = parse_win_diskdrive(o.get(_CMD_WIN_PDISK))
+    pm, ps_slots, pd = parse_win_ps_hw(o.get(_CMD_WIN_PS_HW))
+    modules = modules or pm
+    slots = slots or ps_slots
+    pdisks = _merge_disks(pdisks, pd)
+    if modules:
+        spec["mem_modules"] = json.dumps(modules, ensure_ascii=False)
+    if slots:
+        spec["mem_slots_total"] = slots
+    if pdisks:
+        spec["disk_devices"] = json.dumps(pdisks, ensure_ascii=False)
     return spec
 
 
@@ -681,7 +1038,8 @@ def _ssh_detail_windows(ip, username, password, port=22):
         utils.log_event("warning", "server_spec_parse_failed", ip=ip, error=str(e)[:120])
         return detail
     if not (spec.get("cpu_model") and spec.get("cpu_cores")
-            and spec.get("mem_total_mb") and spec.get("disk_total_gb")):
+            and spec.get("mem_total_mb") and spec.get("disk_total_gb")
+            and spec.get("mem_modules") and spec.get("disk_devices")):
         # wmic 미설치(Windows 11/Server 2025)·정책 차단 → PowerShell로 재시도.
         # 접속을 한 번 더 열지만, wmic이 되는 대부분의 서버에서는 건너뛴다.
         try:

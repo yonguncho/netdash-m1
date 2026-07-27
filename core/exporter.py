@@ -6,8 +6,9 @@ CSV는 UTF-8 BOM을 붙여 Excel에서 한글이 깨지지 않게 한다.
 """
 import csv
 import io
+import json
 
-from . import db, serverroom, tps_location, topology
+from . import db, serverroom, server_collector, tps_location, topology
 
 
 def _s(v):
@@ -73,22 +74,45 @@ def switches_rows(db_path):
 
 
 SERVER_COLS = ["이름", "IP", "hostname", "MAC", "OS",
-               "CPU", "코어", "메모리(GB)", "디스크 전체(GB)", "디스크 사용(GB)",
+               "CPU", "코어", "메모리(GB)", "메모리 구성", "메모리 슬롯",
+               "디스크 전체(GB)", "디스크 사용(GB)", "디스크 구성", "디스크 개수",
                "구분", "열린 포트",
                "연결 스위치", "포트", "위치", "상태", "마지막 수집"]
+
+
+def _hw_list(raw):
+    """JSON 문자열로 저장된 장착 구성 → 리스트(깨져 있으면 빈 리스트)."""
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        return v if isinstance(v, list) else []
+    except (ValueError, TypeError):
+        return []
 
 
 def servers_rows(db_path):
     rows = []
     for s in db.list_servers(db_path):
         mem_mb = s.get("mem_total_mb")
+        mods = _hw_list(s.get("mem_modules"))
+        disks = _hw_list(s.get("disk_devices"))
         rows.append({
             "이름": s.get("name"), "IP": s.get("ip"), "hostname": s.get("hostname"),
             "MAC": s.get("mac"), "OS": s.get("os_info") or s.get("os_type"),
             "CPU": s.get("cpu_model"), "코어": s.get("cpu_cores"),
             "메모리(GB)": round(mem_mb / 1024.0, 1) if mem_mb else "",
+            "메모리 구성": server_collector.summarize_modules(
+                mods, s.get("mem_slots_total") or 0),
+            "메모리 슬롯": ("%d/%d" % (len(mods), s.get("mem_slots_total"))
+                        if s.get("mem_slots_total") else ""),
             "디스크 전체(GB)": s.get("disk_total_gb"),
             "디스크 사용(GB)": s.get("disk_used_gb"),
+            "디스크 구성": " / ".join(
+                "%s %sGB%s" % (d.get("model") or d.get("name") or "디스크",
+                               d.get("size_gb"), (" " + d["kind"]) if d.get("kind") else "")
+                for d in disks),
+            "디스크 개수": len(disks) or "",
             "구분": "VM" if s.get("is_vm") else "물리",
             "열린 포트": s.get("open_ports"), "연결 스위치": s.get("switch_name"),
             "포트": s.get("switch_port"), "위치": s.get("location"),
