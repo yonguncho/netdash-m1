@@ -373,6 +373,23 @@ READONLY = False
 _acl_applied = set()
 
 
+def _is_under_user_profile(path_str):
+    """경로가 현재 사용자 프로필(%USERPROFILE% / $HOME) 안에 있는가.
+
+    프로필 안 = 그 사용자 전용 위치이므로 owner-only ACL이 안전하다.
+    밖(공유 폴더 호스트, C:\\NetDash, Program 폴더 등)이면 다른 계정·PC가 함께
+    쓸 수 있으므로 권한을 좁히면 안 된다.
+    """
+    try:
+        home = os.path.expanduser("~")
+        if not home or home == "~":
+            return False
+        return os.path.normcase(os.path.abspath(path_str)).startswith(
+            os.path.normcase(os.path.abspath(home)) + os.sep)
+    except Exception:
+        return False
+
+
 def _restrict_db_permissions(db_path):
     """HARDENING (CWE-276): Restrict database file permissions to owner-only.
 
@@ -392,6 +409,16 @@ def _restrict_db_permissions(db_path):
     # 접근 통제는 파일서버의 NTFS/공유 권한이 담당한다.
     if utils.is_network_path(db_path_str):
         utils.log_event("info", "db_acl_skip_network_path", path=db_path_str)
+        return
+
+    # 사용자 프로필 밖(= 여러 계정·여러 PC가 함께 쓸 수 있는 위치)에는 적용하지 않는다.
+    # is_network_path는 **클라이언트 쪽**만 감지한다. 공유 폴더를 들고 있는 PC에서는
+    # 같은 경로가 로컬 C:\... 이라 가드를 통과했고, icacls /inheritance:r 이
+    # SYSTEM·Administrators·Users·Authenticated Users 를 전부 제거해 **나머지 PC와
+    # 다른 Windows 계정, 백업·백신(SYSTEM)까지 DB에 접근하지 못했다.**
+    # 그런 위치의 접근 통제는 폴더 자체의 NTFS 권한이 담당한다.
+    if not _is_under_user_profile(db_path_str):
+        utils.log_event("info", "db_acl_skip_shared_location", path=db_path_str)
         return
 
     if platform.system() == "Windows":

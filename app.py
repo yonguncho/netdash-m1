@@ -668,14 +668,32 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 template_folder=str(Path(__file__).parent / "web" / "templates"),
                 static_folder=str(Path(__file__).parent / "web" / "static"))
 
-    # M4: Set 16MB max upload size (CWE-399 fix: prevent DoS via oversized uploads)
-    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
+    # M4: 업로드 크기 상한(CWE-399 — 거대 업로드로 인한 DoS 방지).
+    # 값은 config의 upload_max_mb 를 따른다. 예전엔 16MB 하드코딩이라
+    # 설정을 바꿔도 아무 효과가 없었다(로드는 되는데 쓰는 곳이 없었다).
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 기본값(설정 로드 후 갱신)
 
     # Reset config singleton to allow fresh load in tests
     reset_config()
     config = get_config(demo_mode=demo_mode)
 
+    try:
+        _mb = int(config.upload_max_mb or 16)
+        if 0 < _mb <= 1000:
+            app.config["MAX_CONTENT_LENGTH"] = _mb * 1024 * 1024
+    except (TypeError, ValueError):
+        pass
+
     db_path = config.get_db_path()
+
+    # 파일 로거는 **읽기 전용 인스턴스에서도** 붙인다. 예전엔 주 서버 전용
+    # 초기화(_start_primary_services) 안에서만 붙여서, 2번째 PC가 왜 읽기 전용이
+    # 됐는지가 공유폴더 netdash.log 에 한 줄도 남지 않았다(진단 불가).
+    _install_log_redaction()       # 접근 로그의 token= 값 마스킹(핸들러보다 먼저)
+    try:
+        _attach_file_logger(Path(str(db_path)).parent / "netdash.log")
+    except Exception as e:
+        log_event("warning", "file_logger_failed", error=str(e))
 
     app.config["IS_READONLY"] = readonly
     app.config["READONLY_PRIMARY"] = (
@@ -728,6 +746,21 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     if config.app.get("demo_mode") and not readonly:
         run_demo(config)
 
+    # SQLite INTEGER 상한을 넘는 경로 id를 한 곳에서 404로 처리한다.
+    # Flask `<int:id>` 는 자릿수 제한이 없어 20자리 id가 그대로 바인딩되고,
+    # SQL 실행 시 OverflowError → 500 + DB 오류 배너 오염(없는 id이므로 404가 맞다).
+    # 예전엔 서버 라우트에만 _bad_id 가드를 붙여 스위치·방화벽 10개 라우트가
+    # 전부 500이었고, 그중 하나는 try/except 조차 없어 예외가 그대로 탈출했다.
+    # 라우트별로 붙이면 새 라우트에서 또 빠지므로 before_request 한 곳에서 막는다.
+    _MAX_PATH_ID = 2 ** 63 - 1
+
+    @app.before_request
+    def reject_out_of_range_ids():
+        for val in (request.view_args or {}).values():
+            if isinstance(val, int) and not isinstance(val, bool) and \
+                    (val <= 0 or val > _MAX_PATH_ID):
+                return jsonify({"error": "not found"}), 404
+
     # API Token validation for production mode (CWE-306 fix: enforce authentication on all API routes)
     @app.before_request
     def validate_api_token():
@@ -770,6 +803,29 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                                        expected_token.encode("utf-8", "replace")):
                 log_event("warning", "api_invalid_token", path=request.path)
                 return jsonify({"error": "unauthorized"}), 401
+
+    @app.before_request
+    def reject_cross_origin_writes():
+        """CSRF 방어 — 다른 사이트가 이 서버의 상태 변경 요청을 대신 보내지 못하게.
+
+        JSON 본문 라우트는 `application/json` 이 CORS 프리플라이트를 유발해 우연히
+        보호되지만, **엑셀 업로드(multipart/form-data)는 CORS '단순 요청'이라
+        프리플라이트가 없다.** 그래서 운영자가 연 악성 페이지의 폼 전송이 그대로
+        실행돼 장비가 등록됐다(응답만 못 읽을 뿐 부수효과는 발생).
+
+        Origin이 없는 요청(curl·스크립트)은 브라우저가 아니므로 토큰 검증에 맡긴다.
+        """
+        if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
+            return
+        origin = request.headers.get("Origin")
+        if not origin:
+            return
+        host = request.host or ""
+        if origin in ("http://" + host, "https://" + host):
+            return
+        log_event("warning", "cross_origin_write_blocked",
+                  path=request.path, origin=str(origin)[:80])
+        return jsonify({"error": "forbidden"}), 403
 
     # 읽기 전용 게이트는 인증 뒤에 — 미인증 요청은 423(주 서버 호스트명 포함)이 아니라
     # 401을 받아야 한다. (정의는 위 `if readonly:` 블록)
@@ -965,8 +1021,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         return origin in ("http://" + host, "https://" + host)
 
     @app.route("/session", methods=["POST"])
+    @rate_limit("submit_token", max_requests=10, window_seconds=60)
     def submit_token():
-        """토큰 제출(POST) — 쿼리스트링을 쓰지 않아 접근 로그에 남지 않는다."""
+        """토큰 제출(POST) — 쿼리스트링을 쓰지 않아 접근 로그에 남지 않는다.
+
+        자격증명을 검증하는 유일한 엔드포인트인데 레이트리밋이 없어 초당 수백 번
+        추측이 가능했다(다른 자격증명 인접 라우트는 전부 걸려 있다).
+        """
         expected = config.api_token
         nxt = _safe_next(request.form.get("next") or "/")
         if not _api_needs_token():

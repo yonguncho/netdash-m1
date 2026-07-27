@@ -258,10 +258,13 @@ def test_dead_reconcile_ui_removed():
 
 
 def test_dead_topo_toolbar_bindings_removed():
-    i = APPJS_CODE.index("function renderTopology()")
-    body = APPJS_CODE[i:i + 900]
+    """모드/존/L2 툴바 배선은 HTML에 요소가 없어 죽은 코드였다.
+
+    v6.4.1에서 그 코드를 품고 있던 자동 렌더 뷰 자체가 제거됐으므로,
+    파일 전체에서 사라졌는지로 확인한다.
+    """
     for token in ("topo-zone-select", "btn-topo-l2", 'querySelectorAll(".topo-mode")'):
-        assert token not in body, token
+        assert token not in APPJS_CODE, token
 
 
 # ── B-28: 로그 살균 ──────────────────────────────────────────────

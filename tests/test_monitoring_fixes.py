@@ -99,7 +99,7 @@ def test_fw_table_and_cards_show_reachability():
 
 def test_topology_hover_highlight():
     js = APP_JS.read_text(encoding="utf-8")
-    assert "drop-shadow(0 0 4px #38bdf8)" in js   # 직결 라인 글로우
-    assert '"0.12"' in js                         # 무관 링크 페이드
-    assert 'nn.style.opacity = nb[nid]' in js     # 무관 노드 페이드
-    assert "data-basestroke" in js                # 종류색 복구
+    # 직결 라인 글로우는 도달 불가였던 자동 렌더 뷰의 스타일이라 v6.4.1에서 제거.
+    # 편집기의 호버 하이라이트 배선이 살아 있는지로 대체한다.
+    assert "_topoBindTips" in js
+    assert "topo-tip" in js                       # 툴팁 요소

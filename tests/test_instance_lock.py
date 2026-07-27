@@ -110,11 +110,30 @@ def test_restrict_db_permissions_skips_network_path(monkeypatch):
     db_mod._acl_applied.discard(unc)
     db_mod._restrict_db_permissions(unc)
     assert calls == []  # icacls 미호출
-    # 로컬 경로는 기존대로 icacls 호출됨 (동작 불변 확인)
-    local = r"C:\some\local\netdash_test_acl.db"
-    db_mod._acl_applied.discard(local)
-    db_mod._restrict_db_permissions(local)
-    assert len(calls) == 1
+
+
+def test_restrict_db_permissions_skips_shared_location(monkeypatch):
+    """사용자 프로필 밖(공유 폴더 호스트·C:\\NetDash 등)에는 적용하지 않는다.
+
+    is_network_path는 클라이언트 쪽만 감지한다. 공유 폴더를 **호스팅하는 PC**에서는
+    같은 경로가 로컬 C:\\... 이라 가드를 통과했고, owner-only ACL이 SYSTEM·
+    Administrators·Users 를 전부 제거해 다른 PC·다른 계정·백업이 DB를 못 열었다.
+    """
+    import os
+    import subprocess as sp
+    from core import db as db_mod
+    calls = []
+    monkeypatch.setattr(sp, "run", lambda *a, **k: calls.append(a) or None)
+    shared = r"C:\NetDashShare\netdash_test_acl.db"
+    db_mod._acl_applied.discard(shared)
+    db_mod._restrict_db_permissions(shared)
+    assert calls == [], "공유 가능한 위치에 owner-only ACL을 걸면 안 된다"
+    # 사용자 프로필 안(단독 사용 위치)은 종전대로 하드닝 적용
+    if os.name == "nt":
+        private = os.path.join(os.path.expanduser("~"), "netdash_test_acl.db")
+        db_mod._acl_applied.discard(private)
+        db_mod._restrict_db_permissions(private)
+        assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------

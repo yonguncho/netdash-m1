@@ -11,11 +11,22 @@ import json
 from . import db, serverroom, server_collector, tps_location, topology
 
 
+# CSV 수식 인젝션(CWE-1236) 방어용 선행 문자.
+# Excel/LibreOffice는 셀이 이 문자로 시작하면 수식으로 해석한다. 이 모듈이 만드는
+# 값의 상당수(스위치 이름·비고, 포트 description)가 **장비 config에서 그대로** 오고
+# 파일 용도가 "Excel에서 열기"라 실제 실행 경로다.
+_FORMULA_PREFIX = ("=", "+", "-", "@", "\t", "\r")
+
+
 def _s(v):
-    """셀 값 문자열화(None/빈값은 빈 문자열, 개행·탭 제거)."""
+    """셀 값 문자열화(None/빈값은 빈 문자열, 개행·탭 제거, 수식 접두 무력화)."""
     if v is None:
         return ""
-    return str(v).replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+    s = str(v).replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+    if s[:1] in _FORMULA_PREFIX:
+        # 앞에 작은따옴표를 붙이면 Excel이 '텍스트'로 취급한다(표시 값은 동일).
+        s = "'" + s
+    return s
 
 
 def to_csv(columns, rows):

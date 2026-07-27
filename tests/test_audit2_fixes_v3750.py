@@ -80,4 +80,5 @@ def test_firewall_guard_after_input_parse():
 def test_dead_code_removed():
     js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "function renderEventsTab" not in js          # 죽은 함수 제거
-    assert "툴바 미제공 — no-op" in js                    # topo 모드 바인딩 no-op화
+    # topo 모드 툴바 바인딩은 v6.4.1에서 함수째 제거(호출부도 함께 사라짐)
+    assert "_bindTopoModeButtons" not in js

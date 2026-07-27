@@ -189,14 +189,16 @@ def test_topology_galaxy_view_removed():
 
 
 def test_topology_single_zone_view():
-    """토폴로지는 존·대역 단일 뷰. core/tps/L2뱃지 코드는 보존(미노출)."""
+    """토폴로지 탭은 편집기(_renderEditor) 단일 경로만 사용한다.
+
+    예전 자동 렌더 뷰(_renderCoreMap/_renderTpsMap 등)는 `_topoData` 에 값을
+    대입하는 코드가 어디에도 없어 **전부 도달 불가**였고 v6.4.1에서 제거했다.
+    이 테스트는 그 코드의 '보존'이 아니라 실사용 경로를 확인한다.
+    """
     js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    # 단일 뷰: 기본 모드 zone, 모드 전환 버튼 제거
-    assert 'var _topoMode = "zone"' in js
-    # 심볼/렌더 코드는 보존
-    assert "_renderCoreMap" in js and "_renderTpsMap" in js
-    assert "_deviceSymbol" in js
-    assert "_buildBands" in js and "_drawBand" in js  # L2 대역 뱃지 코드 보존
+    assert "function loadTopology" in js and "function _renderEditor" in js
+    assert "_deviceSymbol" in js                     # 편집기가 쓰는 장비 아이콘
+    assert "_renderCoreMap" not in js, "도달 불가 렌더러가 되살아났다"
 
 
 def test_topology_api(client):
@@ -255,26 +257,32 @@ def test_new_ui_present():
     assert 'data-dtab="config"' in html and 'id="dtab-config"' in html
     assert 'id="em-enabled"' in html and 'id="btn-em-test"' in html
     js = APP_JS.read_text(encoding="utf-8")
-    assert "function loadTopology" in js and "function renderTopology" in js
+    assert "function loadTopology" in js and "function _renderEditor" in js
     assert "function loadConfigTab" in js and "/api/configs/diff" in js
 
 
 def test_topology_tree_ui_features():
-    """v3.45: 2탭 계층 배치 + 호버 툴팁 + 줌/팬 + 카드 노드."""
+    """편집기 화면 기능: 호버 툴팁 + 줌/팬 + 연결선.
+
+    (계층 자동 배치 `_layoutLayered`·카드 노드 `_drawNode` 는 도달 불가였던
+     자동 렌더 뷰의 일부라 v6.4.1에서 제거됐다.)
+    """
     js = APP_JS.read_text(encoding="utf-8")
-    assert "_layoutLayered" in js          # 종류별 계층 배치
     assert "topo-tip" in js                # 호버 툴팁
     assert "viewBox" in js and "wheel" in js  # 줌/팬
-    assert "topo-edge" in js               # 베지어 링크 + 노드 호버 강조
-    assert "_drawNode" in js               # 중간 카드 노드
+    assert "_topoBindTips" in js           # 툴팁 배선(편집기에서 호출)
 
 
-def test_topology_l2_band_code_preserved():
-    """L2 대역 뱃지 코드 보존(단일 뷰로 전환됐지만 core map 코드 유지)."""
+def test_topology_l2_band_ui_is_editor_side():
+    """대역 표시는 편집기의 대역 박스(kind: subnet)가 담당한다.
+
+    예전 core map의 L2 대역 뱃지(_ipBand/band-detail)는 도달 불가 코드였고
+    v6.4.1에서 제거됐다. 편집기 쪽 대역 기능이 살아 있는지를 확인한다.
+    """
     js = APP_JS.read_text(encoding="utf-8")
-    assert "_ipBand" in js                      # /24 대역 산출
-    assert "band-detail" in js                  # 드릴다운 패널
-    assert 'kind === "band"' in js              # 대역 유사노드 처리
+    assert "subnet:" in js and "대역 박스" in js       # 팔레트의 대역 박스
+    assert "_tSubnetChips" in js or "subnets" in js    # 노드별 대역 칩
+    assert "_ipBand" not in js, "도달 불가 코드가 되살아났다"
 
 
 def test_topology_editor_ui():
