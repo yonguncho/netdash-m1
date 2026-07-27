@@ -169,17 +169,45 @@ def get_source_ip(db_path):
         return None
 
 
+def _decode(blob):
+    if not blob:
+        return None
+    dec = credentials.decrypt_credential(blob)
+    if not dec or "|" not in dec:
+        return None
+    return tuple(dec.split("|", 1))
+
+
 def get_credential(db_path):
     """내 PC 프로필의 계정 (username, password). 없거나 복호화 실패 시 None.
 
     DPAPI라 다른 PC가 저장한 blob은 여기서 복호화되지 않는다 — 각 PC는
     자기가 등록한 계정만 쓰게 되는 것이 의도된 동작.
+
+    프로필 키는 '기본 경로 어댑터의 MAC'이라, VPN 연결/해제·이중 NIC·VDI 어댑터
+    전환으로 경로가 바뀌면 키가 달라져 계정이 조용히 사라졌다(자동 수집이 전 장비를
+    건너뛰고 경고도 없었다). 같은 호스트명으로 저장된 다른 프로필을 폴백으로 본다 —
+    DPAPI가 복호화에 성공한다는 것 자체가 '이 PC에서 저장한 것'이라는 증거다.
     """
     prof = get_profile(db_path)
-    if not prof or not prof.get("cred_blob"):
-        return None
-    dec = credentials.decrypt_credential(prof["cred_blob"])
-    if not dec or "|" not in dec:
-        return None
-    username, password = dec.split("|", 1)
-    return (username, password)
+    cred = _decode((prof or {}).get("cred_blob"))
+    if cred:
+        return cred
+    try:
+        ident = get_local_identity()
+        host = ident.get("hostname")
+        for row in db.list_pc_profiles(db_path):
+            if not row.get("has_cred") or row.get("mac") == ident.get("mac"):
+                continue
+            if row.get("hostname") != host:
+                continue          # 다른 PC의 프로필은 건드리지 않는다
+            other = db.get_pc_profile(db_path, row["mac"])
+            cred = _decode((other or {}).get("cred_blob"))
+            if cred:
+                utils.log_event("info", "pc_profile_cred_fallback",
+                                from_mac=row["mac"], to_mac=ident.get("mac"),
+                                hostname=host)
+                return cred
+    except Exception:
+        pass
+    return None

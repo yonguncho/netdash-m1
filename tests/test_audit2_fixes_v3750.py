@@ -38,11 +38,32 @@ def test_fortigate_collect_closes_session():
 
 
 # ── 미검토: scheduler auto_collect 비블로킹 ──
-def test_scheduler_auto_collect_threaded():
+def test_scheduler_auto_collect_threaded(monkeypatch):
+    """자동 수집은 별도 스레드로 실행돼야 스케줄러 루프가 막히지 않는다.
+
+    문자열 검사 대신 실제로 호출해 확인한다(스레드 생성 코드가 _fire로 옮겨졌다).
+    """
+    from datetime import datetime
     from core import scheduler
-    src = inspect.getsource(scheduler)
-    # collect_all_registered가 별도 스레드로 실행되어야(블로킹 방지)
-    assert "Thread(target=collector.collect_all_registered" in src
+    started = {}
+
+    class _FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, name=None):
+            started["target"] = target
+            started["args"] = args
+            started["daemon"] = daemon
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(scheduler.threading, "Thread", _FakeThread)
+    now = datetime(2026, 7, 27, 6, 0, 10)
+    scheduler._fire("auto-collect", "auto_collect_trigger",
+                    scheduler.collector.collect_all_registered,
+                    "db.sqlite", "06:00", datetime(2026, 7, 27, 6, 0), now)
+    assert started.get("started") is True
+    assert started["target"] is scheduler.collector.collect_all_registered
+    assert started["daemon"] is True
 
 
 # ── 기능 완결: 방화벽 가드 잠금 누수(가드가 입력파싱 뒤에 위치) ──
