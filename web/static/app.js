@@ -34,6 +34,7 @@ let _pollTimer = null;
 })();
 
 function showReadonlyBanner(primaryHost) {
+  window._ndReadOnly = true;      // 자동 저장 등 쓰기 동작을 스스로 멈추기 위한 플래그
   var el = document.getElementById("readonly-banner");
   if (!el) {
     el = document.createElement("div");
@@ -47,6 +48,7 @@ function showReadonlyBanner(primaryHost) {
 }
 
 function clearReadonlyBanner() {
+  window._ndReadOnly = false;
   // 승격(주 서버 전환) 감지: 배너를 초록으로 바꿔 8초간 알린 뒤 제거
   var el = document.getElementById("readonly-banner");
   if (!el || el.dataset.promoted) return;
@@ -2854,9 +2856,13 @@ document.addEventListener("change", function (e) {
       if (res.ok) {
         _bulkSel = {};
         var allc = document.getElementById("dash-check-all"); if (allc) allc.checked = false;
-        var msg = res.queued_count + "대 수집을 시작했습니다(백그라운드).";
-        if (res.skipped_count) msg += "\n제외 " + res.skipped_count + "대(이미 수집 중이거나 IP 거부).";
-        alert(msg);
+        if (res.skipped_count) {
+          alert("제외 " + res.skipped_count + "대(이미 수집 중이거나 IP 거부).");
+        }
+        // 진행바 + 중지 버튼(다른 화면들과 동일). 예전엔 alert 한 번이 전부라
+        // 200대를 걸면 진척 확인도 중단도 불가능했다.
+        pollProgress("/api/switches/bulk-collect/status", "sw-bulk-progress",
+                     pollState, "/api/switches/bulk-collect/stop");
         pollState();
       } else {
         alert(res.error || "일괄 수집 실패");
@@ -3123,14 +3129,40 @@ var _tLoaded = false;                     // 구성도 최초 로드 완료(탭 
 var _tSaveTimer = null;                   // 자동 저장 디바운스
 var _tSeq = 1;
 
+var _tUndo = null;              // 되돌리기용 직전 구성도(불러오기·초기화 직전 스냅샷)
+var _tSuppressSave = false;     // 이번 렌더는 자동 저장하지 않는다
+
 // 변경 후 자동 저장(디바운스 1.5s) — 탭 전환/새로고침에도 유지. 읽기 전용은 스킵.
 function _tAutoSave() {
   if (!_tLoaded) return;
+  if (window._ndReadOnly) return;   // 주석과 달리 검사가 없어 423만 반복 요청하던 것 수정
+  if (_tSuppressSave) return;       // '불러오기' 직후 — 사용자가 손대기 전엔 저장하지 않는다
   if (_tSaveTimer) clearTimeout(_tSaveTimer);
   _tSaveTimer = setTimeout(function () {
     fetch("/api/topology/diagram", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(_tdiag) }).catch(function () {});
   }, 1500);
+}
+
+// 파괴적 교체(불러오기·초기화) 직전에 되돌릴 수 있게 스냅샷을 잡는다.
+// 예전엔 '저장 전이면 사라집니다'라고 안내해 저장본은 안전하다는 인상을 줬지만,
+// 교체 후 _renderEditor()가 자동 저장을 불러 서버 구성도까지 덮어썼다(되돌리기 없음).
+function _tSnapshotForUndo() {
+  try {
+    _tUndo = JSON.parse(JSON.stringify(_tdiag));
+  } catch (e) { _tUndo = null; }
+  var b = document.getElementById("btn-topo-undo");
+  if (b) b.classList.remove("hidden");
+}
+
+function _tRestoreUndo() {
+  if (!_tUndo) return;
+  _tdiag = _tUndo;
+  _tUndo = null;
+  var b = document.getElementById("btn-topo-undo");
+  if (b) b.classList.add("hidden");
+  _tView = null; _tSel = {}; _tSelId = null;
+  _renderEditor();          // 되돌린 내용은 저장한다(서버 구성도 복구)
 }
 
 // 현재 선택된 노드 id 목록(다중 우선, 없으면 단일)
@@ -5159,11 +5191,19 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
   var b = document.getElementById("btn-topo-clear");
   if (b) b.addEventListener("click", function () {
     if (!_tdiag.nodes.length && !_tdiag.edges.length) return;
-    if (!confirm("캔버스를 모두 비울까요? (모든 아이콘·선 삭제 — 처음부터 다시 그립니다)")) return;
+    if (!confirm("캔버스를 모두 비울까요? (모든 아이콘·선 삭제 — 처음부터 다시 그립니다)\n" +
+                 "[↩ 되돌리기]로 복원할 수 있습니다.")) return;
+    _tSnapshotForUndo();
     _tdiag = { nodes: [], edges: [] };
     _tSel = {}; _tSelId = null; _tLinkFrom = null; _tLineStyle = null; _tHighlightLineBtn();
     _tView = null;                 // 전체 화면으로
     _renderEditor();               // 자동 저장으로 빈 구성도 반영
+  });
+  var undo = document.getElementById("btn-topo-undo");
+  if (undo) undo.addEventListener("click", function () {
+    if (!_tUndo) { alert("되돌릴 내용이 없습니다."); return; }
+    if (!confirm("직전 상태로 되돌릴까요? (지금 화면의 변경은 사라집니다)")) return;
+    _tRestoreUndo();
   });
   var fit = document.getElementById("btn-topo-fit");
   if (fit) fit.addEventListener("click", function () {
@@ -5191,7 +5231,11 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
   // 서버실 현황 불러오기 — 등록 장비를 정보 채운 아이콘으로 나열(종류별 행 배치)
   var draft = document.getElementById("btn-topo-draft");
   if (draft) draft.addEventListener("click", function () {
-    if (_tdiag.nodes.length && !confirm("현재 구성도를 서버실 장비로 다시 채울까요? (저장 전이면 사라집니다)")) return;
+    if (_tdiag.nodes.length && !confirm(
+        "현재 구성도를 서버실 장비로 다시 채웁니다.\n" +
+        "저장된 구성도(배치·연결선·존/대역 박스)도 함께 바뀝니다.\n" +
+        "바꾼 뒤에는 [↩ 되돌리기]로 복원할 수 있습니다.\n계속할까요?")) return;
+    _tSnapshotForUndo();
     fetch("/api/topology/serverroom").then(function (r) { return r.json(); }).then(function (d) {
       // 종류별 행(y) + 순서(x)로 정렬 배치 → 사용자가 골라서 이동
       var ROW = { internet: 0, firewall: 1, backbone: 2, l4: 3, l3: 4, l2: 5, ap: 6, server: 7, pc: 7 };
@@ -5205,7 +5249,11 @@ function _bindTopoModeButtons() { /* 툴바 미제공 — no-op */ }
       });
       _tdiag = { nodes: nodes, edges: [] };   // 링크는 편집 모드에서 직접 연결(포트 자동 인식)
       _tView = null; _tSel = {}; _tSelId = null;   // 전체 화면으로 리셋
+      // 불러온 초안은 아직 저장하지 않는다 — 사용자가 손대거나 [저장]을 눌러야 반영된다.
+      // (이 억제가 없으면 1.5초 뒤 자동 저장이 서버 구성도를 덮어써 되돌릴 수 없었다)
+      _tSuppressSave = true;
       _renderEditor();
+      _tSuppressSave = false;
       if (!nodes.length) alert("서버실 현황(위치 A09U27 지정)에 등록된 장비가 없습니다.");
     }).catch(function () { alert("서버실 현황 불러오기 오류"); });
   });

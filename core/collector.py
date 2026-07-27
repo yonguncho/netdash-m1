@@ -520,6 +520,53 @@ def _abort_enqueue(switch_id):
     credentials.clear_session_switch(switch_id)
 
 
+def cancel_pending():
+    """대기 중인 수집 작업을 비운다(사용자 '수집 중지'). 반환: 취소한 개수.
+
+    이미 워커가 붙잡고 SSH 접속 중인 장비는 중간에 끊지 않는다(부분 수집 방지).
+    큐에서 뺀 장비는 '수집 중' 표시를 풀어 다시 수집할 수 있게 만든다.
+    """
+    global _worker_queue
+    if _worker_queue is None:
+        return 0
+    cancelled = 0
+    while True:
+        try:
+            item = _worker_queue.get_nowait()
+        except queue.Empty:
+            break
+        if item is None:              # 종료 sentinel은 되돌려 놓는다
+            try:
+                _worker_queue.put_nowait(None)
+            except Exception:
+                pass
+            break
+        try:
+            _dbp, sid = item
+        except Exception:
+            continue
+        with _collector_lock:
+            _collecting_switches.discard(sid)
+        try:
+            credentials.clear_session_switch(sid)
+        except Exception:
+            pass
+        try:
+            db.set_switch_status(_dbp, sid, "new")
+        except Exception:
+            pass
+        cancelled += 1
+    if cancelled:
+        utils.log_event("info", "collect_pending_cancelled", count=cancelled)
+    return cancelled
+
+
+def collecting_ids():
+    """지금 수집 중(대기 포함)인 스위치 id 집합 — 진행바 계산용."""
+    with _collector_lock:
+        return set(_collecting_switches)
+
+
 def _worker_loop():
     global _worker_queue, _collecting_switches
 

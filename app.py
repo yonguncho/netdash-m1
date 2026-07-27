@@ -146,6 +146,9 @@ def _run_diagnose_all(db_path, source_ip):
 # ─── 방화벽 전체 수집 — 백그라운드 스레드 + 상태 폴링 ───────────────
 _fw_all_lock = threading.Lock()
 _fw_all = {"running": False, "total": 0, "done": 0, "ok": 0, "message": ""}
+# 스위치 일괄 수집 배치 — 진행바·중지용(수집 자체는 collector 워커 큐가 처리)
+_sw_bulk = {"ids": [], "total": 0, "started": False}
+_sw_bulk_lock = threading.Lock()
 # 진단 전용 진행 상태 — 수집과 별개로 둔다(진단이 수집 상태를 덮어쓰지 않게)
 _fw_diag = {"running": False, "total": 0, "done": 0, "ok": 0, "message": "",
             "results": []}
@@ -2524,6 +2527,38 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "diagnose_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/switches/bulk-collect/status", methods=["GET"])
+    def bulk_collect_status():
+        """스위치 일괄 수집 진행 상태 — 다른 화면들과 같은 {running,done,total,message}."""
+        with _sw_bulk_lock:
+            ids = list(_sw_bulk.get("ids") or [])
+            total = _sw_bulk.get("total") or 0
+            started = _sw_bulk.get("started")
+        if not started or not total:
+            return jsonify({"running": False, "done": 0, "total": 0, "message": ""})
+        try:
+            pending = collector.collecting_ids() & set(ids)
+        except Exception:
+            pending = set()
+        done = total - len(pending)
+        running = bool(pending)
+        if not running:
+            with _sw_bulk_lock:
+                _sw_bulk.update(started=False)
+        return jsonify({"running": running, "done": done, "total": total,
+                        "message": ("스위치 수집 중 (%d/%d)" % (done, total) if running
+                                    else "완료(%d대)" % total)})
+
+    @app.route("/api/switches/bulk-collect/stop", methods=["POST"])
+    def bulk_collect_stop():
+        """대기 중인 스위치 수집을 취소. 이미 접속 중인 장비는 끝까지 마친다."""
+        with _sw_bulk_lock:
+            if not _sw_bulk.get("started"):
+                return jsonify({"ok": False, "error": "진행 중인 수집이 없습니다"}), 400
+        n = collector.cancel_pending()
+        log_event("info", "bulk_collect_stopped", cancelled=n)
+        return jsonify({"ok": True, "cancelled": n})
+
     @app.route("/api/switches/diagnose-all", methods=["POST"])
     @rate_limit("diagnose_all", max_requests=5, window_seconds=60)
     def diagnose_all_endpoint():
@@ -3598,6 +3633,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 else:
                     skipped.append({"id": sid, "reason": result.get("message", "enqueue failed")})
             log_event("info", "bulk_collect", queued=len(queued), skipped=len(skipped))
+            # 진행바·중지에 쓸 배치 정보 기록(스위치만 진행 표시가 없어 200대를 걸면
+            # alert 한 번이 전부였고, 진척 확인도 중단도 불가능했다)
+            with _sw_bulk_lock:
+                _sw_bulk.update(ids=list(queued), total=len(queued), started=True)
             return jsonify({"ok": True, "queued": queued, "skipped": skipped,
                             "queued_count": len(queued), "skipped_count": len(skipped)}), 202
         except Exception as e:
