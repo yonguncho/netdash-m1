@@ -2218,15 +2218,38 @@ function _updateFwSelBtns() {
   // 전체 진단 — 저장 계정으로 도달성·인증 확인(수집과 동일 경로, 진행바 공유)
   var diag = document.getElementById("btn-fw-diagnose-all");
   if (diag) diag.addEventListener("click", function () {
-    if (!confirm("등록된 방화벽의 관리 포트 도달성과 저장 계정 인증을 확인합니다.\n계속할까요?")) return;
-    fetch("/api/firewalls/collect-all", { method: "POST" })
+    if (!confirm("등록된 방화벽의 관리 포트·SSH 도달성과 저장 계정 인증을 확인합니다.\n" +
+                 "수집은 하지 않습니다(인터페이스·ARP·상태를 바꾸지 않음).\n계속할까요?")) return;
+    // 예전엔 이 버튼이 collect-all을 호출해 실제로는 수집을 했다(안내와 다름)
+    fetch("/api/firewalls/diagnose-all", { method: "POST" })
       .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (res) {
         if (!res.ok) { alert((res.b && res.b.error) || "진단 시작 실패"); return; }
-        pollProgress("/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls,
-          "/api/firewalls/collect-all/stop");
+        pollProgress("/api/firewalls/diagnose-all/status", "firewall-progress",
+                     _showFwDiagResult);
       }).catch(function () { alert("진단 오류"); });
   });
+
+  // 진단 결과를 진단 팝업(장비 진단)에 표로 보여준다
+  function _showFwDiagResult() {
+    fetch("/api/firewalls/diagnose-all/status").then(function (r) { return r.json(); })
+      .then(function (s) {
+        var rows = (s && s.results) || [];
+        if (!rows.length) return;
+        var out = document.getElementById("diag-result");
+        if (!out) return;
+        out.textContent = rows.map(function (d) {
+          return d.name + " (" + d.host + ") · " + (d.vendor || "-") + "\n" +
+            "  관리 포트 TCP-" + d.mgmt_port + ": " + (d.tcp_mgmt ? "도달" : "실패") +
+            " · SSH TCP-22: " + (d.tcp_ssh ? "도달" : "실패") + "\n" +
+            "  저장 자격증명: " + (d.has_login ? "계정/비밀번호" : d.has_token ? "API 토큰만" : "없음") +
+            " · 인증: " + (d.auth_ok ? "성공" : (d.has_token || d.has_login ? "실패" : "미검증")) +
+            (d.detail ? "\n  " + d.detail : "");
+        }).join("\n\n");
+        openModal("modal-diagnose");
+        loadFirewalls();
+      }).catch(function () {});
+  }
 })();
 
 function loadFirewalls() {
@@ -5635,13 +5658,16 @@ function renderServers() {
   var srvDiag = document.getElementById("btn-server-diagnose");
   if (srvDiag) srvDiag.addEventListener("click", function () {
     if (!(_servers || []).length) { alert("등록된 서버가 없습니다."); return; }
-    if (!confirm("계정 없이 전 서버의 도달성·열린 포트·hostname·연결 스위치를 확인합니다.\n계속할까요?")) return;
-    fetch("/api/servers/collect-all", {
-      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
-    }).then(function () {
-      pollProgress("/api/servers/collect-all/status", "server-progress", loadServers,
-        "/api/servers/collect-all/stop");
-    }).catch(function (e) { console.error(e); alert("진단 오류"); });
+    if (!confirm("계정 없이 전 서버의 도달성·열린 포트·hostname·연결 스위치를 확인합니다.\n" +
+                 "SSH 접속은 하지 않으므로 OS·CPU·메모리·디스크는 갱신되지 않습니다.\n계속할까요?")) return;
+    // 예전엔 collect-all을 호출해 세션·저장 계정으로 실제 SSH 접속을 했다(안내와 다름)
+    fetch("/api/servers/diagnose-all", { method: "POST" })
+      .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+      .then(function (res) {
+        if (!res.ok) { alert((res.b && res.b.error) || "진단 시작 실패"); return; }
+        pollProgress("/api/servers/collect-all/status", "server-progress", loadServers,
+          "/api/servers/collect-all/stop");
+      }).catch(function (e) { console.error(e); alert("진단 오류"); });
   });
 
   var allBtn = document.getElementById("btn-server-collect-all");

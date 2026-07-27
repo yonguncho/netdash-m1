@@ -146,6 +146,73 @@ def _run_diagnose_all(db_path, source_ip):
 # ─── 방화벽 전체 수집 — 백그라운드 스레드 + 상태 폴링 ───────────────
 _fw_all_lock = threading.Lock()
 _fw_all = {"running": False, "total": 0, "done": 0, "ok": 0, "message": ""}
+# 진단 전용 진행 상태 — 수집과 별개로 둔다(진단이 수집 상태를 덮어쓰지 않게)
+_fw_diag = {"running": False, "total": 0, "done": 0, "ok": 0, "message": "",
+            "results": []}
+_fw_diag_lock = threading.Lock()
+
+
+def _run_diagnose_all_firewalls(db_path, source_ip):
+    """방화벽 도달성·인증만 확인한다. 인터페이스/ARP를 저장하지 않고 status도 안 바꾼다.
+
+    예전엔 '전체 진단' 버튼이 collect-all을 호출해 실제 수집을 했다 —
+    안내문(도달성·인증 확인)과 달리 데이터를 덮어쓰고 상태를 바꿨다.
+    """
+    import json as _json
+    results = []
+    try:
+        try:
+            firewalls = db.list_firewalls(db_path)
+        except Exception as e:
+            with _fw_diag_lock:
+                _fw_diag.update(message=collector._sanitize_error_msg(str(e)))
+            return
+        with _fw_diag_lock:
+            _fw_diag.update(total=len(firewalls), done=0, ok=0, message="진단 중")
+        for fw in firewalls:
+            fid = fw.get("id")
+            vendor = (fw.get("vendor") or "").lower()
+            host = fw.get("host")
+            mgmt = fw.get("port") or (443 if vendor == "fortigate" else 22)
+            token = username = password = ""
+            try:
+                blob = db.get_firewall_credential(db_path, fid)
+                if blob:
+                    dec = credentials.decrypt_text(blob)
+                    if dec:
+                        saved = _json.loads(dec)
+                        token = saved.get("token", "")
+                        username = saved.get("username", "")
+                        password = saved.get("password", "")
+            except Exception:
+                pass
+            item = {"id": fid, "name": fw.get("name"), "host": host, "vendor": vendor,
+                    "mgmt_port": mgmt}
+            try:
+                item["tcp_mgmt"] = connectivity.test_tcp(host, mgmt, 3, source_ip)
+                item["tcp_ssh"] = connectivity.test_tcp(host, 22, 3, source_ip)
+                item["has_token"] = bool(token)
+                item["has_login"] = bool(username and password)
+                res = connectivity.test_firewall(vendor, host, mgmt, token=token,
+                                                 username=username, password=password,
+                                                 verify_ssl=False, source_ip=source_ip)
+                item["auth_ok"] = bool(res.get("ok")) and res.get("stage") == "auth"
+                item["detail"] = res.get("detail") or ""
+                if item["auth_ok"] or item["tcp_mgmt"]:
+                    with _fw_diag_lock:
+                        _fw_diag["ok"] += 1
+            except Exception as e:
+                item["detail"] = collector._sanitize_error_msg(str(e))
+            results.append(item)
+            with _fw_diag_lock:
+                _fw_diag.update(done=len(results), results=list(results),
+                                message="진단 중 (%d/%d)" % (len(results), len(firewalls)))
+            token = username = password = None
+    finally:
+        with _fw_diag_lock:
+            _fw_diag.update(running=False, results=list(results),
+                            message="진단 완료(%d대)" % len(results))
+        log_event("info", "firewalls_diagnose_all_done", total=len(results))
 
 
 def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None,
@@ -1603,6 +1670,30 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             }}), 200
         except Exception as e:
             log_event("error", "diagnose_server_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/servers/diagnose-all", methods=["POST"])
+    @rate_limit("diagnose_all_servers", max_requests=6, window_seconds=60)
+    def diagnose_all_servers_endpoint():
+        """전 서버 무자격 진단 — 계정을 전혀 쓰지 않는다.
+
+        화면은 '계정 없이 도달성·열린 포트·hostname·연결 스위치를 확인'이라고
+        안내하는데, 예전엔 collect-all을 호출해 세션 계정·서버별 저장 계정으로
+        실제 SSH 접속을 했다(안내와 다름). 진단 전용 경로를 따로 둔다.
+        """
+        try:
+            from core import server_collector
+            if server_collector.get_progress().get("running"):
+                return jsonify({"error": "이미 서버 수집/진단이 진행 중입니다"}), 409
+            threading.Thread(
+                target=server_collector.collect_all_servers,
+                kwargs={"db_path": db_path, "no_cred": True},
+                daemon=True).start()
+            log_event("info", "servers_diagnose_all_started")
+            return jsonify({"ok": True, "status": "diagnosing"}), 202
+        except Exception as e:
+            log_event("error", "diagnose_all_servers_error",
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
@@ -3335,6 +3426,26 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                          args=(db_path, src, ids, common, _tok),
                          daemon=True).start()
         return jsonify({"ok": True, "total": total}), 202
+
+    @app.route("/api/firewalls/diagnose-all", methods=["POST"])
+    @rate_limit("diagnose_all_firewalls", max_requests=6, window_seconds=60)
+    def diagnose_all_firewalls_endpoint():
+        """전 방화벽 도달성·인증 확인. 수집(인터페이스·ARP 저장)은 하지 않는다."""
+        with _fw_diag_lock:
+            if _fw_diag["running"]:
+                return jsonify({"error": "이미 진단 중입니다"}), 409
+            _fw_diag.update(running=True, total=0, done=0, ok=0,
+                            message="시작 중", results=[])
+        src = pcprofile.get_source_ip(db_path)
+        threading.Thread(target=_run_diagnose_all_firewalls,
+                         args=(db_path, src), daemon=True).start()
+        log_event("info", "firewalls_diagnose_all_started")
+        return jsonify({"ok": True}), 202
+
+    @app.route("/api/firewalls/diagnose-all/status", methods=["GET"])
+    def diagnose_all_firewalls_status():
+        with _fw_diag_lock:
+            return jsonify(dict(_fw_diag))
 
     @app.route("/api/firewalls/collect-all/status", methods=["GET"])
     def collect_all_firewalls_status():

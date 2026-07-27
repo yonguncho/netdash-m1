@@ -1343,11 +1343,14 @@ def _is_stop():
 
 
 def collect_all_servers(db_path, max_workers=8, common_user=None,
-                        common_pass=None, persist=False, ids=None):
+                        common_pass=None, persist=False, ids=None, no_cred=False):
     """등록된 서버 일괄 (재)수집(스레드풀). ids 주면 그 서버들만.
 
     계정 우선순위: 공통 계정(common_user/pass) > 서버별 저장 계정 > 무자격.
     공통 계정 + persist=True면 각 서버에 그 계정을 저장한다.
+
+    no_cred=True면 어떤 계정도 쓰지 않는다(진단 전용). 저장 계정 조회도 하지 않아
+    '계정 없이 확인'이라고 안내한 화면이 실제로도 계정을 쓰지 않게 보장한다.
 
     이미 일괄 수집이 진행 중이면 시작하지 않는다(status="already_running").
     진행률·중지 플래그가 모듈 전역이라, 두 수집이 겹치면 먼저 끝난 쪽이
@@ -1363,16 +1366,19 @@ def collect_all_servers(db_path, max_workers=8, common_user=None,
                     "skipped": 0, "total": 0}
         _stop = False            # 새 수집 시작 — 중지 플래그 초기화
         _progress.update(running=True, done=0, total=0, message="서버 수집 준비 중")
+    if no_cred:                     # 진단 전용 — 계정을 아예 쓰지 않는다
+        common_user = common_pass = None
+        persist = False
     try:
         return _collect_all_locked(db_path, max_workers, common_user, common_pass,
-                                   persist, ids, _cf)
+                                   persist, ids, _cf, no_cred)
     except Exception:
         _set_progress(running=False, message="수집 오류로 중단됨")
         raise
 
 
 def _collect_all_locked(db_path, max_workers, common_user, common_pass,
-                        persist, ids, _cf):
+                        persist, ids, _cf, no_cred=False):
     """collect_all_servers 본체 — running=True를 이미 선점한 상태에서 호출된다."""
     servers = db.list_servers(db_path)
     if ids:
@@ -1393,10 +1399,12 @@ def _collect_all_locked(db_path, max_workers, common_user, common_pass,
     def _one(sv):
         if _is_stop():
             return {"status": "skipped"}   # 중지 요청 후 남은 서버는 건너뜀
-        if common:
+        username = password = None
+        if no_cred:
+            pass                    # 진단 전용 — 저장 계정도 쓰지 않는다
+        elif common:
             username, password = common_user, common_pass
         else:
-            username = password = None
             blob = db.get_server_credential(db_path, sv["id"])
             if blob:
                 dec = credentials.decrypt_credential(blob)
