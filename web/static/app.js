@@ -1104,7 +1104,12 @@ function _fwCardHTML(f) {
 
 // 서버 카드(서버실 그리드용) — 스위치/방화벽 카드와 동일 골격.
 function _srvCardHTML(s) {
-  var sc = s.reachable === false ? "critical" : (s.status === "failed" ? "critical" : "done");
+  // CSS가 정의한 상태 어휘는 ok/warning/critical/new/collecting 이다.
+  // 예전엔 'done'을 써서(존재하지 않는 클래스) 컬러바·상태 dot이 안 보였고,
+  // 미수집(new)도 정상 카드처럼 보였다.
+  var sc = (s.reachable === false || s.status === "failed") ? "critical"
+    : s.status === "collecting" ? "collecting"
+    : (!s.status || s.status === "new") ? "new" : "ok";
   var loc = s.room_label ? "<span style='font-size:10px;color:#2563eb;font-weight:600'>🗄 " + escHtml(s.room_label) + "</span>" : "";
   return "<div id='srvcard-" + s.id + "' class='sw-card sw-card--" + sc + "' title='클릭하면 이 서버 재수집'>" +
     "<div class='sw-card__icon'><div class='sw-icon'>🖥</div></div>" +

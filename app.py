@@ -2290,6 +2290,17 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     devices.append({"name": f.get("name"), "ip": f.get("host"),
                                     "rack": room["rack"], "unit": room["unit"],
                                     "device_type": "Firewall"})
+            # 물리 서버도 랙에 꽂혀 있다. 화면(카드뷰·랙뷰)과 CSV에는 나오는데
+            # 엑셀만 빠져 있어서 랙 배치도를 인쇄하면 서버가 통째로 없었다.
+            # (VM은 물리 위치가 없으므로 화면과 동일하게 제외)
+            for s in db.list_servers(db_path):
+                if s.get("is_vm"):
+                    continue
+                room = serverroom.parse_rack(s.get("location"))
+                if room:
+                    devices.append({"name": s.get("name"), "ip": s.get("ip"),
+                                    "rack": room["rack"], "unit": room["unit"],
+                                    "device_type": "Server"})
             if not devices:
                 return jsonify({"error": "서버실 소속 장비가 없습니다. location에 'A03U36' 형식으로 랙/유닛을 기재하세요."}), 404
             data = serverroom.build_rack_xlsx(devices)

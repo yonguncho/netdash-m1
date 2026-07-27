@@ -9,6 +9,8 @@
 """
 import re
 
+from . import utils
+
 # {랙: 영문1자이상+숫자1자이상}U{유닛: 숫자} — 접미 공백/대소문자 허용
 _PAT = re.compile(r"^\s*([A-Za-z]+\d+)\s*[Uu]\s*(\d+)\s*$")
 
@@ -70,12 +72,27 @@ def build_rack_xlsx(devices):
     import io
 
     # 랙 → {unit: dev}
+    # 같은 랙·유닛에 두 장비가 등록돼 있으면 예전엔 뒤엣것이 앞엣것을 조용히
+    # 덮어써서 배치도에서 장비가 사라졌다(화면과 엑셀이 서로 다른 장비를 보여줌).
+    # 덮어쓰지 않고 한 칸에 함께 적고, 중복 사실을 로그로 남긴다.
     racks = {}
+    dup = []
     for d in devices:
         rk, u = d.get("rack"), d.get("unit")
         if not rk or not u:
             continue
-        racks.setdefault(rk, {})[u] = d
+        slot = racks.setdefault(rk, {})
+        if u in slot:
+            prev = slot[u]
+            dup.append("%s U%s: %s / %s" % (rk, u, prev.get("name"), d.get("name")))
+            prev["name"] = "%s + %s" % (prev.get("name") or "?", d.get("name") or "?")
+            prev["ip"] = "%s / %s" % (prev.get("ip") or "", d.get("ip") or "")
+            prev["dup"] = True
+            continue
+        slot[u] = dict(d)
+    if dup:
+        utils.log_event("warning", "serverroom_duplicate_unit", count=len(dup),
+                        samples=dup[:5])
     rack_names = sorted(racks.keys())
 
     # 열(letter: A/B...)별 그룹핑 — 랙뷰와 동일하게 같은 열의 랙을 한 줄에 나란히.
