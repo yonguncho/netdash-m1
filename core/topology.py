@@ -707,17 +707,23 @@ def lookup_device(db_path, ip):
         return None
     for s in db.get_switches(db_path):
         if s.get("ip") == ip:
-            cls = classify_l3(_latest_configs(db_path, [s["id"]]).get(s["id"], ""))
+            cfg = _latest_configs(db_path, [s["id"]]).get(s["id"], "")
+            cls = classify_l3(cfg)
+            # topo_kind: 편집기 종류의 정답. 프론트가 device_type을 스스로 해석하면
+            # '스위치 현황 불러오기'(_switch_kind)와 판정 우선순위가 달라져
+            # 같은 장비가 다른 행에 놓였다 → 서버 판정 하나로 통일한다.
             return {"kind": "sw", "id": s["id"], "name": s.get("name"),
                     "hostname": s.get("hostname"), "model": s.get("model"),
                     "vendor": s.get("vendor"), "status": s.get("status"),
                     "device_type": s.get("device_type") or (cls or ""),
+                    "topo_kind": _switch_kind(cfg, s.get("device_type")),
                     "l3_class": cls}
     try:
         for f in db.list_firewalls(db_path):
             if f.get("host") == ip:
                 return {"kind": "fw", "id": f["id"], "name": f.get("name"),
                         "vendor": f.get("vendor"), "status": f.get("status"),
+                        "topo_kind": "firewall",   # serverroom_devices와 동일
                         "device_type": "Firewall"}
     except Exception:
         pass
@@ -726,6 +732,7 @@ def lookup_device(db_path, ip):
             if sv.get("ip") == ip:
                 return {"kind": "srv", "id": sv["id"], "name": sv.get("name"),
                         "hostname": sv.get("hostname"), "os": sv.get("os_type"),
+                        "topo_kind": "server",     # serverroom_devices와 동일
                         "status": sv.get("status")}
     except Exception:
         pass

@@ -834,7 +834,8 @@ def reconcile_online_by_mac(db_path):
                                      ip=it.get("ip"), mac=it.get("mac"),
                                      message="설비 복구(MAC 테이블 확인): " + (it.get("ip") or ""))
         except Exception as e:
-            utils.log_event("warning", "facility_reconcile_skip", subnet=subnet, error=str(e))
+            utils.log_event("warning", "facility_reconcile_skip", subnet=subnet,
+                            error=_collector._sanitize_error_msg(str(e)))
     if restored:
         utils.log_event("info", "facility_reconciled_online", restored=restored)
     return restored
@@ -955,7 +956,8 @@ def monitor_known_hosts(db_path):
             db.clear_facility_subnet(db_path, subnet)
             db.save_facility_hosts(db_path, rows)
         except Exception as e:
-            utils.log_event("warning", "facility_monitor_save_skip", subnet=subnet, error=str(e))
+            utils.log_event("warning", "facility_monitor_save_skip", subnet=subnet,
+                            error=_collector._sanitize_error_msg(str(e)))
     for h in online_now:
         db.save_device_event(db_path, "device_online", "info", subnet=h.get("subnet"),
                              ip=h.get("ip"), mac=h.get("mac"),

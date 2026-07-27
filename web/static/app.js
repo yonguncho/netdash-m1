@@ -15,8 +15,20 @@ let _pollTimer = null;
 (function () {
   var origFetch = window.fetch;
   var lastAlert = 0;
-  window.fetch = function () {
-    return origFetch.apply(this, arguments).then(function (r) {
+  window.fetch = function (input, init) {
+    // 원격 접속(0.0.0.0 바인드)이면 모든 /api 호출에 토큰 헤더를 붙인다.
+    // 서버가 페이지 셸에 심어 준 값이며, 로컬 전용 배포에서는 빈 문자열이라
+    // 헤더를 붙이지 않는다.
+    var tok = window._API_TOKEN || "";
+    if (tok && typeof input === "string" &&
+        (input.indexOf("/api/") === 0 ||
+         input.indexOf(location.origin + "/api/") === 0)) {
+      init = init || {};
+      var h = new Headers(init.headers || {});
+      h.set("X-API-Token", tok);
+      init.headers = h;
+    }
+    return origFetch.call(this, input, init).then(function (r) {
       if (r.status === 423) {
         var now = Date.now();
         if (now - lastAlert > 3000) {  // 연타 시 알림 폭주 방지
@@ -186,6 +198,10 @@ function _applyLocFilter(list, inputId) {
         _setVal("em-user", ""); _setVal("em-pass", "");
         var tr = document.getElementById("em-test-result");
         if (tr) tr.textContent = e.has_auth ? "SMTP 인증정보 저장됨(변경 시에만 재입력)" : "";
+        // 저장된 인증정보가 있을 때만 삭제 버튼을 보인다(비우고 저장해도 기존 유지라
+        // 지금까지는 UI로 지울 방법이 없었다)
+        var ca = document.getElementById("btn-em-clear-auth");
+        if (ca) ca.hidden = !e.has_auth;
       }).catch(function () {});
       openModal("modal-auto-collect");
     }).catch(function (e) { console.error(e); });
@@ -207,6 +223,25 @@ function _applyLocFilter(list, inputId) {
     }).then(function (r) { return r.json(); }).then(function (res) {
       if (tr) { tr.textContent = res.detail || (res.ok ? "발송 성공" : "발송 실패"); tr.style.color = res.ok ? "#15803d" : "#991b1b"; }
     }).catch(function () { if (tr) tr.textContent = "테스트 오류"; });
+  });
+  var emClear = document.getElementById("btn-em-clear-auth");
+  if (emClear) emClear.addEventListener("click", function () {
+    if (!confirm("저장된 SMTP 인증정보를 삭제할까요?\n(이후 인증 없이 발송을 시도합니다)")) return;
+    var tr = document.getElementById("em-test-result");
+    fetch("/api/settings/email", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        enabled: _chk("em-enabled"), smtp_host: _val("em-host", ""), smtp_port: _val("em-port", "25"),
+        smtp_from: _val("em-from", ""), email_to: _val("em-to", ""), min_sev: _val("em-sev", "warning"),
+        smtp_user: "", smtp_pass: "", clear_auth: true,
+      }),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res.ok) {
+        _setVal("em-user", ""); _setVal("em-pass", "");
+        emClear.hidden = true;
+        if (tr) { tr.textContent = "SMTP 인증정보를 삭제했습니다."; tr.style.color = "#15803d"; }
+      } else if (tr) { tr.textContent = res.error || "삭제 실패"; tr.style.color = "#991b1b"; }
+    }).catch(function () { if (tr) tr.textContent = "삭제 오류"; });
   });
   var save = document.getElementById("btn-ac-save");
   if (save) save.addEventListener("click", function () {
@@ -297,17 +332,11 @@ function _searchBox(targetId, placeholder) {
     if (!total) { alert("서버실(위치 A09U27 형식)에 등록된 장비가 없습니다."); return; }
     if (!confirm("서버실 장비 " + total + "대를 저장된 계정으로 재수집합니다.\n" +
                  "(스위치 " + sw.length + " · 방화벽 " + fw.length + " · 서버 " + sv.length + ")\n계속할까요?")) return;
-    // 방화벽·서버는 저장 계정으로 일괄, 스위치는 계정이 필요하므로 선택분을 모달로
-    if (fw.length) {
-      fetch("/api/firewalls/collect-all", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ids: fw.map(function (f) { return f.id; })}),
-      }).then(function () {
-        pollProgress("/api/firewalls/collect-all/status", "room-progress", loadFirewalls,
-          "/api/firewalls/collect-all/stop");
-      }).catch(function () {});
-    }
-    if (sv.length) {
+    // 방화벽 → (끝나면) 서버 순서로 하나씩 돌린다.
+    // 예전엔 둘을 동시에 시작하고 같은 #room-progress에 각자 써서 진행률이 서로
+    // 덮였고, 어느 쪽 진행인지 알 수 없었다.
+    function _roomServers() {
+      if (!sv.length) return;
       fetch("/api/servers/collect-all", {
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({ids: sv.map(function (s) { return s.id; })}),
@@ -316,15 +345,66 @@ function _searchBox(targetId, placeholder) {
           "/api/servers/collect-all/stop");
       }).catch(function () {});
     }
+    if (fw.length) {
+      fetch("/api/firewalls/collect-all", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ids: fw.map(function (f) { return f.id; })}),
+      }).then(function () {
+        pollProgress("/api/firewalls/collect-all/status", "room-progress", function () {
+          loadFirewalls();
+          _roomServers();          // 방화벽이 끝난 뒤 서버 수집 시작
+        }, "/api/firewalls/collect-all/stop");
+      }).catch(function () { _roomServers(); });
+    } else {
+      _roomServers();
+    }
     if (sw.length) {
       // 스위치는 계정 입력이 필요 — 공통 일괄 수집 모달로 안내
       alert("스위치 " + sw.length + "대는 계정이 필요합니다. 스위치 현황 탭에서 체크 후 '정보 수집'을 사용하세요.");
     }
   });
+  // 서버실 전체 진단 — 이 화면의 장비만 대상으로, 진행바도 이 화면에 그린다.
+  // 예전엔 스위치 탭의 '전체 진단' 버튼을 대리 클릭해서 (a) 서버실 소속이 아닌
+  // 전체 스위치를 진단하고 (b) 서버실의 서버·방화벽은 하나도 진단하지 않으며
+  // (c) 진행바가 스위치 탭에만 그려져 이 화면엔 아무 표시도 없었다.
   var rd = document.getElementById("btn-room-diagnose");
   if (rd) rd.addEventListener("click", function () {
-    var b = document.getElementById("btn-diagnose-all");
-    if (b) { b.click(); }
+    var fw = (_firewalls || []).filter(function (f) { return f.room_rack; });
+    var sv = (_servers || []).filter(function (s) { return s.room_rack; });
+    if (!fw.length && !sv.length) {
+      alert("서버실에 등록된 서버·방화벽이 없습니다.\n" +
+            "스위치 진단은 스위치 현황 탭의 '전체 진단'을 사용하세요.");
+      return;
+    }
+    if (!confirm("서버실 장비를 진단합니다(수집하지 않음).\n" +
+                 "방화벽 " + fw.length + " · 서버 " + sv.length + "\n계속할까요?")) return;
+    function _roomDiagServers() {
+      if (!sv.length) return;
+      fetch("/api/servers/diagnose-all", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ids: sv.map(function (s) { return s.id; })}),
+      }).then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+        .then(function (res) {
+          if (!res.ok) { alert((res.b && res.b.error) || "서버 진단 시작 실패"); return; }
+          pollProgress("/api/servers/collect-all/status", "room-progress", loadServers,
+            "/api/servers/collect-all/stop");
+        }).catch(function () {});
+    }
+    if (fw.length) {
+      fetch("/api/firewalls/diagnose-all", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ids: fw.map(function (f) { return f.id; })}),
+      }).then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+        .then(function (res) {
+          if (!res.ok) { alert((res.b && res.b.error) || "방화벽 진단 시작 실패"); return; }
+          pollProgress("/api/firewalls/diagnose-all/status", "room-progress", function () {
+            loadFirewalls();
+            _roomDiagServers();
+          });
+        }).catch(function () { _roomDiagServers(); });
+    } else {
+      _roomDiagServers();
+    }
   });
 })();
 
@@ -1908,7 +1988,22 @@ document.addEventListener("click", function (e) {
   var url = b.getAttribute("data-stop-url");
   if (!url) return;
   b.disabled = true; b.textContent = "중지 중…";
-  fetch(url, { method: "POST" }).catch(function () {});
+  // 서버가 {"ok":false}나 400을 줘도 예전엔 버튼이 '중지 중…'에서 그대로 굳어
+  // 사용자는 중지가 접수된 줄 알았다. 실패면 되돌리고 사유를 알린다.
+  fetch(url, { method: "POST" })
+    .then(function (r) {
+      return r.json().catch(function () { return {}; })
+        .then(function (body) { return { ok: r.ok, status: r.status, body: body }; });
+    })
+    .then(function (res) {
+      if (res.ok && res.body.ok !== false) return;   // 정상 접수
+      b.disabled = false; b.textContent = "⏹ 수집 중지";
+      alert((res.body && res.body.error) || ("중지 실패 (HTTP " + res.status + ")"));
+    })
+    .catch(function (err) {
+      b.disabled = false; b.textContent = "⏹ 수집 중지";
+      alert("중지 요청 오류: " + err);
+    });
 });
 
 // 진행 상태 폴링: url을 1.5초마다 조회 → el에 진행바. running=false면 종료 후 onDone().
@@ -2187,72 +2282,9 @@ function _renderFacilityRows() {
   });
 })();
 
-// ─── M8: 장부 대조(Reconcile) ────────────────────────────────────
-var _reconcileVerdictMeta = {
-  match:           { label: "일치",        badge: "ok" },
-  port_mismatch:   { label: "포트 불일치",  badge: "warning" },
-  switch_mismatch: { label: "스위치 불일치", badge: "critical" },
-  ledger_only:     { label: "장부에만",     badge: "info" },
-  measured_only:   { label: "실측에만",     badge: "info" },
-  no_data:         { label: "정보 없음",     badge: "new" },
-};
-
-function verdictBadgeClass(verdict) {
-  var meta = _reconcileVerdictMeta[verdict];
-  return meta ? meta.badge : "new";
-}
-
-function verdictLabel(verdict) {
-  var meta = _reconcileVerdictMeta[verdict];
-  return meta ? meta.label : verdict;
-}
-
-function loadReconcile() {
-  fetch("/api/reconcile")
-    .then(function(r) { return r.json(); })
-    .then(function(data) { renderReconcile(data); })
-    .catch(function(e) { console.error("reconcile load:", e); });
-}
-
-(function () {
-  var btn = document.getElementById("btn-reconcile-refresh");
-  if (btn) btn.addEventListener("click", loadReconcile);
-})();
-
-function renderReconcile(data) {
-  var summary = (data && data.summary) || {};
-  var hosts = (data && data.hosts) || [];
-
-  // 요약 카드: 판정 6종 카운트
-  var order = ["match", "port_mismatch", "switch_mismatch", "ledger_only", "measured_only", "no_data"];
-  var summaryHtml = order.map(function(v) {
-    var count = summary[v] || 0;
-    return "<div class='reconcile-stat'>" +
-      "<span class='status-badge status-badge--" + verdictBadgeClass(v) + "'>" + escHtml(verdictLabel(v)) + "</span>" +
-      "<span class='reconcile-stat__count'>" + count + "</span>" +
-      "</div>";
-  }).join("");
-  var summaryEl = document.getElementById("reconcile-summary");
-  if (summaryEl) summaryEl.innerHTML = summaryHtml;
-
-  // 호스트 판정 테이블
-  var tbody = document.getElementById("reconcile-table-body");
-  if (!tbody) return;
-  if (!hosts.length) {
-    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>대조할 호스트가 없습니다. 엑셀 장부를 가져오고 스위치 정보를 수집하세요.</td></tr>";
-    return;
-  }
-  tbody.innerHTML = hosts.map(function(h) {
-    return "<tr><td><code>" + escHtml(h.ip) + "</code></td>" +
-      "<td>" + escHtml(h.hostname || "-") + "</td>" +
-      "<td><span class='status-badge status-badge--" + verdictBadgeClass(h.verdict) + "'>" +
-        escHtml(verdictLabel(h.verdict)) + "</span></td>" +
-      "<td>" + escHtml(h.ledger_switch || "-") + "</td>" +
-      "<td>" + escHtml(h.ledger_port || "-") + "</td>" +
-      "<td>" + escHtml(h.actual_switch || "-") + "</td>" +
-      "<td>" + escHtml(h.actual_port || "-") + "</td></tr>";
-  }).join("");
-}
+// M8 장부 대조 UI는 제거됐다 — 대응하는 표·요약 DOM이 index.html에 없어
+// 렌더 함수와 그 API 호출이 도달 불가였다.
+// (엔드포인트 자체는 테스트가 있어 서버에 남아 있다)
 
 // ─── M10: 방화벽 현황 (Palo Alto / Fortinet) ─────────────────────
 var _fwStatusMeta = {
@@ -2820,6 +2852,17 @@ document.addEventListener("change", function (e) {
         alert("일괄 진단 시작 오류");
       });
   });
+
+  // 새로고침 복구 — 백그라운드 진단은 계속 도는데 UI만 초기화되던 것을 되살린다.
+  if (diagAllBtn) {
+    fetch("/api/switches/diagnose-all/status").then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!s || !s.running) return;
+        diagAllBtn.disabled = true;
+        _diagAllPoll = setInterval(_pollDiagnoseAll, 2000);
+        _pollDiagnoseAll();
+      }).catch(function () {});
+  }
 
   var _swCollectIds = null;   // 스위치 현황 탭에서 선택한 수집 대상(있으면 _bulkSel 대신 사용)
 
@@ -3678,16 +3721,14 @@ function _renderChips() {
           (d.model ? " · " + d.model : "") + (d.device_type ? " · " + d.device_type : "");
         var nm = document.getElementById("tn-name");
         if (!nm.value || nm.value === _tNode(_tEditId).kind) nm.value = d.hostname || d.name || nm.value;
-        // 구분 자동 매핑
-        var dt = (d.device_type || "").toLowerCase();
+        // 구분 자동 매핑 — 서버가 내려준 topo_kind가 정답이다.
+        // 예전엔 여기서 device_type을 다시 해석했는데 판정 우선순위가
+        // 서버(_switch_kind)와 달라(L4보다 L3를 먼저 봄) 같은 장비가
+        // '스위치 현황 불러오기'와 다른 행에 놓였다.
         var ks = document.getElementById("tn-kind");
-        if (d.kind === "fw") ks.value = "firewall";
+        if (d.topo_kind && _TOPO_KIND[d.topo_kind]) { ks.value = d.topo_kind; }
+        else if (d.kind === "fw") ks.value = "firewall";
         else if (d.kind === "srv") ks.value = "server";
-        else if (dt.indexOf("backbone") >= 0 || dt.indexOf("core") >= 0) ks.value = "backbone";
-        else if (dt === "ap" || dt.indexOf("access point") >= 0) ks.value = "ap";
-        else if (dt === "pc" || dt.indexOf("tablet") >= 0) ks.value = "pc";
-        else if (d.l3_class === "L3" || dt.indexOf("l3") >= 0) ks.value = "l3";
-        else if (dt.indexOf("l4") >= 0) ks.value = "l4";
         else ks.value = "l2";
       }).catch(function () {});
   });
@@ -3745,21 +3786,8 @@ function renderTopology() {
     host.innerHTML = "<p style='color:#94a3b8;padding:20px'>표시할 장비가 없습니다. 스위치·방화벽을 수집하면 연결 관계가 그려집니다.</p>";
     return;
   }
-  // 모드 버튼 상태 + 구역 셀렉트 표시
-  document.querySelectorAll(".topo-mode").forEach(function (b) {
-    b.className = "btn topo-mode " + (b.getAttribute("data-mode") === _topoMode ? "btn--primary" : "btn--secondary");
-    b.style.fontSize = "12px";
-  });
-  var zsel = document.getElementById("topo-zone-select");
-  if (zsel) zsel.style.display = (_topoMode === "tps") ? "" : "none";
-  var l2b = document.getElementById("btn-topo-l2");
-  if (l2b) {
-    l2b.style.display = (_topoMode === "core") ? "" : "none";
-    l2b.textContent = _topoExpandL2 ? "🌐 L2 대역 접기" : "🌐 L2 펼치기";
-    l2b.className = "btn " + (_topoExpandL2 ? "btn--primary" : "btn--secondary");
-    l2b.style.fontSize = "12px";
-  }
-
+  // 모드/존/L2 툴바는 HTML에서 제거됐다 — 여기 있던 상태 갱신 코드는 항상
+  // 아무 요소도 못 찾던 죽은 코드였다(단일 트리 뷰만 사용).
   _renderTree(host);   // v4.2: 서버실 트리 단일 뷰(존/TPS/코어 모드 폐지)
 }
 
@@ -4887,14 +4915,9 @@ function _renderTpsMap(host) {
   var zones = {};
   access.forEach(function (n) { zones[_topoZoneOf(n)] = (zones[_topoZoneOf(n)] || 0) + 1; });
   var zkeys = Object.keys(zones).sort();
-  var zsel = document.getElementById("topo-zone-select");
-  if (zsel) {
-    var cur = _topoZone || zkeys[0] || "";
-    zsel.innerHTML = zkeys.map(function (z) {
-      return "<option" + (z === cur ? " selected" : "") + ">" + escHtml(z) + " (" + zones[z] + ")</option>";
-    }).join("");
-    _topoZone = cur;
-  }
+  // 구역 드롭다운은 HTML에서 제거됐다(단일 트리 뷰) — 여기서 채우던 코드는
+  // 항상 요소를 못 찾던 죽은 코드였다. 첫 구역을 기본값으로 쓴다.
+  _topoZone = _topoZone || zkeys[0] || "";
   if (!zkeys.length) {
     host.innerHTML = _legendHTML() + "<p style='color:#94a3b8;padding:20px'>TPS(액세스) 스위치가 없습니다.</p>";
     _bindTopoModeButtons();
@@ -5384,9 +5407,13 @@ function loadCreds() {
   var sw = document.getElementById("creds-switches");
   var fw = document.getElementById("creds-firewalls");
   var pf = document.getElementById("creds-profiles");
+  if (!sw || !fw || !pf) return;
   sw.innerHTML = fw.innerHTML = pf.innerHTML =
     "<tr><td colspan=6 style='color:#64748b'>불러오는 중...</td></tr>";
-  fetch("/api/credentials").then(function (r) { return r.json(); }).then(function (d) {
+  fetch("/api/credentials").then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function (d) {
     var delBtn = function (kind, key) {
       return "<button class='btn btn--secondary creds-del' style='font-size:11px;padding:2px 8px' " +
         "data-kind='" + kind + "' data-key='" + encodeURIComponent(key) + "'>삭제</button>";
@@ -5414,7 +5441,15 @@ function loadCreds() {
       : "<tr><td colspan=6 style='color:#64748b'>등록된 PC 프로필이 없습니다.</td></tr>";
   }).catch(function (e) {
     console.error(e);
-    sw.innerHTML = "<tr><td colspan=3>오류</td></tr>";
+    // 세 표를 모두 되돌린다. 예전엔 스위치 표만 '오류'로 바꾸고
+    // 방화벽·PC 프로필은 '불러오는 중...'에서 영구히 멈춰 있었다.
+    var msg = "<tr><td colspan=%d style='color:#b91c1c'>불러오지 못했습니다 — " +
+      escHtml(String(e && e.message || e)) +
+      " <button type='button' class='btn btn--secondary creds-retry' " +
+      "style='font-size:11px;padding:2px 8px;margin-left:6px'>다시 시도</button></td></tr>";
+    sw.innerHTML = msg.replace("%d", "3");
+    fw.innerHTML = msg.replace("%d", "3");
+    pf.innerHTML = msg.replace("%d", "6");
   });
 }
 
@@ -5425,6 +5460,7 @@ function loadCreds() {
 
   // 개별 삭제(위임)
   document.getElementById("modal-creds").addEventListener("click", function (e) {
+    if (e.target.closest(".creds-retry")) { loadCreds(); return; }
     var t = e.target.closest(".creds-del");
     if (!t) return;
     var kind = t.getAttribute("data-kind");
@@ -5488,6 +5524,24 @@ function _openServerCollect(id) {
   openModal("modal-server-collect");
 }
 
+// 개별 서버 수집 감시 — '수집중'인 행이 없어질 때까지 주기적으로 갱신한다.
+// (서버 표에는 5초 폴링이 없어 한 번만 갱신하면 상태가 멈춰 보였다)
+var _srvWatchTimer = null;
+function _watchServerCollecting(maxSec) {
+  if (_srvWatchTimer) clearInterval(_srvWatchTimer);
+  var deadline = Date.now() + (maxSec || 300) * 1000;
+  _srvWatchTimer = setInterval(function () {
+    loadServers().then(function () {
+      var busy = (_servers || []).some(function (s) { return s.status === "collecting"; });
+      if (!busy || Date.now() > deadline) {
+        clearInterval(_srvWatchTimer);
+        _srvWatchTimer = null;
+      }
+    });
+  }, 3000);
+  loadServers();
+}
+
 function loadServers() {
   return fetch("/api/servers").then(function (r) { return r.json(); }).then(function (d) {
     _servers = d.servers || [];
@@ -5533,6 +5587,14 @@ function _sizeLabelCompact(mb) {
   return mb >= 1024 ? +(mb / 1024).toFixed(mb % 1024 ? 1 : 0) + "GB" : mb + "MB";
 }
 // 모듈 목록 → '16GB×4 (DDR4)' 요약 (백엔드 summarize_modules와 같은 규칙)
+// core/server_collector.py `_unknown_to_blank()`와 같은 목록. 화면 요약은 규격을
+// 그대로 쓰고 CSV는 걸러내서 'DDR4 (Unknown)' vs 'DDR4'로 표기가 갈렸었다.
+var _HW_PLACEHOLDERS = ["unknown", "not specified", "none", "no module installed",
+                        "to be filled by o.e.m.", "n/a", "[empty]", "other"];
+function _hwPlaceholder(v) {
+  var s = String(v == null ? "" : v).trim();
+  return _HW_PLACEHOLDERS.indexOf(s.toLowerCase()) >= 0 ? "" : s;
+}
 function summarizeModules(mods, slotsTotal) {
   if (!mods.length) return "";
   var counts = {}, order = [];
@@ -5545,7 +5607,8 @@ function summarizeModules(mods, slotsTotal) {
   var parts = order.map(function (k) { return _sizeLabelCompact(k) + "×" + counts[k]; });
   var types = [];
   mods.forEach(function (m) {
-    if (m.type && types.indexOf(m.type) < 0) types.push(m.type);
+    var t = _hwPlaceholder(m.type);   // 'Unknown' 등은 CSV와 같은 규칙으로 제외
+    if (t && types.indexOf(t) < 0) types.push(t);
   });
   var out = parts.join(" + ");
   if (types.length) out += " (" + types.sort().join(", ") + ")";
@@ -5622,10 +5685,10 @@ function showHwDetail(id, which) {
       mods.map(function (m) {
         return "<tr><td>" + escHtml(m.locator || "-") + "</td>" +
           "<td>" + escHtml(_sizeLabel(m.size_mb)) + "</td>" +
-          "<td>" + escHtml(m.type || "-") + "</td>" +
-          "<td>" + escHtml(m.speed || "-") + "</td>" +
-          "<td>" + escHtml(m.maker || "-") + "</td>" +
-          "<td>" + escHtml(m.part || "-") + "</td></tr>";
+          "<td>" + escHtml(_hwPlaceholder(m.type) || "-") + "</td>" +
+          "<td>" + escHtml(_hwPlaceholder(m.speed) || "-") + "</td>" +
+          "<td>" + escHtml(_hwPlaceholder(m.maker) || "-") + "</td>" +
+          "<td>" + escHtml(_hwPlaceholder(m.part) || "-") + "</td></tr>";
       }).join("") + "</tbody></table>";
   } else {
     html += "<p style='font-size:12px;color:#64748b;margin:0 0 14px'>" +
@@ -5968,8 +6031,9 @@ function renderServers() {
     }).then(function (r) { return r.json(); }).then(function (res) {
       if (res.ok) {
         closeModal("modal-server-collect");
-        alert("수집을 시작했습니다. 잠시 후 결과가 반영됩니다.");
-        setTimeout(loadServers, 6000);
+        // 예전엔 6초 뒤 딱 한 번만 갱신해서, SSH 상세 수집이 그보다 오래 걸리면
+        // 탭을 다시 누르기 전까지 행이 계속 '수집중'으로 남았다.
+        _watchServerCollecting();
       } else alert(res.error || "수집 실패");
     }).catch(function (e) { console.error(e); alert("수집 오류"); });
   });
@@ -6344,6 +6408,26 @@ function refreshSessCred() {
   });
   refreshSessCred();
   setInterval(refreshSessCred, 30000);   // 남은 시간 갱신·만료 시 자동 숨김
+})();
+
+// ─── 새로고침 복구 ───────────────────────────────────────────────
+// 백그라운드 작업(일괄 수집·진단)은 서버에서 계속 도는데 화면을 새로고침하면
+// 진행바가 사라져 "멈춘 건지 도는 건지" 알 수 없었다. 시작 시 상태를 한 번
+// 조회해 running이면 진행 표시를 다시 붙인다.
+(function () {
+  var JOBS = [
+    ["/api/servers/collect-all/status", "server-progress", loadServers,
+     "/api/servers/collect-all/stop"],
+    ["/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls,
+     "/api/firewalls/collect-all/stop"],
+    ["/api/switches/bulk-collect/status", "sw-bulk-progress", pollState,
+     "/api/switches/bulk-collect/stop"],
+  ];
+  JOBS.forEach(function (j) {
+    fetch(j[0]).then(function (r) { return r.json(); }).then(function (st) {
+      if (st && st.running) pollProgress(j[0], j[1], j[2], j[3]);
+    }).catch(function () {});
+  });
 })();
 
 // ─── 초기화 ──────────────────────────────────────────────────────

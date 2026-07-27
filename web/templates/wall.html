@@ -17,6 +17,7 @@
     <div class="tile tile--bad"><div class="tile__num" id="t-unreach">-</div><div class="tile__label">도달 불가</div></div>
     <div class="tile tile--bad"><div class="tile__num" id="t-failed">-</div><div class="tile__label">수집 실패</div></div>
     <div class="tile tile--warn"><div class="tile__num" id="t-alert">-</div><div class="tile__label">경보(FLAP/LOOP)</div></div>
+    <div class="tile tile--bad"><div class="tile__num" id="t-fwdown">-</div><div class="tile__label">방화벽 장애</div></div>
     <div class="tile tile--warn"><div class="tile__num" id="t-facoff">-</div><div class="tile__label">설비 연결 실패</div></div>
     <div class="tile tile--warn"><div class="tile__num" id="t-unack">-</div><div class="tile__label">미확인 알람</div></div>
   </section>
@@ -27,6 +28,7 @@
     <div id="wall-events" class="wall-ticker__inner"></div>
   </footer>
 
+  <script>window._API_TOKEN = {{ (api_token or "")|tojson }};</script>
   <script src="/static/wall.js"></script>
 </body>
 </html>

@@ -644,6 +644,7 @@
           <div class="field-row">
             <input id="em-user" type="text" placeholder="SMTP 계정(선택)" autocomplete="off" style="flex:1">
             <input id="em-pass" type="password" placeholder="비밀번호(선택)" autocomplete="new-password" style="flex:1">
+            <button id="btn-em-clear-auth" class="btn btn--secondary" style="font-size:12px" hidden>인증정보 삭제</button>
           </div>
           <div id="em-test-result" style="margin-top:6px;font-size:12px"></div>
         </div>
@@ -949,6 +950,7 @@
 
   <script src="/static/vendor/xterm.js"></script>
   <script src="/static/vendor/xterm-addon-fit.js"></script>
+  <script>window._API_TOKEN = {{ (api_token or "")|tojson }};</script>
   <script src="/static/app.js"></script>
 </body>
 </html>

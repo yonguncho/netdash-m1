@@ -156,7 +156,9 @@ def _loop(db_path):
                 except Exception:
                     pass
         except Exception as e:
-            utils.log_event("error", "reachability_loop_error", error=str(e))
+            from .collector import _sanitize_error_msg
+            utils.log_event("error", "reachability_loop_error",
+                            error=_sanitize_error_msg(str(e)))
         for _ in range(interval):
             if _stop:
                 return

@@ -11,7 +11,7 @@ import sqlite3
 import time
 import threading
 from functools import wraps
-from flask import Flask, jsonify, request, render_template, Response
+from flask import Flask, jsonify, request, render_template, Response, make_response
 from pathlib import Path
 
 from config import get_config, reset_config
@@ -155,7 +155,7 @@ _fw_diag = {"running": False, "total": 0, "done": 0, "ok": 0, "message": "",
 _fw_diag_lock = threading.Lock()
 
 
-def _run_diagnose_all_firewalls(db_path, source_ip):
+def _run_diagnose_all_firewalls(db_path, source_ip, ids=None):
     """방화벽 도달성·인증만 확인한다. 인터페이스/ARP를 저장하지 않고 status도 안 바꾼다.
 
     예전엔 '전체 진단' 버튼이 collect-all을 호출해 실제 수집을 했다 —
@@ -170,6 +170,9 @@ def _run_diagnose_all_firewalls(db_path, source_ip):
             with _fw_diag_lock:
                 _fw_diag.update(message=collector._sanitize_error_msg(str(e)))
             return
+        if ids:                      # 서버실 화면처럼 일부만 진단할 때
+            _want = set(ids)
+            firewalls = [f for f in firewalls if f.get("id") in _want]
         with _fw_diag_lock:
             _fw_diag.update(total=len(firewalls), done=0, ok=0, message="진단 중")
         for fw in firewalls:
@@ -815,10 +818,53 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response
 
+    # ── 페이지 셸 토큰 (원격 접속용) ──────────────────────────────
+    # `/api/*`는 X-API-Token을 요구하는데 페이지 셸(/, /wall)은 면제라, 0.0.0.0
+    # 바인드로 원격 접속하면 화면은 뜨고 그 안의 모든 fetch가 401이 됐다
+    # (window._API_TOKEN을 넣어주는 코드가 어디에도 없었다).
+    # 이제 셸도 토큰을 요구하고(쿼리 ?token= 또는 쿠키), 통과한 페이지에만
+    # window._API_TOKEN을 심어 준다.
+    _TOKEN_COOKIE = "netdash_token"
+
+    def _is_local_request():
+        return request.remote_addr in ("127.0.0.1", "::1")
+
+    def _api_needs_token():
+        """validate_api_token과 같은 판정 — 이 요청의 /api 호출에 토큰이 필요한가."""
+        if config.app.get("demo_mode"):
+            return False
+        bind_host = config.app.get("host", "127.0.0.1")
+        return not (bind_host in ("127.0.0.1", "localhost", "::1") and _is_local_request())
+
+    def _render_page(template, **kw):
+        if not _api_needs_token():
+            # 로컬 전용 배포 — 종전 그대로 토큰 없이 동작
+            return make_response(render_template(template, api_token="", **kw))
+        expected = config.api_token
+        if not expected:
+            log_event("error", "api_token_not_configured", path=request.path)
+            return jsonify({"error": "server configuration error"}), 500
+        # 같은 PC에서 온 요청은 토큰을 묻지 않는다(그 사용자는 config.yaml을
+        # 직접 읽을 수 있어 토큰이 방어하는 대상이 아니다). 원격만 확인한다.
+        token = expected
+        set_cookie = False
+        if not _is_local_request():
+            given = request.args.get("token") or request.cookies.get(_TOKEN_COOKIE) or ""
+            if not given or not hmac.compare_digest(
+                    given.encode("utf-8", "replace"), expected.encode("utf-8", "replace")):
+                log_event("warning", "page_missing_token", path=request.path)
+                return render_template("token_required.html"), 401
+            token, set_cookie = given, True
+        resp = make_response(render_template(template, api_token=token, **kw))
+        if set_cookie:
+            resp.set_cookie(_TOKEN_COOKIE, token, httponly=True,
+                            samesite="Strict", path="/")
+        return resp
+
     @app.route("/", methods=["GET"])
     def index():
         demo_mode = config.app.get("demo_mode", False)
-        return render_template("index.html", demo_mode=demo_mode)
+        return _render_page("index.html", demo_mode=demo_mode)
 
     @app.route("/api/state", methods=["GET"])
     def get_state():
@@ -1714,11 +1760,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             from core import server_collector
             if server_collector.get_progress().get("running"):
                 return jsonify({"error": "이미 서버 수집/진단이 진행 중입니다"}), 409
+            # ids(선택): 서버실 화면처럼 일부만 진단할 때 대상 한정.
+            data = request.get_json(silent=True) or {}
+            ids = [int(i) for i in (data.get("ids") or []) if str(i).isdigit()] or None
             threading.Thread(
                 target=server_collector.collect_all_servers,
-                kwargs={"db_path": db_path, "no_cred": True},
+                kwargs={"db_path": db_path, "no_cred": True, "ids": ids},
                 daemon=True).start()
-            log_event("info", "servers_diagnose_all_started")
+            log_event("info", "servers_diagnose_all_started", count=len(ids or []))
             return jsonify({"ok": True, "status": "diagnosing"}), 202
         except Exception as e:
             log_event("error", "diagnose_all_servers_error",
@@ -1790,7 +1839,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @app.route("/wall", methods=["GET"])
     def wallboard():
         """관제(월보드) 모드 — 대형 모니터용 읽기 전용 전체화면."""
-        return render_template("wall.html")
+        return _render_page("wall.html")
 
     @app.route("/api/wall", methods=["GET"])
     def wall_data():
@@ -1800,8 +1849,15 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             try:
                 from core import reachability
                 reach = reachability.get_state()
+                fw_reach = reachability.get_fw_state()
             except Exception:
                 reach = {}
+                fw_reach = {}
+            # 방화벽 장애 — 이벤트(firewall_unreachable)는 남는데 관제 화면에는
+            # 카테고리도 타일도 없어서 아무 데도 안 보이던 것을 노출한다.
+            firewalls = db.list_firewalls(db_path)
+            fw_unreach = [f for f in firewalls if fw_reach.get(f["id"]) is False]
+            fw_failed = [f for f in firewalls if f.get("status") == "failed"]
             failed = [s for s in switches if s.get("status") == "failed"]
             alerts_sw = [s for s in switches if (s.get("alert") or "none") != "none"]
             unreach = [s for s in switches if reach.get(s["id"]) is False]
@@ -1954,6 +2010,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                  "items": [{"name": s.get("name"), "ip": s.get("ip"),
                             "detail": (s.get("last_error") or "")[:90]}
                            for s in failed[:30]]},
+                {"key": "firewall", "title": "🛡 방화벽 장애", "severity": "bad",
+                 "items": ([{"name": f.get("name"), "ip": f.get("host"),
+                             "detail": "관리 포트 TCP-%s 응답 없음" % (f.get("port") or 443)}
+                            for f in fw_unreach[:30]] +
+                           [{"name": f.get("name"), "ip": f.get("host"),
+                             "detail": "수집 실패 — " + ((f.get("last_error") or "")[:80] or "원인 미상")}
+                            for f in fw_failed[:30]
+                            if fw_reach.get(f["id"]) is not False])},
                 {"key": "alert", "title": "경보(FLAP/LOOP)", "severity": "warn",
                  "items": [{"name": s.get("name"), "ip": s.get("ip"),
                             "detail": _alert_detail(s)} for s in alerts_sw[:30]]},
@@ -1988,6 +2052,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "alert_switches": len(alerts_sw),
                 "facility_total": len(fac),
                 "facility_offline": len(fac_off),
+                "firewalls_total": len(firewalls),
+                "firewalls_down": len(set([f["id"] for f in fw_unreach]) |
+                                      set([f["id"] for f in fw_failed])),
                 "unacked_alerts": db.count_unacked_events(db_path),
                 "categories": categories,
                 "problems": problems[:30],
@@ -3509,9 +3576,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             _fw_diag.update(running=True, total=0, done=0, ok=0,
                             message="시작 중", results=[])
         src = pcprofile.get_source_ip(db_path)
+        data = request.get_json(silent=True) or {}
+        ids = [int(i) for i in (data.get("ids") or []) if str(i).isdigit()] or None
         threading.Thread(target=_run_diagnose_all_firewalls,
-                         args=(db_path, src), daemon=True).start()
-        log_event("info", "firewalls_diagnose_all_started")
+                         args=(db_path, src, ids), daemon=True).start()
+        log_event("info", "firewalls_diagnose_all_started", count=len(ids or []))
         return jsonify({"ok": True}), 202
 
     @app.route("/api/firewalls/diagnose-all/status", methods=["GET"])

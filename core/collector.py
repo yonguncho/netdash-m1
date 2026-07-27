@@ -27,6 +27,10 @@ def _sanitize_error_msg(error_str: str) -> str:
         return ""
     sanitized = re.sub(r'(password|credential|secret|key|auth)\s*[:=]\s*["\']?[^\s"\']+"?', '[REDACTED]', error_str, flags=re.I)
     sanitized = re.sub(r'/[a-zA-Z0-9/_\-\.]+\.pem', '[REDACTED]', sanitized)
+    # 절대경로 제거 — netdash.log는 DB 옆(공유폴더)에 쌓이므로 경로가 남으면
+    # 공유 접근 권한자 전원에게 내부 폴더 구조가 노출된다.
+    sanitized = re.sub(r'\\\\[^\s\'"]+', '<path>', sanitized)          # UNC \\server\share
+    sanitized = re.sub(r'[A-Za-z]:\\[^\s\'"]*', '<path>', sanitized)   # C:\...
     return sanitized[:200] if len(sanitized) > 200 else sanitized
 
 _worker_queue = None

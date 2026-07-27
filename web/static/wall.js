@@ -1,6 +1,24 @@
 /* NetDash 관제(월보드) — 10초 자동 새로고침, 읽기 전용 */
 "use strict";
 
+// 원격 접속(0.0.0.0 바인드)이면 /api 호출에 토큰 헤더가 필요하다.
+// 서버가 페이지 셸에 심어 준 window._API_TOKEN 을 쓴다(로컬 배포는 빈 값).
+(function () {
+  var tok = window._API_TOKEN || "";
+  if (!tok) return;
+  var orig = window.fetch;
+  window.fetch = function (input, init) {
+    if (typeof input === "string" &&
+        (input.indexOf("/api/") === 0 || input.indexOf(location.origin + "/api/") === 0)) {
+      init = init || {};
+      var h = new Headers(init.headers || {});
+      h.set("X-API-Token", tok);
+      init.headers = h;
+    }
+    return orig.call(this, input, init);
+  };
+})();
+
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
     return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c];
@@ -11,6 +29,7 @@ var KIND_KO = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
   device_moved: "설비 이동", config_changed: "설정 변경",
   switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
+  firewall_unreachable: "방화벽 연결 실패", firewall_recovered: "방화벽 복구",
   flapping: "포트 flapping", looping: "포트 looping",
 };
 
@@ -89,6 +108,7 @@ function refresh() {
     setTile("t-unreach", d.unreachable || 0, true);
     setTile("t-failed", d.failed || 0, true);
     setTile("t-alert", d.alert_switches || 0, true);
+    setTile("t-fwdown", d.firewalls_down || 0, true);
     setTile("t-facoff", d.facility_offline || 0, true);
     setTile("t-unack", d.unacked_alerts || 0, true);
 
