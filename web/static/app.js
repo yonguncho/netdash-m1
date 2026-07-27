@@ -472,7 +472,13 @@ document.addEventListener("click", function (e) {
     var ths = Array.prototype.slice.call(tbl.querySelectorAll("thead th"));
     if (ths.length < 2) return;
     tbl.dataset.colResize = "1";
-    var key = tableKey(tbl);
+    // 저장 키에 컬럼 수를 포함한다. 폭은 컬럼 '인덱스'로 저장되므로 표에 컬럼이
+    // 추가/삭제되면 예전 저장분이 통째로 밀려(예: 구6 폭이 새 6열에 적용) 표가
+    // 어긋나고, col-sized(table-layout:fixed) 때문에 버튼 열까지 잘린다.
+    // 컬럼 수가 바뀌면 다른 키가 되어 자동으로 무시된다.
+    var baseKey = tableKey(tbl);
+    var key = baseKey + ":c" + ths.length;
+    try { localStorage.removeItem("nd_colw:" + baseKey); } catch (e) {}   // 구 형식 정리
     var saved = loadWidths(key);
 
     // 저장된 폭 복원
@@ -5169,6 +5175,39 @@ function loadServers() {
   }).catch(function (e) { console.error("servers:", e); });
 }
 
+// 사양 표기 헬퍼 — 수집 안 된 값은 "-"로 비워 둔다(0과 구분).
+function fmtCpu(s) {
+  var model = s.cpu_model || "";
+  var n = _num(s.cpu_cores);                 // 숫자로 강제 → HTML 주입 여지 제거
+  var cores = n ? n + "C" : "";
+  if (model && cores) return escHtml(model) + " <span style='color:#64748b'>(" + cores + ")</span>";
+  return escHtml(model) || cores || "-";
+}
+// DB/JSON에서 문자열로 올 수도 있으므로 항상 숫자로 강제한다.
+// (표기 함수가 예외를 던지면 서버 표 전체가 렌더되지 않는다)
+function _num(v) {
+  var n = Number(v);
+  return isFinite(n) ? n : 0;
+}
+function fmtMem(mb) {
+  mb = _num(mb);
+  if (!mb) return "-";
+  return mb >= 1024 ? (mb / 1024).toFixed(mb % 1024 ? 1 : 0) + " GB" : mb + " MB";
+}
+function fmtSize(gb) {
+  gb = _num(gb);
+  return gb >= 1024 ? (gb / 1024).toFixed(1) + " TB" : gb.toFixed(gb < 10 ? 1 : 0) + " GB";
+}
+function fmtDisk(s) {
+  var total = _num(s.disk_total_gb);
+  if (!total) return "-";
+  var used = _num(s.disk_used_gb);
+  var pct = Math.round((used / total) * 100);
+  var color = pct >= 90 ? "#dc2626" : (pct >= 80 ? "#d97706" : "#64748b");
+  return fmtSize(used) + " / " + fmtSize(total) +
+    " <span style='color:" + color + "'>(" + pct + "%)</span>";
+}
+
 function renderServers() {
   var body = document.getElementById("server-table-body");
   if (!body) return;
@@ -5176,12 +5215,12 @@ function renderServers() {
   q = (q || "").trim().toLowerCase();
   var rows = _servers.filter(function (s) {
     if (!q) return true;
-    return [s.name, s.ip, s.hostname, s.mac].some(function (v) {
+    return [s.name, s.ip, s.hostname, s.mac, s.cpu_model].some(function (v) {
       return (v || "").toLowerCase().indexOf(q) >= 0;
     });
   });
   if (!rows.length) {
-    body.innerHTML = "<tr><td colspan='14' style='color:#64748b'>" +
+    body.innerHTML = "<tr><td colspan='17' style='color:#64748b'>" +
       (_servers.length ? "검색 결과가 없습니다." : "등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.") + "</td></tr>";
     return;
   }
@@ -5197,6 +5236,9 @@ function renderServers() {
       "<td>" + escHtml(s.hostname || "-") + "</td>" +
       "<td><code style='font-size:11px'>" + escHtml(s.mac || "-") + "</code></td>" +
       "<td>" + escHtml(s.os_info || s.os_type || "-") + "</td>" +
+      "<td style='font-size:11px;max-width:200px'>" + fmtCpu(s) + "</td>" +
+      "<td style='font-size:11px;white-space:nowrap'>" + fmtMem(s.mem_total_mb) + "</td>" +
+      "<td style='font-size:11px;white-space:nowrap'>" + fmtDisk(s) + "</td>" +
       "<td>" + kind + "</td>" +
       "<td style='font-size:11px;max-width:180px'>" + escHtml(s.open_ports || "-") + "</td>" +
       "<td>" + escHtml(s.switch_name || "-") + "</td>" +

@@ -72,16 +72,23 @@ def switches_rows(db_path):
     return rows
 
 
-SERVER_COLS = ["이름", "IP", "hostname", "MAC", "OS", "구분", "열린 포트",
+SERVER_COLS = ["이름", "IP", "hostname", "MAC", "OS",
+               "CPU", "코어", "메모리(GB)", "디스크 전체(GB)", "디스크 사용(GB)",
+               "구분", "열린 포트",
                "연결 스위치", "포트", "위치", "상태", "마지막 수집"]
 
 
 def servers_rows(db_path):
     rows = []
     for s in db.list_servers(db_path):
+        mem_mb = s.get("mem_total_mb")
         rows.append({
             "이름": s.get("name"), "IP": s.get("ip"), "hostname": s.get("hostname"),
             "MAC": s.get("mac"), "OS": s.get("os_info") or s.get("os_type"),
+            "CPU": s.get("cpu_model"), "코어": s.get("cpu_cores"),
+            "메모리(GB)": round(mem_mb / 1024.0, 1) if mem_mb else "",
+            "디스크 전체(GB)": s.get("disk_total_gb"),
+            "디스크 사용(GB)": s.get("disk_used_gb"),
             "구분": "VM" if s.get("is_vm") else "물리",
             "열린 포트": s.get("open_ports"), "연결 스위치": s.get("switch_name"),
             "포트": s.get("switch_port"), "위치": s.get("location"),

@@ -520,7 +520,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         log_event("info", "app_readonly_mode",
                   primary_host=app.config["READONLY_PRIMARY"])
 
-        @app.before_request
+        # NOTE: 등록은 validate_api_token 정의 뒤에서 한다(아래 `app.before_request(...)`).
+        # before_request는 등록 순서대로 실행되므로 이걸 먼저 등록하면 토큰 없는 요청이
+        # 401 대신 423 + 주 서버 호스트명을 받아 미인증 원격에 호스트명이 새어나간다.
         def _readonly_gate():
             # 쓰기 메서드 전체 차단 — 조회(GET)와 정적 리소스는 그대로 허용.
             # (승격되면 IS_READONLY=False가 되어 게이트가 열린다)
@@ -536,6 +538,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     "readonly": True,
                 }), 423
 
+        _ro_gate = _readonly_gate
         if promote_watch:
             # 주 서버 종료 감지 → 자동 승격 (프로덕션 exe 전용 — 테스트는 미기동)
             _pw_host = config.app.get("host", "127.0.0.1")
@@ -546,6 +549,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 args=(app, config, db_path, f"http://{_pw_open}:{_pw_port}"),
                 daemon=True, name="promote-watch").start()
     else:
+        _ro_gate = None
         db.READONLY = False
         _start_primary_services(config, db_path)
 
@@ -591,6 +595,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 log_event("warning", "api_invalid_token", path=request.path)
                 return jsonify({"error": "unauthorized"}), 401
 
+    # 읽기 전용 게이트는 인증 뒤에 — 미인증 요청은 423(주 서버 호스트명 포함)이 아니라
+    # 401을 받아야 한다. (정의는 위 `if readonly:` 블록)
+    if _ro_gate is not None:
+        app.before_request(_ro_gate)
+
     # ── 접근(감사) 로그: 어느 PC가 언제 무엇을 했는지 자동 기록 ──
     # 변경 행위(POST/PUT/DELETE)와 다운로드성 GET만 기록(조회 폴링은 제외 — 소음 방지).
     def _audit_label(m, p):
@@ -609,6 +618,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return "서버 등록"
             if p == "/api/servers/collect-all":
                 return "서버 일괄 수집"
+            if p == "/api/servers/import":
+                return "서버 일괄등록"
             if p.startswith("/api/servers/") and p.endswith("/collect"):
                 return "서버 수집 실행"
             if p.startswith("/api/switches/") and p.endswith("/collect"):
@@ -638,11 +649,15 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return "스위치 수정"
             if p.startswith("/api/firewalls/"):
                 return "방화벽 수정"
+            if p.startswith("/api/servers/"):
+                return "서버 수정"
         elif m == "DELETE":
             if p.startswith("/api/switches/"):
                 return "스위치 삭제"
             if p.startswith("/api/firewalls/"):
                 return "방화벽 삭제"
+            if p.startswith("/api/servers/"):
+                return "서버 삭제"
         elif m == "GET":
             if p == "/api/report":
                 return "보고서 다운로드"
@@ -1349,6 +1364,22 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify({"error": "Internal server error"}), 500
 
     # ── 서버(리눅스/윈도우) 현황 ───────────────────────────────────
+    # SQLite INTEGER 상한. Flask <int:id>는 자릿수 제한이 없어 20자리 id가 그대로
+    # 들어오면 바인딩에서 OverflowError → 500 + DB 오류 배너 오염. 없는 id이므로 404가 맞다.
+    _MAX_ROWID = 2 ** 63 - 1
+
+    def _bad_id(n):
+        return not isinstance(n, int) or n <= 0 or n > _MAX_ROWID
+
+    def _sv_text(v, limit=100):
+        """요청 본문 값 → 안전한 문자열. dict/list/bool/None은 빈 문자열로 취급.
+
+        (str(None)=='None', 123.strip() AttributeError 등으로 500이 나던 것 방지)
+        """
+        if v is None or isinstance(v, (dict, list, bool)):
+            return ""
+        return str(v).strip()[:limit]
+
     @app.route("/api/servers", methods=["GET"])
     def list_servers_endpoint():
         """서버 목록. 물리 서버 + location이 랙 형식(A09U27)이면 room_* 주입
@@ -1383,8 +1414,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         """
         try:
             data = request.get_json(silent=True) or {}
-            name = (data.get("name") or "").strip()[:100]
-            ip = (data.get("ip") or "").strip()
+            if not isinstance(data, dict):
+                return jsonify({"error": "본문은 JSON 객체여야 합니다"}), 400
+            name = _sv_text(data.get("name"))
+            ip = _sv_text(data.get("ip"), 64)
             if not name or not ip:
                 return jsonify({"error": "name과 ip는 필수입니다"}), 400
             try:
@@ -1393,7 +1426,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": "IP 거부: %s" % e}), 400
             os_type = data.get("os_type") if data.get("os_type") in _SERVER_OS_TYPES else "auto"
             sid = db.save_server(db_path, name, validated_ip, os_type=os_type,
-                                 location=(data.get("location") or "").strip()[:60] or None,
+                                 location=_sv_text(data.get("location"), 60) or None,
                                  is_vm=1 if data.get("is_vm") else 0)
             log_event("info", "server_saved", server_id=sid, ip=validated_ip)
             return jsonify({"ok": True, "id": sid}), 201
@@ -1405,11 +1438,15 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @rate_limit("update_server", max_requests=60, window_seconds=60)
     def update_server_endpoint(server_id):
         try:
+            if _bad_id(server_id):
+                return jsonify({"error": "not found"}), 404
             data = request.get_json(silent=True) or {}
+            if not isinstance(data, dict):
+                return jsonify({"error": "본문은 JSON 객체여야 합니다"}), 400
             fields = {}
             for k in ("name", "os_type", "location", "hostname"):
                 if k in data:
-                    fields[k] = (str(data[k]) or "").strip()[:100] or None
+                    fields[k] = _sv_text(data[k]) or None
             # os_type은 허용 계열만(임의 값 저장 방지 — 수집 분기가 문자열에 의존)
             if fields.get("os_type") and fields["os_type"] not in _SERVER_OS_TYPES:
                 fields["os_type"] = "auto"
@@ -1427,6 +1464,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @rate_limit("delete_server", max_requests=30, window_seconds=60)
     def delete_server_endpoint(server_id):
         try:
+            if _bad_id(server_id):
+                return jsonify({"error": "not found"}), 404
             n = db.delete_server(db_path, server_id)
             return (jsonify({"ok": True}) if n else (jsonify({"error": "not found"}), 404))
         except Exception as e:
@@ -1440,12 +1479,22 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         body: {username?, password?, persist?}"""
         try:
             from core import server_collector
+            if _bad_id(server_id):
+                return jsonify({"error": "not found"}), 404
             sv = db.get_server(db_path, server_id)
             if not sv:
                 return jsonify({"error": "not found"}), 404
+            # SSRF 방어: DB에 저장된 IP도 수집 직전 재검증(스위치 일괄수집과 동일 정책).
+            # 등록 이후 allowed_ip_ranges가 좁혀졌을 수 있다.
+            try:
+                validate_ipv4(sv.get("ip"), config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                return jsonify({"error": "IP 거부: %s" % e}), 400
             data = request.get_json(silent=True) or {}
-            username = (data.get("username") or "").strip() or None
-            password = data.get("password") or None
+            if not isinstance(data, dict):
+                return jsonify({"error": "본문은 JSON 객체여야 합니다"}), 400
+            username = _sv_text(data.get("username"), 128) or None
+            password = data.get("password") if isinstance(data.get("password"), str) else None
             # 계정 미입력 시 저장 계정 사용(SSH 상세) — 없으면 무자격 수집만
             if not (username and password):
                 blob = db.get_server_credential(db_path, server_id)
@@ -1478,15 +1527,46 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         try:
             from core import server_collector
             data = request.get_json(silent=True) or {}
-            cu = (data.get("username") or "").strip() or None
-            cp = data.get("password") or None
+            if not isinstance(data, dict):
+                return jsonify({"error": "본문은 JSON 객체여야 합니다"}), 400
+            if server_collector.get_progress().get("running"):
+                return jsonify({"error": "이미 서버 수집이 진행 중입니다"}), 409
+            cu = _sv_text(data.get("username"), 128) or None
+            cp = data.get("password") if isinstance(data.get("password"), str) else None
             # 요청에 계정이 없으면 이 세션에 보관된 수집 계정 사용(메모리·TTL)
+            from_session = False
             if not (cu and cp):
                 _sc = _session_cred()
                 if _sc:
                     cu, cp = _sc
+                    from_session = True
+            # 세션 계정은 '디스크에 안 남긴다'가 설계(core/session_creds.py)다.
+            # persist와 함께 오면 세션 계정이 전 서버 cred_blob으로 영구화되므로 막는다.
             persist = bool(data.get("persist"))
-            ids = data.get("ids") or None   # 선택 수집(없으면 전체)
+            if persist and from_session:
+                persist = False
+                log_event("info", "server_persist_skipped_session_cred")
+            # 선택 수집(없으면 전체) — 검증 없이 넘기면 워커 스레드가 int() 예외로
+            # 조용히 죽는데 API는 202를 준다(사용자는 수집이 도는 줄 안다).
+            ids = data.get("ids")
+            if isinstance(ids, list) and not ids:
+                ids = None                      # 빈 배열 = 전체(화면 규약 유지)
+            if ids is not None:
+                if not isinstance(ids, list):
+                    return jsonify({"error": "ids는 배열이어야 합니다"}), 400
+                if len(ids) > 1000:
+                    return jsonify({"error": "ids가 너무 많습니다(최대 1000)"}), 400
+                clean = []
+                for raw in ids:
+                    try:
+                        n = int(raw)
+                    except (TypeError, ValueError):
+                        return jsonify({"error": "ids는 정수여야 합니다"}), 400
+                    if not _bad_id(n):
+                        clean.append(n)
+                if not clean:
+                    return jsonify({"error": "유효한 서버 id가 없습니다"}), 400
+                ids = clean
             threading.Thread(
                 target=server_collector.collect_all_servers,
                 kwargs={"db_path": db_path, "common_user": cu,

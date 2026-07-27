@@ -415,18 +415,23 @@
       <div id="server-progress" style="margin:6px 0"></div>
       <p style="margin:4px 0 10px;font-size:12px;color:#64748b">
         계정 없이도 <b>열린 포트·hostname·MAC·연결 스위치/포트</b>(기존 스위치 수집 데이터 대조)를 수집합니다.
-        공통 SSH 계정을 입력하면 <b>OS를 자동 인식</b>하고 OS·리스닝 포트까지 수집합니다.
+        공통 SSH 계정을 입력하면 <b>OS를 자동 인식</b>하고 OS·리스닝 포트와
+        <b>CPU·메모리·디스크 사양</b>까지 수집합니다.
         <b>물리 서버</b>는 위치를 <code>A09U27</code> 형식으로 넣으면 서버실 현황에 표시됩니다.
       </p>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr><th style="width:34px;text-align:center"><input type="checkbox" id="srv-check-all" title="전체 선택"></th>
-                <th>이름</th><th>IP</th><th>hostname</th><th>MAC</th><th>OS</th><th>구분</th>
+                <th>이름</th><th>IP</th><th>hostname</th><th>MAC</th><th>OS</th>
+                <th title="CPU 모델 · 논리 코어 수">CPU</th>
+                <th title="설치된 물리 메모리 총량">메모리</th>
+                <th title="로컬 디스크 사용량 / 전체 용량">디스크</th>
+                <th>구분</th>
                 <th>열린 포트</th><th>연결 스위치</th><th>포트</th><th>위치</th><th>상태</th><th>수집</th><th></th></tr>
           </thead>
           <tbody id="server-table-body">
-            <tr><td colspan="14" style="color:#64748b">등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.</td></tr>
+            <tr><td colspan="17" style="color:#64748b">등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.</td></tr>
           </tbody>
         </table>
       </div>

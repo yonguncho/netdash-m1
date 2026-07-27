@@ -311,6 +311,11 @@ CREATE TABLE IF NOT EXISTS servers (
     location TEXT,
     open_ports TEXT,
     os_info TEXT,
+    cpu_model TEXT,
+    cpu_cores INTEGER,
+    mem_total_mb INTEGER,
+    disk_total_gb REAL,
+    disk_used_gb REAL,
     switch_name TEXT,
     switch_port TEXT,
     status TEXT DEFAULT 'new',
@@ -654,6 +659,18 @@ def init_schema(db_path):
                 cursor.execute("ALTER TABLE firewalls ADD COLUMN ha_info TEXT")
             except Exception:
                 pass
+            # 서버 하드웨어 사양(CPU/메모리/디스크) — SSH 상세 수집에서 채움
+            for col, definition in [
+                ("cpu_model", "TEXT"),
+                ("cpu_cores", "INTEGER"),
+                ("mem_total_mb", "INTEGER"),
+                ("disk_total_gb", "REAL"),
+                ("disk_used_gb", "REAL"),
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE servers ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
             # HA/VRRP 이중화(같은 VIP) 방화벽을 Active/Backup 둘 다 등록할 수 있도록
             # firewalls.host의 UNIQUE 제약 제거. SQLite 정석 절차:
             # FK OFF → 새 테이블(_new) 생성 → 복사 → 기존 DROP → _new RENAME.
@@ -2657,7 +2674,10 @@ def delete_pc_profile(db_path, mac):
 # ── 서버(리눅스/윈도우) 현황 CRUD ───────────────────────────────────
 _SERVER_FIELDS = ("name", "ip", "os_type", "hostname", "mac", "is_vm",
                   "location", "open_ports", "os_info", "switch_name",
-                  "switch_port", "status", "last_error")
+                  "switch_port", "status", "last_error",
+                  # 하드웨어 사양(SSH 상세 수집)
+                  "cpu_model", "cpu_cores", "mem_total_mb",
+                  "disk_total_gb", "disk_used_gb")
 
 
 def list_servers(db_path):
@@ -2681,6 +2701,15 @@ def get_server(db_path, server_id):
         return dict(row) if row else None
 
 
+def get_server_by_ip(db_path, ip):
+    """IP로 서버 1건 조회(없으면 None). servers.ip는 UNIQUE."""
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM servers WHERE ip=?", (ip,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def adopt_server_switches(db_path):
     """구분(device_type)='Server'로 분류된 스위치 행을 servers 테이블로 편입(멱등).
 
@@ -2695,6 +2724,15 @@ def adopt_server_switches(db_path):
         if not ip:
             continue
         try:
+            # 같은 IP의 서버가 이미 있으면 스위치 행만 제거한다.
+            # (save_server의 UPDATE 분기는 os_type='auto'·is_vm=0·location을 덮어쓰므로
+            #  이미 수집해 둔 값이 목록 조회(GET /api/servers)마다 날아간다)
+            existing = get_server_by_ip(db_path, ip)
+            if existing:
+                delete_switch(db_path, sw["id"])
+                adopted += 1
+                log_event("info", "server_switch_adopted", ip=ip, name=sw.get("name") or ip)
+                continue
             sid = save_server(db_path, sw.get("name") or ip, ip,
                               os_type="auto", location=sw.get("location") or None)
             # 스위치가 알던 hostname을 서버로 승계(편입 시 유실 방지)
