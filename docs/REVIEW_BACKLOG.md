@@ -1,0 +1,121 @@
+# 전체 기능 검토 — 미처리 항목 (2026-07-27, v5.9.0 기준)
+
+8개 화면·90개 API·백그라운드 29곳을 5개 영역으로 병렬 검토해 **45건** 발견.
+그중 12건은 커밋 `8697f96` 에서 수정했다. 아래는 **아직 안 고친 것**이다.
+전부 실행으로 재현된 항목이며, 착수 전 재현부터 다시 확인할 것.
+
+---
+
+## MAJOR — 문구와 실제 동작이 다름 (사용자 신뢰 문제)
+
+### B-1. 서버 "전체 진단"이 실제로는 저장/세션 계정으로 전 서버에 SSH 접속
+- 버튼 안내: "계정 없이 전 서버의 도달성·열린 포트·hostname·연결 스위치를 확인합니다"
+  (`web/static/app.js` 서버 탭 `btn-server-diagnose`)
+- 실제: `POST /api/servers/collect-all {}` → 세션 자격증명 폴백 → 서버별 저장 계정 사용
+- 세션 계정(30분)이 살아 있으면 **그 계정 하나가 등록된 전 서버에 시도된다**
+- 개별 수집 모달의 "계정 없이 수집하면 열린 포트만" 안내도 같은 이유로 사실과 다름
+- 고칠 방향: 진단 전용 경로를 만들어 자격증명을 아예 넘기지 않거나, 문구를 실제에 맞추기
+
+### B-2. 방화벽 "전체 진단"이 실제로는 전체 수집
+- `app.js` `btn-fw-diagnose-all` → `/api/firewalls/collect-all`
+- 인터페이스·ARP를 덮어쓰고 status를 바꾼다. 1대짜리 진단(`/diagnose`)과 동작이 다름
+
+### B-3. 토폴로지 "서버실 현황 불러오기"가 저장된 구성도를 자동 덮어씀
+- 확인창은 "(저장 전이면 사라집니다)"라고 안내해 저장본은 안전하다는 인상을 준다
+- 실제: `_tdiag` 교체 → `_renderEditor()` → 끝에서 무조건 `_tAutoSave()`(1.5초 디바운스)
+  → 서버에 저장돼 있던 배치·연결선·존/대역 박스가 덮어써진다. 되돌릴 경로 없음
+- 고칠 방향: 불러오기 직후 자동저장 억제, 또는 확인 문구를 실제에 맞추고 되돌리기 제공
+
+---
+
+## MAJOR — 기능 공백
+
+### B-4. 랙배치(엑셀) 다운로드에 서버가 하나도 안 들어감
+- `app.py` `/api/serverroom/export` 가 스위치·방화벽만 담고 `db.list_servers`를 호출 안 함
+- 화면(카드뷰/랙뷰)과 CSV에는 물리 서버가 나오는데 엑셀만 빠짐
+
+### B-5. 스위치 일괄 수집에 진행바도 중지도 없음
+- `/api/switches/bulk-collect` 에 대응하는 `/status`·`/stop` 라우트가 없다
+  (방화벽·서버·설비·전체진단은 전부 있음)
+- 200대를 걸면 alert 한 번이 전부. 진척도 확인·중단 불가
+- `renderProgressBar`/`.np-stop-btn` 인프라는 이미 있으므로 배선만 하면 됨
+
+### B-6. 장비 일괄등록(inventory) UI 도달 불가
+- `app.js`의 `btn-import-inventory` 핸들러가 있으나 그 버튼이 HTML에 없음
+- `POST /api/switches/import-inventory` 는 정상 동작하는데 UI에서 못 씀
+- 감사 라벨 "장비 일괄등록"도 사문화. 탭별 엑셀 등록으로 대체됐다면 잔재 제거,
+  아니면 버튼 복구
+
+### B-7. 감사 로그 누락 (파괴적 작업·자산 목록 유출 경로)
+- `_audit_label()` 에 없음: `/api/facility/delete-subnet`(대역 수집 결과 통째 삭제),
+  `/api/switches/bulk-set-type`, `/api/session/credential`,
+  `/api/export/<kind>`(5개 화면 전체 자산 목록), `/api/report/pptx`
+- `/api/report`·`/api/facility/export` 는 기록하면서 툴바 `⬇ 다운로드`만 안 남아 정책 불일치
+
+---
+
+## MAJOR — 운영 안정성
+
+### B-8. 스케줄러가 지정 시각을 통째로 건너뜀
+- `core/scheduler.py` 가 `hhmm` 정확 일치로만 트리거하고 `sleep(50)` 고정
+- 루프 본문이 11초 이상 걸리면 주기가 60초를 넘어 특정 분이 관측되지 않음
+  → 그날 자동 수집·설비 자동 스캔이 실행되지 않고 **로그도 안 남음**
+- 공유폴더 배포는 `journal_mode=DELETE`라 writer가 reader를 막아 `get_setting`이
+  실측 11.5초까지 블로킹(최대 30초). 본문이 쉽게 11초를 넘김
+- 고칠 방향: 마지막 실행 시각을 기록해 "놓친 슬롯"을 따라잡기(catch-up), sleep 동적 조정
+
+### B-9. PC 프로필 키가 기본 경로 NIC의 MAC이라 VPN/NIC 전환 시 계정이 사라짐
+- `core/pcprofile.py` — 키가 바뀌면 `get_credential()`이 조용히 None
+- 결과: 자동 수집이 전 장비를 건너뛰고 `auto_collect_skip_no_cred`만 남김
+  (경고 없이 "수집은 도는데 아무것도 안 됨")
+
+### B-10. 이메일 발송이 최대 60초/도메인 블로킹
+- `core/notifier.py _direct_send()` 가 도메인당 MX 후보 4개를 `timeout=15` 순차 시도
+- 설정 모달의 "테스트 발송"이 15~60초 멈춤. 수신 주소 미입력과 네트워크 장애의
+  안내 문구가 동일해 구분 불가
+
+### B-11. 스냅샷 세대 정리가 영구히 멈출 수 있음 (잠복)
+- `events.snapshot_id` FK 때문에 `DELETE FROM snapshots` 가 IntegrityError →
+  `except: pass` 로 삼켜져 그 스위치의 정리가 이후 영구 실패, 빈 스냅샷 무한 누적
+- 현재 events INSERT 경로가 snapshot_id를 안 넣어 미발현. 구버전 DB 승계분이나
+  새 insert 경로가 생기면 즉시 발현
+
+---
+
+## MINOR
+
+- **B-12** 서버 개별 수집 후 6초 뒤 1회만 갱신 → SSH 상세가 6초를 넘으면 행이 계속 '수집중'
+- **B-13** 서버실 카드에 `sw-card--done`/`dot--done` 클래스가 CSS에 없어 상태 색이 안 나옴.
+  미수집(`new`)도 `done`으로 분기돼 정상 카드처럼 보임
+- **B-14** 같은 랙·유닛에 두 장비가 있으면 랙뷰/엑셀이 하나를 조용히 버림(경고 없음).
+  화면과 엑셀이 서로 다른 장비를 보여줌
+- **B-15** 서버실 "전체 진단"이 서버실 소속이 아닌 전체 스위치를 진단하고,
+  서버실의 서버·방화벽은 진단하지 않으며, 진행바가 스위치 탭에만 그려짐
+- **B-16** 서버실 "정보 수집"에서 방화벽·서버 폴러 둘이 같은 `#room-progress`에 써서 진행률이 덮임
+- **B-17** 화면 요약은 `Unknown` 규격을 그대로 쓰고 CSV는 걸러내 메모리 구성 표기가 다름
+- **B-18** 스위치 내보내기 '위치'가 `A09랙 U27`(라벨), 화면은 `A09U27`(원문) — 엑셀 검색 불일치
+- **B-19** 방화벽 내보내기에 화면의 '연결 상태'(도달성) 컬럼이 없음
+- **B-20** 저장 계정 관리(🔑) 로드 실패 시 방화벽·PC 프로필 표가 영구 "불러오는 중..."
+- **B-21** SMTP 인증정보를 UI에서 삭제할 수 없음(`clear_auth` 컨트롤 없음)
+- **B-22** 관제 화면에 방화벽 장애가 표시되지 않고 `firewall_unreachable` 이 영문으로 노출
+- **B-23** 중지 버튼이 서버 응답(`{"ok":false}`/400)을 확인하지 않아 "중지 중…"에서 굳음
+- **B-24** 전체 진단 진행 상태가 새로고침 후 복구되지 않음(백그라운드는 계속 도는데 UI는 초기화)
+- **B-25** 토폴로지 편집기의 장비 종류 판정이 구성도 트리와 불일치(백본이 L2 행에 배치)
+- **B-26** `window._API_TOKEN`이 어디에도 설정되지 않음 → `0.0.0.0` 바인드 원격 접속 시
+  웹터미널·모든 `fetch`가 401 (로컬 면제라 기본 배포에서는 미발현)
+- **B-27** 죽은 잔재: `btn-fac-export-txt`, `loadReconcile()`/`reconcile-*`, `btn-topo-l2`,
+  `topo-zone-select` — 가드가 있어 무해하나 정리 대상
+- **B-28** 주기 작업 예외 로그 미살균(절대경로 노출): `scheduler.py`, `reachability.py`,
+  `facility.py` 일부 (instance_lock 은 수정 완료)
+
+---
+
+## 검토에 쓴 도구 (재사용)
+
+```
+python scripts/audit_ui_wiring.py       # 죽은 버튼·없는 API·미처리 data-action
+python scripts/verify_user_journeys.py  # 실사용 시나리오 종단 검증
+node   scripts/verify_bulk_modal.js     # 대량 선택 팝업
+node   scripts/verify_hw_cells.js       # 사양·장착구성 표기
+python -m pytest tests/ -q              # 957 passed
+```
