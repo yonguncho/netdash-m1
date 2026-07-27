@@ -1896,6 +1896,22 @@ def reset_stale_collecting(db_path):
                 cur = conn.execute(
                     "UPDATE switches SET status='failed' WHERE status='collecting'")
                 n = cur.rowcount
+            # 서버·방화벽도 같은 고착이 생긴다. 예전엔 스위치만 정리해서
+            # 재시작 후에도 '수집중' 뱃지가 영구히 남아 오인을 유발했다.
+            for tbl, extra in (("servers", ", last_error='이전 실행이 수집 도중 중단됨(앱 재시작)'"),
+                               ("firewalls", "")):
+                try:
+                    cur = conn.execute(
+                        "UPDATE %s SET status='failed'%s WHERE status='collecting'"
+                        % (tbl, extra))
+                    n += cur.rowcount
+                except Exception:
+                    try:
+                        cur = conn.execute(
+                            "UPDATE %s SET status='failed' WHERE status='collecting'" % tbl)
+                        n += cur.rowcount
+                    except Exception:
+                        pass
     if n:
         log_event("info", "stale_collecting_reset", count=n)
     return n
@@ -2766,22 +2782,37 @@ def adopt_server_switches(db_path):
     return adopted
 
 
-def save_server(db_path, name, ip, os_type="linux", location=None, is_vm=0):
-    """서버 등록(IP 기준 upsert). 반환: server id."""
+def save_server(db_path, name, ip, os_type=None, location=None, is_vm=None):
+    """서버 등록(IP 기준 upsert). 반환: server id.
+
+    **None은 '건드리지 않음'이다.** 예전에는 기본값(os_type='linux', location=None,
+    is_vm=0)을 무조건 UPDATE해서, 서버를 몇 대 추가하려고 같은 엑셀을 다시 등록하면
+    이미 수집·배치해 둔 서버의 위치·VM 여부·OS가 통째로 지워졌다(서버실 현황에서 사라짐).
+    호출부가 실제로 지정한 값만 갱신한다.
+    """
     with _db_lock:
         with get_db(db_path) as conn:
             cur = conn.cursor()
             cur.execute("SELECT id FROM servers WHERE ip=?", (ip,))
             row = cur.fetchone()
             if row:
-                cur.execute(
-                    "UPDATE servers SET name=?, os_type=?, location=?, is_vm=? "
-                    "WHERE id=?", (name, os_type, location, int(bool(is_vm)), row["id"]))
+                sets, params = [], []
+                for col, val in (("name", name), ("os_type", os_type),
+                                 ("location", location)):
+                    if val is not None:
+                        sets.append("%s=?" % col)
+                        params.append(val)
+                if is_vm is not None:
+                    sets.append("is_vm=?")
+                    params.append(int(bool(is_vm)))
+                if sets:
+                    params.append(row["id"])
+                    cur.execute("UPDATE servers SET %s WHERE id=?" % ", ".join(sets), params)
                 return row["id"]
             cur.execute(
                 "INSERT INTO servers (name, ip, os_type, location, is_vm) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (name, ip, os_type, location, int(bool(is_vm))))
+                (name, ip, os_type or "auto", location, int(bool(is_vm))))
             return cur.lastrowid
 
 

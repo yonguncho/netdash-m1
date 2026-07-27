@@ -359,6 +359,35 @@ document.addEventListener("click", function (e) {
   if (csv) csv.checked = true;                 // 기본 CSV
   openModal("modal-export");
 });
+// 파일 내려받기 공용 — window.location으로 바로 이동하면 서버가 404/500 JSON을
+// 돌려줄 때 브라우저가 그 JSON으로 화면을 갈아치운다(열려 있던 탭·선택·미저장
+// 토폴로지 편집 상태가 전부 사라짐). 먼저 받아보고 성공했을 때만 저장한다.
+function downloadFile(url) {
+  fetch(url).then(function (r) {
+    if (!r.ok) {
+      return r.json().catch(function () { return {}; }).then(function (b) {
+        alert((b && b.error) || ("다운로드 실패 (HTTP " + r.status + ")"));
+        return null;
+      });
+    }
+    var name = "";
+    var cd = r.headers.get("Content-Disposition") || "";
+    var m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+    if (m) name = decodeURIComponent(m[1]);
+    return r.blob().then(function (blob) { return { blob: blob, name: name }; });
+  }).then(function (res) {
+    if (!res) return;
+    var a = document.createElement("a");
+    var href = URL.createObjectURL(res.blob);
+    a.href = href;
+    a.download = res.name || "netdash-download";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(href); }, 10000);
+  }).catch(function (e) { console.error(e); alert("다운로드 오류: " + e); });
+}
+
 (function () {
   var go = document.getElementById("btn-export-go");
   if (!go) return;
@@ -367,8 +396,8 @@ document.addEventListener("click", function (e) {
     var sel = document.querySelector("input[name='export-fmt']:checked");
     var fmt = sel ? sel.value : "csv";
     closeModal("modal-export");
-    window.location = "/api/export/" + encodeURIComponent(_exportKind) +
-      "?format=" + encodeURIComponent(fmt);
+    downloadFile("/api/export/" + encodeURIComponent(_exportKind) +
+      "?format=" + encodeURIComponent(fmt));
   });
 })();
 
@@ -1031,7 +1060,7 @@ var _roomViewMode = "card";  // card | rack
   bc.addEventListener("click", function () { setMode("card"); });
   br.addEventListener("click", function () { setMode("rack"); });
   var ex = document.getElementById("btn-room-export");
-  if (ex) ex.addEventListener("click", function () { window.location = "/api/serverroom/export"; });
+  if (ex) ex.addEventListener("click", function () { downloadFile("/api/serverroom/export"); });
 })();
 
 function renderRoom(switches) {
@@ -1406,7 +1435,7 @@ function renderSwitchTable(switches) {
   var tbody = document.getElementById("switch-table-body");
   if (!tbody) return;  // 요소 부재 시 조기 반환(가드 역전 → tbody.innerHTML 크래시 방지)
   if (!switches.length) {
-    tbody.innerHTML = "<tr><td colspan='13' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='14' style='color:#64748b'>조건에 맞는 스위치가 없습니다. (검색어를 지우면 전체 표시)</td></tr>";
     var allChk0 = document.getElementById("sw-check-all");
     if (allChk0) allChk0.checked = false;
     _updateBulkDeleteBtn();
@@ -1432,6 +1461,9 @@ function renderSwitchTable(switches) {
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'" +
       (_tblSel[sw.id] ? " checked" : "") + "></td>" +
+      // 이름: 등록 시 붙인 식별자. 호스트네임은 수집 성공 후에만 채워지므로
+      // 이 칸이 없으면 미수집 스위치를 IP로만 구분해야 한다.
+      "<td><strong>" + escHtml(sw.name || "-") + "</strong></td>" +
       "<td>" + kindLabel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
       escHtml(sw.hostname || "-") + "</td><td>" + escHtml(_vendorLabel(sw.vendor)) +
       _nbrSrcBadge(sw) + "</td><td>" +
@@ -1627,8 +1659,18 @@ function diagnoseServer(id) {
 function deleteSwitch(id) {
   if (!confirm("이 스위치를 삭제하시겠습니까?")) return;
   fetch("/api/switches/" + id, {method: "DELETE"})
-    .then(function(r) { return r.json(); })
-    .then(function() { pollState(); })
+    .then(function (r) {
+      return r.json().catch(function () { return {}; })
+        .then(function (b) { return { ok: r.ok, status: r.status, b: b }; });
+    })
+    .then(function (res) {
+      // 실패(404/423 등)를 삼키면 목록에 그대로 남아 "삭제가 안 먹네"로 끝난다
+      if (!res.ok) {
+        alert((res.b && res.b.error) || ("삭제 실패 (HTTP " + res.status + ")"));
+        return;
+      }
+      pollState();
+    })
     .catch(function(e) { console.error(e); alert("삭제 오류"); });
 }
 
@@ -2003,9 +2045,9 @@ function _renderFacilityRows() {
   var fs = document.getElementById("fac-search");
   if (fs) fs.addEventListener("input", _renderFacilityRows);
   var ex = document.getElementById("btn-fac-export-xlsx");
-  if (ex) ex.addEventListener("click", function () { window.location = "/api/facility/export?format=xlsx"; });
+  if (ex) ex.addEventListener("click", function () { downloadFile("/api/facility/export?format=xlsx"); });
   var et = document.getElementById("btn-fac-export-txt");
-  if (et) et.addEventListener("click", function () { window.location = "/api/facility/export?format=txt"; });
+  if (et) et.addEventListener("click", function () { downloadFile("/api/facility/export?format=txt"); });
   var rf = document.getElementById("btn-fac-refresh");
   if (rf) rf.addEventListener("click", function () {
     rf.disabled = true;
@@ -2508,9 +2550,19 @@ function collectSwitch(switchId, username, password, persist, enableSecret) {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body),
-  }).then(function(r) { return r.json(); }).then(function() {
+  }).then(function (r) {
+    return r.json().catch(function () { return {}; })
+      .then(function (b) { return { ok: r.ok, status: r.status, b: b }; });
+  }).then(function (res) {
+    // 예전엔 r.ok를 안 봐서 423(읽기 전용)·409(이미 수집 중)·404에도 팝업만 닫히고
+    // 아무 안내가 없었다 — 사용자는 수집이 시작된 줄 안다.
+    if (!res.ok) {
+      alert((res.b && (res.b.error || res.b.message)) ||
+            ("수집 요청 실패 (HTTP " + res.status + ")"));
+      return;
+    }
     pollState();
-  }).catch(function(e) { console.error("collect error:", e); });
+  }).catch(function (e) { console.error("collect error:", e); alert("수집 요청 오류: " + e); });
 }
 
 // ─── 일괄 정보 수집 (공통 계정) ──────────────────────────────────
@@ -2782,7 +2834,7 @@ document.getElementById("btn-add-confirm").addEventListener("click", function() 
 // ─── M9: 보고서 내보내기 ─────────────────────────────────────────
 (function () {
   var btn = document.getElementById("btn-export-report");
-  if (btn) btn.addEventListener("click", function() { window.location = "/api/report"; });
+  if (btn) btn.addEventListener("click", function() { downloadFile("/api/report"); });
 })();
 
 // ─── 엑셀 가져오기 ───────────────────────────────────────────────
@@ -5149,7 +5201,7 @@ function loadConfigTab(switchId) {
       document.querySelectorAll("#switch-table-body .sw-check:checked"),
       function (c) { return c.value; });
     if (ids.length) {
-      window.location = "/api/configs/export-all?ids=" + ids.join(",");
+      downloadFile("/api/configs/export-all?ids=" + ids.join(","));
     } else {
       alert("config를 다운로드할 스위치를 먼저 체크하세요.");
     }
@@ -5496,6 +5548,11 @@ function renderServers() {
         "data-action='delete-server' data-id='" + s.id + "'>삭제</button>" +
       "</td></tr>";
   }).join("");
+  // 재렌더로 체크가 풀렸는데 버튼 라벨이 "(3)"으로 남아 있으면, 눌러도 아무 일이
+  // 안 일어난다(대상 0건). 표를 다시 그릴 때마다 선택 개수를 맞춘다.
+  _updateSrvSelBtns();
+  var allChk = document.getElementById("srv-check-all");
+  if (allChk) allChk.checked = false;
 }
 
 (function () {

@@ -55,8 +55,16 @@ def test_monitor_known_hosts_offline_then_recover(temp_db, monkeypatch):
     # (b) MAC 실종 — 다른 장비 MAC만 존재(빈 dict면 판단 보류되므로 더미 넣음)
     monkeypatch.setattr(db, "get_mac_to_switchport",
                         lambda dbp: {"ff:ff:ff:ff:ff:ff": [(9, "OTHER", "Gi9")]})
-    assert facility.monitor_known_hosts(temp_db) == (0, 0)   # 1회 실종 — 디바운스
-    assert facility.monitor_known_hosts(temp_db) == (0, 1)   # 2회 실종 — 오프라인
+    # 디바운스 기준은 '감시 주기 횟수'가 아니라 '서로 다른 MAC 스냅샷'이다.
+    # (같은 스냅샷을 다시 본 것은 새 근거가 아니라서 조용한 설비가 오탐됐다)
+    # 스위치 재수집으로 스냅샷 세대가 바뀌는 상황을 흉내낸다.
+    _gen = [0]
+    monkeypatch.setattr(facility, "_mac_generation", lambda dbp: (("sw", _gen[0]),))
+    assert facility.monitor_known_hosts(temp_db) == (0, 0)   # 1번째 세대에서 실종 1회
+    assert facility.monitor_known_hosts(temp_db) == (0, 0)   # 같은 세대 재확인 — 세지 않음
+    assert facility.monitor_known_hosts(temp_db) == (0, 0)   # 몇 번을 더 봐도 그대로
+    _gen[0] = 1
+    assert facility.monitor_known_hosts(temp_db) == (0, 1)   # 새 세대에서도 실종 → 오프라인
     hosts = {h["ip"]: h for h in db.get_facility_hosts(temp_db)}
     assert hosts["10.7.0.5"]["online"] == 0
     offs = [e for e in db.list_device_events(temp_db, limit=20)

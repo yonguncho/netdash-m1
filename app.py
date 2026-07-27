@@ -479,13 +479,30 @@ def _watch_and_promote(app, config, db_path, url):
     while app.config.get("IS_READONLY"):
         time.sleep(PROMOTE_POLL_SEC)
         try:
-            acquired, _ = instance_lock.acquire(get_data_dir(), url)
+            # allow_unlocked=False: 락 파일을 확인하지 못했으면 승격하지 않는다.
+            # (공유폴더 순단 때 '획득 성공'으로 오인해 주 서버가 둘이 되면
+            #  같은 SQLite에 두 PC가 동시 쓰기를 한다)
+            acquired, _ = instance_lock.acquire(get_data_dir(), url, allow_unlocked=False)
         except Exception as e:
-            log_event("warning", "promote_watch_error", error=str(e))
+            log_event("warning", "promote_watch_error",
+                      error=collector._sanitize_error_msg(str(e)))
             continue
-        if acquired:
+        if not acquired:
+            continue
+        try:
             _promote_to_primary(app, config, db_path)
             return
+        except Exception as e:
+            # 승격 도중 예외 — 여기서 죽으면 락은 이 프로세스가 쥔 채 읽기 전용으로
+            # 남아, 어떤 PC도 주 서버가 될 수 없다(배포 전체 정지). 락을 놓고 재시도한다.
+            log_event("error", "promote_failed_releasing_lock",
+                      error=collector._sanitize_error_msg(str(e)))
+            try:
+                instance_lock.release()
+            except Exception:
+                pass
+            app.config["IS_READONLY"] = True
+            db.READONLY = True
 
 
 def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
@@ -1055,8 +1072,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     skipped += 1
                     continue
                 try:
+                    # 엑셀에 없는 칸은 넘기지 않는다(None=건드리지 않음) — 같은 엑셀을
+                    # 다시 등록해도 이미 배치·수집해 둔 위치·OS가 지워지지 않게.
                     sid = db.save_server(db_path, r["name"], ip,
-                                         os_type=(r.get("os_type") or "auto"),
+                                         os_type=(r.get("os_type") or None),
                                          location=(r.get("location") or None))
                     # 엑셀에 있던 hostname·OS 원문도 함께 보존(표시용)
                     _extra = {}
@@ -1444,9 +1463,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             if not isinstance(data, dict):
                 return jsonify({"error": "본문은 JSON 객체여야 합니다"}), 400
             fields = {}
-            for k in ("name", "os_type", "location", "hostname"):
+            for k in ("name", "os_type", "hostname"):
                 if k in data:
                     fields[k] = _sv_text(data[k]) or None
+            # 위치는 '비우기'가 되어야 한다 — 랙에서 뺀 서버가 서버실 현황에
+            # 영원히 남지 않도록, 빈 문자열은 None(무시)이 아니라 ""(지우기)로 넘긴다.
+            if "location" in data:
+                fields["location"] = _sv_text(data["location"], 60)
             # os_type은 허용 계열만(임의 값 저장 방지 — 수집 분기가 문자열에 의존)
             if fields.get("os_type") and fields["os_type"] not in _SERVER_OS_TYPES:
                 fields["os_type"] = "auto"
@@ -1454,6 +1477,18 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 fields["is_vm"] = 1 if data.get("is_vm") else 0
             if not db.get_server(db_path, server_id):
                 return jsonify({"error": "not found"}), 404
+            # IP 변경 — 화면 수정 모달이 IP 칸을 보여주고 보내는데 지금까지 조용히 무시됐다.
+            if "ip" in data:
+                new_ip = _sv_text(data["ip"], 64)
+                if new_ip:
+                    try:
+                        new_ip = validate_ipv4(new_ip, config.collector.get("allowed_ip_ranges"))
+                    except ValueError as e:
+                        return jsonify({"error": "IP 거부: %s" % e}), 400
+                    dup = db.get_server_by_ip(db_path, new_ip)
+                    if dup and dup.get("id") != server_id:
+                        return jsonify({"error": "이미 등록된 IP입니다: %s" % new_ip}), 409
+                    fields["ip"] = new_ip
             db.update_server(db_path, server_id, **fields)
             return jsonify({"ok": True})
         except Exception as e:
@@ -2716,15 +2751,24 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             _dt = data.get("device_type") if "device_type" in data else None
             if _dt not in (None, "") and _dt not in DEVICE_TYPES:
                 return jsonify({"error": "invalid device_type"}), 400
+            # 빈 문자열은 '지우기'다. 예전엔 `or None`으로 접혀 '변경 없음'이 되어,
+            # 잘못 들어간 호스트네임·위치를 지우고 저장해도 200 OK만 뜨고 값이 남았다.
+            # (키가 아예 없으면 None → 종전대로 '변경 없음')
+            def _clr(key, limit=100):
+                if key not in data:
+                    return None
+                return _sv_text(data[key], limit)
+
             try:
                 ok = db.update_switch(
                     db_path, switch_id,
+                    # 이름은 표의 주 식별자라 비우기를 허용하지 않는다(빈 값 = 변경 없음)
                     name=(data.get("name") or "").strip() or None,
                     ip=ip or None,
-                    hostname=(data.get("hostname") or "").strip() or None,
+                    hostname=_clr("hostname"),
                     vendor=(collector.canonical_vendor(data.get("vendor"))
                             if (data.get("vendor") or "").strip() else None),
-                    location=(data.get("location") or "").strip() or None,
+                    location=_clr("location", 60),
                     note=(data.get("note") if "note" in data else None),
                     device_type=_dt,
                 )

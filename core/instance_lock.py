@@ -14,6 +14,7 @@ SQLite(WAL) DB는 네트워크 공유 폴더를 통한 다중 호스트 동시 �
 import atexit
 import json
 import os
+import re
 import socket
 from pathlib import Path
 
@@ -41,6 +42,18 @@ def _try_lock(fh) -> None:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def _safe_err(e):
+    """예외 메시지에서 DB/공유폴더 절대경로를 지운다.
+
+    netdash.log는 DB 옆(공유폴더)에 쌓이므로, 경로가 그대로 남으면 공유 접근
+    권한자 전원에게 내부 경로가 노출된다.
+    """
+    msg = str(e)
+    msg = re.sub(r"[A-Za-z]:\\\\[^\s'\"]+", "<path>", msg)
+    msg = re.sub(r"\\\\\\\\[^\s'\"]+", "<path>", msg)      # UNC \\server\share
+    return msg[:160]
+
+
 def read_info(data_dir) -> dict | None:
     try:
         return json.loads((Path(data_dir) / INFO_FILENAME).read_text(encoding="utf-8"))
@@ -48,21 +61,33 @@ def read_info(data_dir) -> dict | None:
         return None
 
 
-def acquire(data_dir, url: str):
+def acquire(data_dir, url: str, allow_unlocked=True):
     """서버 인스턴스 락 획득 시도.
 
+    Args:
+        allow_unlocked: 락 파일을 열지 못했을 때의 처리.
+            True(기동 시) — best-effort로 진행을 허용한다. 첫 기동은 막지 않는다.
+            False(승격 판단 시) — 락을 확인하지 못했으면 획득 실패로 본다.
+
     Returns:
-        (True, None)  — 획득 성공(또는 락 사용 불가 환경 — 차단하지 않음).
-        (False, info) — 다른 인스턴스 실행 중. info={hostname, pid, url} (없으면 {}).
+        (True, None)  — 획득 성공.
+        (False, info) — 다른 인스턴스 실행 중이거나 락 확인 불가.
+                        info={hostname, pid, url} (없으면 {}).
     """
     global _fh, _info_path
     lock = Path(data_dir) / LOCK_FILENAME
     try:
         fh = open(lock, "a+b")
     except OSError as e:
-        # 락 파일조차 못 여는 환경(권한 등) — best-effort 보호라 차단하지 않음
-        utils.log_event("warning", "instance_lock_open_failed", error=str(e))
-        return True, None
+        # 공유폴더 순단·권한 오류로 락 파일을 못 여는 상황.
+        # 여기서 '획득 성공'을 돌려주면, 진짜 주 서버가 살아 있는데도 읽기 전용
+        # 인스턴스가 자기를 주 서버로 승격해 두 PC가 같은 SQLite에 동시 쓰기를 한다.
+        # 그래서 승격 판단에서는 반드시 실패로 취급한다(allow_unlocked=False).
+        utils.log_event("warning", "instance_lock_open_failed",
+                        error=_safe_err(e), allow_unlocked=allow_unlocked)
+        if allow_unlocked:
+            return True, None
+        return False, read_info(data_dir) or {}
     try:
         _try_lock(fh)
     except OSError:

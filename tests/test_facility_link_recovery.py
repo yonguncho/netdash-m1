@@ -96,12 +96,15 @@ def test_facility_not_marked_offline_by_empty_mac_collection(wired):
 
 
 def test_real_disconnect_still_detected(wired):
-    """폴백 때문에 진짜 끊김을 놓치면 안 된다 — MAC이 담긴 정상 수집에서 사라지면 오프라인."""
-    temp_db, sid = wired
-    # 다른 설비 MAC은 학습됐고 우리 설비 MAC만 사라진 '정상 수집'
-    _collect(temp_db, sid, [{"vlan": "10", "mac": MAC_B, "port": "Gi1/0/2"}])
+    """폴백 때문에 진짜 끊김을 놓치면 안 된다 — MAC이 담긴 정상 수집에서 사라지면 오프라인.
 
+    디바운스 기준이 '감시 주기 횟수'가 아니라 '서로 다른 MAC 스냅샷'이므로,
+    실제 재수집(새 스냅샷)을 임계치만큼 반복해야 끊김으로 판정된다.
+    """
+    temp_db, sid = wired
     for _ in range(facility._MISS_THRESHOLD):
+        # 다른 설비 MAC은 학습됐고 우리 설비 MAC만 사라진 '정상 수집'
+        _collect(temp_db, sid, [{"vlan": "10", "mac": MAC_B, "port": "Gi1/0/2"}])
         facility.monitor_known_hosts(temp_db)
 
     h = db.get_facility_hosts(temp_db)[0]
@@ -109,11 +112,21 @@ def test_real_disconnect_still_detected(wired):
 
 
 def test_debounce_still_applies(wired):
-    """1회 실종으로는 끊김 처리하지 않는다(순간 MAC aging 오탐 방지)."""
+    """새 스냅샷 1회 실종으로는 끊김 처리하지 않는다."""
     temp_db, sid = wired
     _collect(temp_db, sid, [{"vlan": "10", "mac": MAC_B, "port": "Gi1/0/2"}])
     facility.monitor_known_hosts(temp_db)
     assert db.get_facility_hosts(temp_db)[0]["online"] == 1
+
+
+def test_same_snapshot_repeated_does_not_count(wired):
+    """같은 MAC 스냅샷을 여러 번 본 것은 새 근거가 아니다(조용한 설비 오탐 방지)."""
+    temp_db, sid = wired
+    _collect(temp_db, sid, [{"vlan": "10", "mac": MAC_B, "port": "Gi1/0/2"}])
+    for _ in range(6):
+        facility.monitor_known_hosts(temp_db)
+    assert db.get_facility_hosts(temp_db)[0]["online"] == 1, \
+        "스냅샷이 그대로인데 감시 주기만으로 끊김 처리됐다"
 
 
 # ── 원인 ② 연결 스위치가 스캔 때만 계산되던 문제 ──────────────────

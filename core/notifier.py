@@ -26,6 +26,9 @@ from . import db, utils
 logger = logging.getLogger(__name__)
 
 _queue = queue.Queue(maxsize=1000)
+# 발송 실패 시 다음 주기에 재시도하려고 들고 있는 알람의 상한
+# (메일 서버가 오래 죽어 있어도 메모리가 무한히 늘지 않게)
+_PENDING_MAX = 500
 _thread = None
 _stop = False
 
@@ -228,19 +231,34 @@ def _loop(db_path):
         except queue.Empty:
             pass
         if pending and (_time.monotonic() - last_flush) >= 60:
+            sent = False
             try:
                 cfg = _settings(db_path)
-                if cfg["enabled"]:
+                if not cfg["enabled"]:
+                    sent = True                  # 발송 안 하기로 설정 → 쌓아둘 이유 없음
+                else:
                     send_list = [e for e in pending if _severity_ok(e, cfg["min_sev"])]
-                    if send_list:
+                    if not send_list:
+                        sent = True              # 보낼 만한 등급이 없음
+                    else:
                         crit = sum(1 for e in send_list if e.get("severity") == "critical")
                         subject = "[NetDash] 알람 %d건%s" % (
                             len(send_list), (" (긴급 %d)" % crit) if crit else "")
                         if send_email(db_path, subject, _format_digest(send_list)):
                             utils.log_event("info", "email_alert_sent", count=len(send_list))
+                            sent = True
             except Exception as e:
                 utils.log_event("warning", "notifier_loop_error", error=str(e)[:200])
-            pending = []
+            if sent:
+                pending = []
+            else:
+                # 릴레이가 잠깐 죽었다고 그 60초 묶음을 버리면 알람이 영영 안 간다.
+                # 다음 주기에 다시 시도한다(무한 증식은 막게 최근 것 위주로 상한).
+                if len(pending) > _PENDING_MAX:
+                    dropped = len(pending) - _PENDING_MAX
+                    pending = pending[-_PENDING_MAX:]
+                    utils.log_event("warning", "email_pending_trimmed", dropped=dropped)
+                utils.log_event("warning", "email_retry_pending", count=len(pending))
             last_flush = _time.monotonic()
 
 

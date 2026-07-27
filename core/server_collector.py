@@ -1199,8 +1199,11 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
     if rdns:
         fields["hostname"] = rdns
     # OS 자동 추정(무자격): SSH가 막힌 서버도 열린 포트·NetBIOS로 OS를 표시.
-    # 사용자가 이미 linux/windows로 지정했으면 유지. SSH 상세(detect_os) 성공 시 덮어씀.
-    if (sv.get("os_type") or "auto").lower() not in ("linux", "windows"):
+    # 이미 확정된 계열이면 유지한다. 예전엔 linux/windows만 지켜서, 드롭다운이나 SSH로
+    # 확정한 AIX·Solaris·HP-UX·ESXi가 '22번 열림 → linux'로 덮어써졌다
+    # (계정 없는 수집이나 진단을 한 번만 눌러도 파괴됨). SSH 상세 성공 시에는 덮어쓴다.
+    _cur_os = (sv.get("os_type") or "auto").lower()
+    if _cur_os not in ("windows",) + UNIX_LIKE:
         inferred = infer_os_from_scan(open_ports, nb_hit)
         if inferred:
             fields["os_type"] = inferred

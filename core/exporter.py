@@ -48,7 +48,9 @@ def _switch_location(sw):
 
 
 # ── 데이터셋별 컬럼·행 구성(화면 표와 동일한 순서) ─────────────
-SWITCH_COLS = ["구분", "IP", "호스트네임", "벤더", "모델", "버전", "시리얼",
+# '이름'은 등록 시 사용자가 붙인 식별자다. 호스트네임은 수집에 성공해야 채워지므로
+# 미수집 스위치는 이름이 없으면 IP로만 식별된다 — 반드시 첫 컬럼으로 내보낸다.
+SWITCH_COLS = ["이름", "구분", "IP", "호스트네임", "벤더", "모델", "버전", "시리얼",
                "위치", "상태", "경보", "마지막 수집", "비고"]
 
 
@@ -63,6 +65,7 @@ def switches_rows(db_path):
         if not kind:
             kind = topology.classify_switch_kind(cfgs.get(sw["id"]), sw.get("vendor")) or "SWITCH"
         rows.append({
+            "이름": sw.get("name"),
             "구분": kind, "IP": sw.get("ip"), "호스트네임": sw.get("hostname"),
             "벤더": sw.get("vendor"), "모델": sw.get("model"), "버전": sw.get("os_version"),
             "시리얼": sw.get("serial"), "위치": _switch_location(sw),

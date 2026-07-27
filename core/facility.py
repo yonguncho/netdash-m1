@@ -508,6 +508,7 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     partial_error = None
     i = 0               # ping 진행 인덱스(= 실제 스캔한 IP 수)
     stopped_at = None   # 중지 지점 — 이후 IP는 미스캔이므로 오프라인 판정에서 제외
+    unscanned = set()   # ping을 실제로 보내지 못한 IP — 오프라인 판정에서 제외
 
     vrf = None            # 대역이 VRF 소속이면 ping/ARP에 vrf 키워드 적용
     arp_cmd = arp_base_cmd
@@ -559,20 +560,32 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
                     conn.send_command(ping_tpl % ip, read_timeout=5)
                 except Exception as e:
                     # 세션 끊김이면 재접속 후 같은 IP부터 재개. 그 외는 해당 IP만 건너뜀.
-                    if _is_conn_dead(e) and reconnects < _MAX_RECONNECT:
-                        reconnects += 1
-                        utils.log_event("warning", "facility_session_reconnect",
-                                        subnet=subnet, attempt=reconnects, progress=i)
-                        _set(message="세션 끊김 — 재접속 %d/%d (진행 %d/%d)" % (
-                            reconnects, _MAX_RECONNECT, i, len(ips)))
-                        try:
-                            conn.disconnect()
-                        except Exception:
-                            pass
-                        _t.sleep(3)
-                        conn = _connect()
-                        _set(message="대역 ping 중 (재개)")
-                        continue  # 같은 IP 재시도
+                    if _is_conn_dead(e):
+                        if reconnects < _MAX_RECONNECT:
+                            reconnects += 1
+                            utils.log_event("warning", "facility_session_reconnect",
+                                            subnet=subnet, attempt=reconnects, progress=i)
+                            _set(message="세션 끊김 — 재접속 %d/%d (진행 %d/%d)" % (
+                                reconnects, _MAX_RECONNECT, i, len(ips)))
+                            try:
+                                conn.disconnect()
+                            except Exception:
+                                pass
+                            _t.sleep(3)
+                            conn = _connect()
+                            _set(message="대역 ping 중 (재개)")
+                            continue  # 같은 IP 재시도
+                        # 재접속 상한 초과 — 남은 IP는 확인 자체가 불가능하다.
+                        # 예전엔 예외를 삼키고 계속 진행해서, ping도 못 해본 IP가
+                        # 전부 '연결 끊김'으로 오탐되고 로그엔 '정상 완료'로 남았다.
+                        partial_error = ("세션 재접속 %d회 실패 — 남은 %d개 IP 미확인"
+                                         % (reconnects, len(ips) - i))
+                        utils.log_event("warning", "facility_scan_aborted_session",
+                                        subnet=subnet, progress=i, total=len(ips))
+                        break
+                    # 개별 IP 오류(타임아웃 등) — 이 IP는 '확인 못 함'으로 남긴다.
+                    # 오프라인 판정 대상에 넣으면 멀쩡한 설비가 끊김으로 찍힌다.
+                    unscanned.add(ip)
                 i += 1
                 _t.sleep(_SWEEP_PING_GAP)          # 스위치 부담 완화(pacing)
                 if i % _SWEEP_CHUNK == 0:
@@ -656,6 +669,12 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
         scanned_ips = set(ips[:stopped_at]) | set(by_ip.keys())
     elif partial_error:
         scanned_ips = set(ips[:i]) | set(by_ip.keys())
+    if unscanned:
+        # ping을 못 보낸 IP는 '끊김'이 아니라 '확인 못 함'이다 → 이전 상태를 보존
+        if scanned_ips is None:
+            scanned_ips = (set(ips) - unscanned) | set(by_ip.keys())
+        else:
+            scanned_ips -= (unscanned - set(by_ip.keys()))
     saved, new_cnt, off_cnt = _apply_scan(db_path, subnet, by_ip, scanned_ips=scanned_ips)
     utils.log_event("info", "facility_collected", subnet=subnet, pinged=len(ips),
                     arp=len(arp), saved=saved, new=new_cnt, offline=off_cnt,
@@ -678,7 +697,9 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     _set(running=False, message=done_msg)
     return {"subnet": subnet, "pinged": len(ips), "arp": len(arp),
             "saved": saved, "new": new_cnt, "offline": off_cnt,
-            "partial": bool(partial_error)}
+            "partial": bool(partial_error),
+            "stopped": stopped_at is not None,   # 전체 대역 스캔이 남은 대역을 멈추는 근거
+            "unscanned": len(unscanned)}
 
 
 _KEEP_COLS = ("subnet", "ip", "mac", "switch_id", "switch_name", "port", "direct", "via", "port_desc")
@@ -819,9 +840,29 @@ def reconcile_online_by_mac(db_path):
     return restored
 
 
-# 자주 모니터링(끊김/복구 즉시 감지)용 상태 — 연속 미스 디바운스
-_MISS_THRESHOLD = 2      # MAC 연속 N회 실종 시에만 오프라인 전환(순간 aging 오탐 방지)
-_miss_counts = {}        # {(subnet, ip): 연속 실종 횟수}
+# 자주 모니터링용 상태 — '서로 다른 MAC 스냅샷에서 연속 실종'을 셈한다.
+#
+# 예전엔 60초 감시 '주기 횟수'를 셌는데, 판정 입력인 MAC 스냅샷은 스위치를
+# 재수집할 때만 갱신된다. 같은 스냅샷을 두 번 본 것뿐인데 2분 만에 오프라인으로
+# 넘어가 조용한 설비(PLC 등)의 MAC이 aging되면 곧바로 끊김 알람이 떴다.
+# 스냅샷 세대가 실제로 바뀐 경우에만 카운트해야 디바운스 의미가 생긴다.
+_MISS_THRESHOLD = 2      # 서로 다른 MAC 스냅샷에서 N회 연속 실종 시 오프라인 전환
+_miss_counts = {}        # {(subnet, ip): (연속 실종 횟수, 마지막으로 센 스냅샷 세대)}
+
+
+def _mac_generation(db_path):
+    """MAC 스냅샷 세대 — 스위치별 '최신 MAC 스냅샷 id'의 조합.
+
+    이 값이 그대로면 판정 입력이 바뀌지 않은 것이므로 실종 횟수를 세지 않는다.
+    """
+    try:
+        with db.get_db(db_path) as conn:
+            rows = conn.execute(
+                "SELECT switch_id, MAX(snapshot_id) m FROM mac_entries "
+                "GROUP BY switch_id ORDER BY switch_id").fetchall()
+        return tuple((r[0], r[1]) for r in rows)
+    except Exception:
+        return ()
 
 
 def monitor_known_hosts(db_path):
@@ -855,6 +896,7 @@ def monitor_known_hosts(db_path):
     online_now, offline_now = [], []
     relinked = 0        # 연결 스위치를 새로 찾아 채운 설비 수
     seen_keys = set()
+    generation = _mac_generation(db_path)   # 판정 입력이 실제로 바뀌었는지 구분
     for h in hosts:
         subnet = h.get("subnet")
         ip = h.get("ip")
@@ -884,8 +926,11 @@ def monitor_known_hosts(db_path):
             if alive:
                 _miss_counts.pop(key, None)
             else:
-                n = _miss_counts.get(key, 0) + 1
-                _miss_counts[key] = n
+                n, last_gen = _miss_counts.get(key, (0, None))
+                if last_gen == generation:
+                    continue      # 같은 MAC 스냅샷을 또 본 것뿐 — 새 근거가 아니다
+                n += 1
+                _miss_counts[key] = (n, generation)
                 if n >= _MISS_THRESHOLD:
                     h["online"] = 0
                     changed[subnet] = True
@@ -1079,8 +1124,16 @@ def run_auto_scan(db_path):
                     continue
                 _status["running"] = True
                 _status["message"] = "자동 스캔: " + subnet
-            collect_band(db_path, switch_id, subnet, username, password, src)
+            _res = collect_band(db_path, switch_id, subnet, username, password, src)
             scanned += 1
+            # collect_band는 중지 플래그를 '소비 완료'로 보고 스스로 해제한다.
+            # 그래서 다음 대역에서 _is_stop_requested()를 물으면 이미 False라
+            # 사용자가 중지를 눌러도 남은 대역이 계속 스캔됐다(대역당 수 분~수십 분).
+            # 반환값으로 중지 여부를 직접 확인한다.
+            if (_res or {}).get("stopped"):
+                utils.log_event("info", "facility_auto_scan_stopped",
+                                scanned=scanned, at=subnet)
+                break
         except Exception as e:
             _set(running=False, message="자동 스캔 실패: " + subnet)
             utils.log_event("error", "facility_auto_scan_error", subnet=subnet,
