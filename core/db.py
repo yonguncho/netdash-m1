@@ -352,6 +352,8 @@ _PERF_INDEXES = [
     # MAC 검색/상관(비-최좌측이라 UNIQUE 인덱스로 커버 안 됨)
     "CREATE INDEX IF NOT EXISTS idx_mac_mac ON mac_entries(mac)",
     "CREATE INDEX IF NOT EXISTS idx_mac_switch_port ON mac_entries(switch_id, port)",
+    # 'MAC이 실제로 담긴 최신 스냅샷'(스위치별) 조회 — 설비 대조의 hot 경로
+    "CREATE INDEX IF NOT EXISTS idx_mac_switch_snapshot ON mac_entries(switch_id, snapshot_id)",
     "CREATE INDEX IF NOT EXISTS idx_arp_switch ON arp_entries(switch_id)",
     "CREATE INDEX IF NOT EXISTS idx_arp_mac ON arp_entries(mac)",
     "CREATE INDEX IF NOT EXISTS idx_portchan_snapshot ON port_channels(snapshot_id)",
@@ -1145,19 +1147,23 @@ def get_mac_to_switchport(db_path):
     """전체 스위치의 최신 MAC→(switch_id, switch_name, port) 매핑.
 
     설비 현황: 11번 ARP의 MAC이 어느 스위치 어느 포트에 있는지 대조용.
-    각 스위치의 가장 최근 스냅샷 MAC만 사용.
+
+    스위치별로 'MAC이 실제로 담긴 가장 최근 스냅샷'을 쓴다. 그냥 최신 스냅샷을 쓰면,
+    MAC 명령만 실패한 수집(status는 done, MAC 0건)이 새 스냅샷을 만드는 순간
+    그 스위치의 MAC이 전부 사라져 → 뒤에 붙은 설비가 한꺼번에 '연결 끊김'으로
+    오탐되고 연결 스위치도 비어 버린다. MAC 0건은 '아무것도 없음'이 아니라
+    '이번엔 못 읽음'으로 취급하고 마지막으로 읽힌 결과를 유지한다.
     Returns: {mac: [(switch_id, switch_name, port), ...]}
     """
     mapping = {}
     with get_db(db_path) as conn:
         cur = conn.cursor()
-        # 스위치별 최신 snapshot의 mac_entries
         cur.execute(
             """SELECT m.mac, m.port, m.switch_id, s.name AS sname
                FROM mac_entries m
                JOIN switches s ON m.switch_id = s.id
                WHERE m.snapshot_id IN (
-                   SELECT MAX(id) FROM snapshots GROUP BY switch_id
+                   SELECT MAX(snapshot_id) FROM mac_entries GROUP BY switch_id
                )""")
         for r in cur.fetchall():
             mac = (r["mac"] or "").lower()
@@ -1172,6 +1178,8 @@ def get_port_mac_counts(db_path):
 
     설비 직접연결 판별용: 액세스(엣지) 포트는 보통 MAC 1~소수,
     트렁크/업링크 포트는 다수 MAC을 학습한다.
+    get_mac_to_switchport와 같은 기준(MAC이 담긴 최신 스냅샷)을 써야 한다 —
+    기준이 어긋나면 매칭은 되는데 포트 MAC 수가 0으로 잡혀 직접연결 판정이 뒤틀린다.
     Returns: {(switch_id, port_lower): count}
     """
     counts = {}
@@ -1181,7 +1189,8 @@ def get_port_mac_counts(db_path):
             cur.execute(
                 """SELECT switch_id, port, COUNT(*) AS c
                    FROM mac_entries
-                   WHERE snapshot_id IN (SELECT MAX(id) FROM snapshots GROUP BY switch_id)
+                   WHERE snapshot_id IN (
+                       SELECT MAX(snapshot_id) FROM mac_entries GROUP BY switch_id)
                    GROUP BY switch_id, port""")
             for r in cur.fetchall():
                 counts[(r["switch_id"], (r["port"] or "").lower())] = r["c"]

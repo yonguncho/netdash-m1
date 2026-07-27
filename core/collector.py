@@ -741,8 +741,14 @@ def _worker_loop():
                                 for m in parsed_data.get("macs", [])]
                     db._detect_disconnected(db_path, switch_id, prev_snapshot_id, curr_macs)
                 else:
-                    utils.log_event("warning", "skip_disconnect_empty_mac",
-                                    switch_id=switch_id)
+                    # MAC 명령 실패는 수집 자체는 성공(status=done)으로 남기 때문에
+                    # 조용히 지나가면 원인 추적이 어렵다. 설비 대조는 'MAC이 담긴
+                    # 마지막 스냅샷'으로 폴백하므로(db.get_mac_to_switchport) 끊김
+                    # 오탐은 나지 않지만, 계속 비면 MAC 명령 설정을 봐야 한다.
+                    utils.log_event("warning", "mac_table_empty_keeping_previous",
+                                    switch_id=switch_id,
+                                    hint="MAC 명령 출력이 비어 이번 스냅샷의 MAC은 0건입니다. "
+                                         "설비 대조는 직전 MAC 스냅샷을 계속 사용합니다.")
 
             snapshot_id = db.save_snapshot(db_path, switch_id)
             db.save_ports(db_path, snapshot_id, switch_id, parsed_data.get("ports", []))

@@ -838,17 +838,22 @@ def monitor_known_hosts(db_path):
     if get_status().get("running"):
         return (0, 0)
     try:
-        mac_alive = set(db.get_mac_to_switchport(db_path).keys())
+        mac_map = db.get_mac_to_switchport(db_path)
+        mac_alive = set(mac_map.keys())
     except Exception:
         return (0, 0)
     if not mac_alive:
         return (0, 0)   # MAC 스냅샷이 아예 없으면(수집 전) 판단 보류
     try:
         hosts = db.get_facility_hosts(db_path)
+        port_counts = db.get_port_mac_counts(db_path)
+        pc_map = db.get_port_channel_members(db_path)
+        port_descs = db.get_port_descriptions(db_path)
     except Exception:
         return (0, 0)
     changed = {}        # {subnet: True} — 저장 필요 대역
     online_now, offline_now = [], []
+    relinked = 0        # 연결 스위치를 새로 찾아 채운 설비 수
     seen_keys = set()
     for h in hosts:
         subnet = h.get("subnet")
@@ -859,6 +864,22 @@ def monitor_known_hosts(db_path):
         if not mac:
             continue
         alive = mac in mac_alive
+        # 연결 스위치/포트는 지금까지 '대역 스캔' 때만 계산돼, 스캔 시점에 스위치가
+        # 아직 수집 전이면 영영 빈칸으로 남았다(스위치를 나중에 수집해도 안 채워짐).
+        # MAC이 살아 있으면 여기서 다시 대조해 채운다 — 재스캔 없이 자가 복구.
+        if alive:
+            sid, sname, port, direct, via = _choose_attachment(
+                mac_map.get(mac, []), port_counts, pc_map)
+            if sname and (h.get("switch_name") != sname or h.get("port") != port):
+                if not h.get("switch_name"):
+                    relinked += 1
+                h["switch_id"] = sid
+                h["switch_name"] = sname
+                h["port"] = port
+                h["direct"] = 1 if direct else 0
+                h["via"] = "; ".join(via) if via else None
+                h["port_desc"] = port_descs.get((sid, (port or "").lower()))
+                changed[subnet] = True
         if h.get("online"):
             if alive:
                 _miss_counts.pop(key, None)
@@ -904,9 +925,9 @@ def monitor_known_hosts(db_path):
                              ip=h.get("ip"), mac=h.get("mac"), switch_id=h.get("switch_id"),
                              label=h.get("switch_name"),
                              message="설비 연결 끊김(MAC 실종): " + (h.get("ip") or "") + _loc)
-    if online_now or offline_now:
+    if online_now or offline_now or relinked:
         utils.log_event("info", "facility_monitor", restored=len(online_now),
-                        dropped=len(offline_now))
+                        dropped=len(offline_now), relinked=relinked)
     return (len(online_now), len(offline_now))
 
 
