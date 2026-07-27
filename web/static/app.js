@@ -2174,6 +2174,7 @@ var _fwStatusMeta = {
   done: "ok", collecting: "collecting", failed: "critical", new: "new",
 };
 var _fwSel = {};    // 방화벽 표 선택 집합 {id: true} — 재렌더에도 유지
+var _fwBulkIds = null;   // 일괄 수집 대상(빈 배열=전체). null이면 개별 수집 모드
 
 function _updateFwSelBtns() {
   var n = document.querySelectorAll("#firewall-table-body .fw-check:checked").length;
@@ -2458,13 +2459,26 @@ document.getElementById("btn-fw-test").addEventListener("click", function() {
 });
 
 document.getElementById("btn-fw-collect").addEventListener("click", function() {
-  if (!_selectedFirewall) return;
   var payload = {
     token: document.getElementById("fw-token").value,
     username: document.getElementById("fw-username").value.trim(),
     password: document.getElementById("fw-password").value,
     verify_ssl: document.getElementById("fw-verify-ssl").checked,
   };
+  // '이 세션 동안 기억'은 방화벽 계정으로만 저장한다(스위치·서버에 쓰이지 않음)
+  var fwRem = document.getElementById("fw-remember");
+  if (fwRem && fwRem.checked && payload.username && payload.password) {
+    sessCredRemember(payload.username, payload.password, "firewall");
+  }
+  // 일괄 수집 모드(툴바 '정보 수집')
+  if (!_selectedFirewall && _fwBulkIds) {
+    var bulk = _fwBulkIds;
+    _fwBulkIds = null;
+    closeModal("modal-fw-collect");
+    window._fwRunBulk(bulk, payload.token, payload.username, payload.password);
+    return;
+  }
+  if (!_selectedFirewall) return;
   closeModal("modal-fw-collect");
   var fid = _selectedFirewall.id;
   fetch("/api/firewalls/" + fid + "/collect", {
@@ -2758,14 +2772,17 @@ document.addEventListener("change", function (e) {
     if (!ids.length) { closeModal("modal-bulk-collect"); return; }
     var username = document.getElementById("bulk-username").value.trim();
     var password = document.getElementById("bulk-password").value;
-    // 세션 계정이 살아 있으면 빈칸으로 두어도 서버가 그 계정을 쓴다.
-    if ((!username || !password) && !window._sessCredActive) {
-      alert("아이디와 패스워드를 입력하세요."); return;
+    // '스위치' 세션 계정이 살아 있으면 빈칸으로 두어도 서버가 그 계정을 쓴다.
+    // (서버·방화벽 계정이 기억돼 있어도 스위치에는 쓰지 않는다 — 계정 체계가 다르다)
+    if ((!username || !password) && !sessCredActive("switch")) {
+      alert("스위치 계정(아이디·패스워드)을 입력하세요."); return;
     }
     var persist = document.getElementById("bulk-persist");
     var be = document.getElementById("bulk-enable");
     var rem = document.getElementById("bulk-remember");
-    if (rem && rem.checked && username && password) sessCredRemember(username, password);
+    if (rem && rem.checked && username && password) {
+      sessCredRemember(username, password, "switch");
+    }
     _runBulkCollect(ids, username, password, persist && persist.checked,
                     be ? be.value : "");
     _swCollectIds = null;
@@ -5657,19 +5674,74 @@ function renderServers() {
   var fwAllBtn = document.getElementById("btn-firewall-collect-all");
   if (fwAllBtn) fwAllBtn.addEventListener("click", function () {
     var ids = Object.keys(_fwSel).map(function (x) { return parseInt(x, 10); });
-    var scope = ids.length ? ("선택한 " + ids.length + "대") : "등록된 전";
-    if (!confirm(scope + " 방화벽을 저장된 계정으로 수집합니다.\n계속할까요?")) return;
+    // 방화벽 계정은 스위치·서버와 다르다 → 이 화면에서 직접 입력받는다.
+    // (저장 계정이 있거나 방화벽 세션 계정이 살아 있으면 팝업에서 빈칸으로 두면 된다)
+    _openFwBulkCollect(ids);
+  });
+
+  // 방화벽 일괄 수집 — 개별 수집 팝업을 재사용해 계정을 입력받는다
+  function _openFwBulkCollect(ids) {
+    _selectedFirewall = null;            // 개별이 아니라 일괄
+    _fwBulkIds = ids;
+    var t = document.getElementById("modal-fw-collect-title");
+    if (t) t.textContent = "방화벽 정보 수집 — " + (ids.length ? (ids.length + "대 선택") : "전체");
+    var info = document.getElementById("modal-fw-collect-info");
+    if (info) {
+      info.innerHTML = _fwTargetInfo(ids);
+    }
+    var hint = document.getElementById("fw-cred-hint");
+    if (hint) {
+      hint.textContent = "비워두면 각 방화벽에 저장된 계정(또는 이 세션의 방화벽 계정)을 사용합니다. " +
+        "FortiGate는 API 토큰, Palo Alto는 아이디/패스워드가 필요합니다.";
+    }
+    ["fw-token", "fw-username", "fw-password"].forEach(function (id) {
+      var el = document.getElementById(id); if (el) el.value = "";
+    });
+    var rm = document.getElementById("fw-remember"); if (rm) rm.checked = false;
+    var tr = document.getElementById("fw-test-result"); if (tr) tr.textContent = "";
+    openModal("modal-fw-collect");
+  }
+  window._openFwBulkCollect = _openFwBulkCollect;
+
+  function _fwTargetInfo(ids) {
+    if (!ids.length) {
+      return "<strong>등록된 전체</strong> 방화벽";
+    }
+    var names = ids.map(function (id) {
+      var f = (_firewalls || []).find(function (x) { return String(x.id) === String(id); });
+      return f ? (f.name + " (" + f.host + ")") : ("#" + id);
+    });
+    var head = "<strong>" + ids.length + "대</strong> 선택됨";
+    if (names.length <= 5) {
+      return head + "<div style='margin-top:4px;color:var(--text-2)'>" +
+        names.map(escHtml).join(", ") + "</div>";
+    }
+    return head + "<div style='margin-top:4px;color:var(--text-2)'>" +
+      names.slice(0, 5).map(escHtml).join(", ") +
+      " <span style='color:var(--text-faint)'>외 " + (names.length - 5) + "대</span></div>" +
+      "<details class='target-list' style='margin-top:6px'>" +
+      "<summary>대상 " + names.length + "대 전체 보기</summary>" +
+      "<div class='target-list__items'>" + names.map(escHtml).join("<br>") + "</div></details>";
+  }
+
+  function _fwRunBulk(ids, token, username, password) {
+    var body = ids.length ? {ids: ids} : {};
+    if (token) body.token = token;
+    if (username) body.username = username;
+    if (password) body.password = password;
     fetch("/api/firewalls/collect-all", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(ids.length ? {ids: ids} : {}),
+      body: JSON.stringify(body),
     })
+      .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (res) {
         if (!res.ok) { alert((res.b && res.b.error) || "일괄 수집 시작 실패"); return; }
         pollProgress("/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls,
           "/api/firewalls/collect-all/stop");
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
-  });
+  }
+  window._fwRunBulk = _fwRunBulk;
 
   // 설비 전체 대역 수집 — 시작 후 loadFacility가 fac-progress 폴링
   var facScanAll = document.getElementById("btn-fac-scan-all");
@@ -5723,7 +5795,7 @@ function renderServers() {
     };
     var srem = document.getElementById("srv-remember");
     if (srem && srem.checked && body.username && body.password) {
-      sessCredRemember(body.username, body.password);
+      sessCredRemember(body.username, body.password, "server");
     }
     // 일괄 경로(정보 수집 버튼): 선택분 또는 전체를 계정과 함께 수집
     if (_srvCollectId == null) {
@@ -6058,13 +6130,22 @@ function loadNetInfo() {
 // ─── 세션 수집 계정 (메모리 전용·TTL) ─────────────────────────────
 // 계정을 화면에 상시 노출하지 않으면서 수집 때마다 재입력하는 불편을 없앤다.
 // 비밀번호는 서버 메모리에만 있고, 여기서는 활성 여부와 남은 시간만 받아 표시한다.
-window._sessCredActive = false;
+// 장비 종류별로 따로 보관한다 — 스위치·서버·방화벽은 계정 체계가 대개 다르고,
+// 하나로 공유하면 스위치 계정이 전 서버에 SSH로 시도돼 계정이 잠길 수 있다.
+window._sessCredActive = false;              // (하위호환) 아무 종류나 하나라도 활성
+window._sessCredKinds = {};                  // {switch|server|firewall: true}
+var SESS_KIND_LABEL = { switch: "스위치", server: "서버", firewall: "방화벽" };
 
-function sessCredRemember(username, password) {
+function sessCredActive(kind) {
+  return !!window._sessCredKinds[kind];
+}
+
+function sessCredRemember(username, password, kind) {
   return fetch("/api/session/credential", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: username, password: password }),
+    body: JSON.stringify({ username: username, password: password,
+                           kind: kind || "switch" }),
   }).then(function (r) { return r.json(); })
     .then(function () { refreshSessCred(); })
     .catch(function () { /* 실패해도 이번 수집은 입력한 계정으로 진행됨 */ });
@@ -6075,11 +6156,20 @@ function refreshSessCred() {
   if (!box) return;
   fetch("/api/session/credential").then(function (r) { return r.json(); })
     .then(function (s) {
-      window._sessCredActive = !!(s && s.active);
+      var kinds = (s && s.kinds) || {};
+      window._sessCredKinds = {};
+      var parts = [];
+      Object.keys(SESS_KIND_LABEL).forEach(function (k) {
+        if (kinds[k] && kinds[k].active) {
+          window._sessCredKinds[k] = true;
+          parts.push(SESS_KIND_LABEL[k] + " " + (kinds[k].username || "") +
+                     "(" + Math.max(1, Math.ceil((kinds[k].remaining || 0) / 60)) + "분)");
+        }
+      });
+      window._sessCredActive = parts.length > 0;
       if (!window._sessCredActive) { box.classList.add("hidden"); return; }
-      var min = Math.max(1, Math.ceil((s.remaining || 0) / 60));
       var t = document.getElementById("sess-cred-text");
-      if (t) t.textContent = "🔓 수집 계정 활성 " + escHtml(s.username || "") + " (" + min + "분)";
+      if (t) t.textContent = "🔓 수집 계정 " + parts.join(" · ");
       box.classList.remove("hidden");
     })
     .catch(function () { /* 상태 조회 실패는 무시 */ });

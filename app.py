@@ -148,11 +148,14 @@ _fw_all_lock = threading.Lock()
 _fw_all = {"running": False, "total": 0, "done": 0, "ok": 0, "message": ""}
 
 
-def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None):
-    """방화벽을 저장된 자격증명으로 순차 수집. ids를 주면 그 방화벽만. 진행은 _fw_all.
+def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None,
+                               common_token=""):
+    """방화벽을 순차 수집. ids를 주면 그 방화벽만. 진행은 _fw_all.
 
-    sess_cred: (username, password) — 저장된 자격증명이 없는 방화벽에만 쓰는 세션 계정.
-    백그라운드 스레드에는 request가 없으므로 호출 시점에 꺼내어 넘긴다.
+    계정 우선순위: 화면에서 입력한 공통 계정/토큰 > 각 방화벽 저장 계정 > 방화벽 세션 계정.
+    sess_cred: (username, password) — 화면 입력이 없을 때 쓰는 '방화벽' 세션 계정.
+    common_token: FortiGate API 토큰(화면 입력). 백그라운드 스레드에는 request가
+    없으므로 호출 시점에 꺼내어 넘긴다.
     """
     import json as _json
     # 이 함수는 백그라운드 스레드에서 돈다. 예상 못한 예외로 스레드가 죽으면
@@ -177,19 +180,25 @@ def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None):
                     return
             fid = fw.get("id")
             token = username = password = ""
-            try:
-                blob = db.get_firewall_credential(db_path, fid)
-                if blob:
-                    dec = credentials.decrypt_text(blob)
-                    if dec:
-                        saved = _json.loads(dec)
-                        token = saved.get("token", "")
-                        username = saved.get("username", "")
-                        password = saved.get("password", "")
-            except Exception:
-                pass
-            if not (token or (username and password)) and sess_cred:
+            # ① 화면에서 입력한 공통 계정/토큰이 최우선(방화벽 계정은 장비마다 다르므로
+            #    사용자가 이 화면에서 직접 준 것이 가장 정확하다)
+            if common_token:
+                token = common_token
+            if sess_cred and sess_cred[0] and sess_cred[1]:
                 username, password = sess_cred
+            # ② 화면 입력이 없으면 각 방화벽에 저장된 계정
+            if not (token or (username and password)):
+                try:
+                    blob = db.get_firewall_credential(db_path, fid)
+                    if blob:
+                        dec = credentials.decrypt_text(blob)
+                        if dec:
+                            saved = _json.loads(dec)
+                            token = saved.get("token", "")
+                            username = saved.get("username", "")
+                            password = saved.get("password", "")
+                except Exception:
+                    pass
             try:
                 # 상태 갱신도 try 안에 둔다(DB 잠금 시 예외가 스레드를 죽이던 지점).
                 db.set_firewall_status(db_path, fid, "collecting")
@@ -1617,7 +1626,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # 요청에 계정이 없으면 이 세션에 보관된 수집 계정 사용(메모리·TTL)
             from_session = False
             if not (cu and cp):
-                _sc = _session_cred()
+                _sc = _session_cred("server")
                 if _sc:
                     cu, cp = _sc
                     from_session = True
@@ -2249,16 +2258,21 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         """세션 자격증명 소유자 키 — 접속한 원격 주소(브라우저 PC) 기준."""
         return request.remote_addr or "local"
 
-    def _session_cred():
-        """(username, password) 또는 None — 수집 경로에서 계정 미입력 시 사용."""
+    def _session_cred(kind):
+        """(username, password) 또는 None — 그 장비 종류의 세션 계정.
+
+        kind는 'switch'|'server'|'firewall'. 종류를 섞으면 스위치 계정이 전 서버에
+        SSH로 시도돼 수집이 실패하고 반복 인증 실패로 계정이 잠길 수 있다.
+        """
         from core import session_creds
-        return session_creds.get_credential(_cred_owner())
+        return session_creds.get_credential(_cred_owner(), kind)
 
     @app.route("/api/session/credential", methods=["GET"])
     def session_cred_status():
-        """수집 계정 활성 상태(비밀번호는 반환하지 않음)."""
+        """수집 계정 활성 상태(비밀번호는 반환하지 않음). ?kind=로 종류별 조회."""
         from core import session_creds
-        return jsonify(session_creds.status(_cred_owner()))
+        return jsonify(session_creds.status(_cred_owner(),
+                                            request.args.get("kind") or None))
 
     @app.route("/api/session/credential", methods=["POST"])
     @rate_limit("session_cred", max_requests=20, window_seconds=60)
@@ -2276,20 +2290,25 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             except ValueError as e:
                 return jsonify({"error": str(e)}), 400
             from core import session_creds
-            ttl = session_creds.set_credential(_cred_owner(), u, p, data.get("ttl"))
-            log_event("info", "session_cred_set", owner=_cred_owner(), ttl=ttl,
-                      minutes=ttl // 60)
-            return jsonify({"ok": True, "ttl": ttl})
+            kind = session_creds._norm_kind(data.get("kind"))
+            ttl = session_creds.set_credential(_cred_owner(), u, p, data.get("ttl"),
+                                               kind=kind)
+            log_event("info", "session_cred_set", owner=_cred_owner(), kind=kind,
+                      ttl=ttl, minutes=ttl // 60)
+            return jsonify({"ok": True, "ttl": ttl, "kind": kind})
         except Exception as e:
             log_event("error", "session_cred_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/session/credential/lock", methods=["POST"])
     def session_cred_lock():
-        """즉시 잠금 — 보관 중인 계정을 폐기."""
+        """즉시 잠금 — 보관 중인 계정을 폐기. body {kind}로 종류별 잠금도 가능."""
         from core import session_creds
-        session_creds.clear(_cred_owner())
-        log_event("info", "session_cred_locked", owner=_cred_owner())
+        data = request.get_json(silent=True) or {}
+        kind = data.get("kind") if isinstance(data, dict) else None
+        kind = session_creds._norm_kind(kind) if kind else None
+        session_creds.clear(_cred_owner(), kind)
+        log_event("info", "session_cred_locked", owner=_cred_owner(), kind=kind or "all")
         return jsonify({"ok": True})
 
     @app.route("/api/export/<kind>", methods=["GET"])
@@ -2488,8 +2507,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": "switch not found"}), 404
             # 게이트웨이 스위치 IP는 등록 시 검증됨.
             # 계정 우선순위: 요청 입력 > 세션 보관(메모리·TTL) > 저장된 자격증명.
+            # 설비 대역 수집은 게이트웨이 '스위치'에 SSH로 붙어 ping/ARP를 하므로 스위치 계정이다.
             if not (username and password):
-                _sc = _session_cred()
+                _sc = _session_cred("switch")
                 if _sc:
                     username, password = _sc
             if not (username and password):
@@ -3280,9 +3300,23 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @app.route("/api/firewalls/collect-all", methods=["POST"])
     @rate_limit("collect_all_firewalls", max_requests=6, window_seconds=60)
     def collect_all_firewalls_endpoint():
-        """방화벽 일괄 수집(백그라운드). body {ids:[...]} 주면 그 방화벽만, 없으면 전체."""
+        """방화벽 일괄 수집(백그라운드).
+
+        body {ids:[...]} 주면 그 방화벽만, 없으면 전체.
+        body에 token 또는 username/password를 주면 그 계정을 공통으로 쓴다
+        (방화벽 계정은 스위치·서버와 다르므로 이 화면에서 직접 입력받는다).
+        없으면 방화벽 세션 계정 → 각 방화벽 저장 계정 순.
+        """
         data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({"error": "본문은 JSON 객체여야 합니다"}), 400
         ids = data.get("ids") or None
+        _tok = data.get("token") if isinstance(data.get("token"), str) else ""
+        _u = _sv_text(data.get("username"), 128)
+        _p = data.get("password") if isinstance(data.get("password"), str) else ""
+        common = (_u, _p) if (_u and _p) else _session_cred("firewall")
+        if _tok:
+            common = common or (None, None)
         with _fw_all_lock:
             if _fw_all["running"]:
                 return jsonify({"error": "이미 수집 중입니다", "status": dict(_fw_all)}), 409
@@ -3298,7 +3332,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             _fw_all.update(running=True, total=total, done=0, ok=0, message="시작 중", stop=False)
         src = pcprofile.get_source_ip(db_path)
         threading.Thread(target=_run_collect_all_firewalls,
-                         args=(db_path, src, ids, _session_cred()), daemon=True).start()
+                         args=(db_path, src, ids, common, _tok),
+                         daemon=True).start()
         return jsonify({"ok": True, "total": total}), 202
 
     @app.route("/api/firewalls/collect-all/status", methods=["GET"])
@@ -3360,7 +3395,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": str(ve)}), 400
             # 요청에 계정이 없으면 이 세션에 보관된 수집 계정 사용(메모리·TTL)
             if not (username and password):
-                _sc = _session_cred()
+                _sc = _session_cred("switch")
                 if _sc:
                     username, password = _sc
             if not config.app.get("demo_mode") and (not username or not password):
@@ -3442,7 +3477,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
             # 요청에 계정이 없으면 이 세션에 보관된 수집 계정 사용(메모리·TTL)
             if not (username and password):
-                _sc = _session_cred()
+                _sc = _session_cred("switch")
                 if _sc:
                     username, password = _sc
 

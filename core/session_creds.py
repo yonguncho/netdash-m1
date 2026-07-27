@@ -16,7 +16,13 @@ import time
 _DEFAULT_TTL = 1800        # 초(30분)
 _MAX_TTL = 8 * 3600        # 상한 8시간(그 이상은 상시 저장과 다를 바 없어 금지)
 
-_store = {}                # {owner: {"u":..., "p":..., "exp": epoch}}
+# 장비 종류별로 분리 보관한다. 스위치·서버·방화벽은 계정 체계가 대개 다르고,
+# 하나로 공유하면 스위치 계정이 전 서버에 SSH로 시도돼 수집이 실패할 뿐 아니라
+# 반복 인증 실패로 계정이 잠길 수 있다.
+KINDS = ("switch", "server", "firewall")
+DEFAULT_KIND = "switch"
+
+_store = {}                # {(owner, kind): {"u":..., "p":..., "exp": epoch}}
 _lock = threading.Lock()
 
 
@@ -24,8 +30,17 @@ def _now():
     return time.time()
 
 
-def set_credential(owner, username, password, ttl=None):
-    """세션 자격증명 등록. 반환: 만료까지 남은 초."""
+def _norm_kind(kind):
+    k = str(kind or DEFAULT_KIND).lower()
+    return k if k in KINDS else DEFAULT_KIND
+
+
+def _key(owner, kind):
+    return (str(owner or ""), _norm_kind(kind))
+
+
+def set_credential(owner, username, password, ttl=None, kind=DEFAULT_KIND):
+    """세션 자격증명 등록(장비 종류별). 반환: 만료까지 남은 초."""
     if not owner or not username or not password:
         return 0
     try:
@@ -34,13 +49,16 @@ def set_credential(owner, username, password, ttl=None):
         ttl = _DEFAULT_TTL
     ttl = max(60, min(ttl, _MAX_TTL))
     with _lock:
-        _store[str(owner)] = {"u": username, "p": password, "exp": _now() + ttl}
+        _store[_key(owner, kind)] = {"u": username, "p": password, "exp": _now() + ttl}
     return ttl
 
 
-def get_credential(owner):
-    """(username, password) 또는 None. 만료분은 이 시점에 폐기."""
-    key = str(owner or "")
+def get_credential(owner, kind=DEFAULT_KIND):
+    """(username, password) 또는 None. 만료분은 이 시점에 폐기.
+
+    다른 종류의 계정으로 폴백하지 않는다 — 엉뚱한 장비에 계정을 던지지 않기 위함.
+    """
+    key = _key(owner, kind)
     with _lock:
         ent = _store.get(key)
         if not ent:
@@ -51,28 +69,46 @@ def get_credential(owner):
         return (ent["u"], ent["p"])
 
 
-def status(owner):
+def _mask(u):
+    u = u or ""
+    return (u[:2] + "*" * max(0, len(u) - 2)) if len(u) > 2 else "*" * len(u)
+
+
+def status(owner, kind=None):
     """UI 표시용 상태 — 비밀번호는 포함하지 않는다.
-    {active, remaining, username_masked}
+
+    kind 지정: {active, remaining, username}
+    kind 생략: 위 필드(전체 기준 요약) + kinds={종류: {...}}
     """
-    key = str(owner or "")
-    with _lock:
-        ent = _store.get(key)
-        if not ent or ent["exp"] <= _now():
-            _store.pop(key, None)
-            return {"active": False, "remaining": 0, "username": ""}
-        u = ent["u"] or ""
-        masked = (u[:2] + "*" * max(0, len(u) - 2)) if len(u) > 2 else "*" * len(u)
-        return {"active": True, "remaining": int(ent["exp"] - _now()), "username": masked}
+    if kind is not None:
+        key = _key(owner, kind)
+        with _lock:
+            ent = _store.get(key)
+            if not ent or ent["exp"] <= _now():
+                _store.pop(key, None)
+                return {"active": False, "remaining": 0, "username": "", "kind": _norm_kind(kind)}
+            return {"active": True, "remaining": int(ent["exp"] - _now()),
+                    "username": _mask(ent["u"]), "kind": _norm_kind(kind)}
+    out = {}
+    for k in KINDS:
+        out[k] = status(owner, k)
+    active = [v for v in out.values() if v["active"]]
+    return {"active": bool(active),
+            "remaining": max([v["remaining"] for v in active], default=0),
+            "username": active[0]["username"] if len(active) == 1 else "",
+            "kinds": out}
 
 
-def clear(owner=None):
-    """잠금 — owner 지정 시 그 사용자만, 없으면 전체 폐기."""
+def clear(owner=None, kind=None):
+    """잠금 — owner/kind 조합만 폐기. owner 생략 시 전체."""
     with _lock:
         if owner is None:
             _store.clear()
+        elif kind is None:
+            for k in [k for k in _store if k[0] == str(owner)]:
+                _store.pop(k, None)
         else:
-            _store.pop(str(owner), None)
+            _store.pop(_key(owner, kind), None)
     return True
 
 
@@ -82,3 +118,8 @@ def purge_expired():
     with _lock:
         for k in [k for k, v in _store.items() if v["exp"] <= now]:
             _store.pop(k, None)
+
+
+def active_kinds(owner):
+    """지금 계정이 살아 있는 장비 종류 목록 — 수집 전 안내용."""
+    return [k for k in KINDS if get_credential(owner, k)]

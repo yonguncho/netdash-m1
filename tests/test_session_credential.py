@@ -37,10 +37,12 @@ def test_set_and_get_roundtrip():
 
 def test_expired_credential_is_discarded():
     session_creds.set_credential("10.0.0.5", "admin", "pw123", ttl=60)
+    # 저장 키는 (소유자, 장비종류) — 종류별로 분리 보관한다
+    key = ("10.0.0.5", session_creds.DEFAULT_KIND)
     # 만료 시각을 과거로 밀어 TTL 경과를 시뮬레이션
-    session_creds._store["10.0.0.5"]["exp"] = time.time() - 1
+    session_creds._store[key]["exp"] = time.time() - 1
     assert session_creds.get_credential("10.0.0.5") is None
-    assert "10.0.0.5" not in session_creds._store    # 조회 시점에 폐기
+    assert key not in session_creds._store    # 조회 시점에 폐기
 
 
 def test_owner_isolation():
