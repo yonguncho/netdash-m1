@@ -1367,6 +1367,16 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
     # ② SSH 상세(자격증명 시) — 포트 번호로 추측하지 않고 **열린 포트의 배너를 확인**해
     #    실제 SSH 포트를 찾는다. 22를 막고 비표준 포트로 옮긴 서버가 많은데, 예전에는
     #    22/2222만 보고 "SSH 포트 미개방"으로 끝나 사양을 아예 못 가져왔다.
+    if not (username and password) and open_ports:
+        # 계정이 없으면 SSH 상세(=CPU·메모리·디스크 사양)를 아예 시도하지 않는다.
+        # 도달 자체가 안 되는 서버(열린 포트 0)에는 붙이지 않는다 —
+        # 진짜 사유('도달 불가')를 가리면 안 된다.
+        # 예전엔 이때 아무 안내도 남기지 않아, 화면은 '정상'인데 사양만 비어 있고
+        # 로그에도 단서가 없었다("왜 사양이 안 잡히지?"의 실제 원인).
+        utils.log_event("info", "server_no_credential_skip_detail",
+                        server_id=server_id, ip=ip)
+        errors.append("계정 없음 — 사양(CPU·메모리·디스크)은 수집하지 못했습니다. "
+                      "이 서버의 계정을 저장하거나 수집 시 입력하세요")
     if username and password:
         ssh_port = find_ssh_port(ip, open_ports)
         if ssh_port is None:
@@ -1412,7 +1422,21 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                         if fam != "unknown":
                             fields["os_type"] = fam
             except Exception as e:
-                errors.append("SSH(:%d): %s" % (ssh_port, str(e)[:110]))
+                _m = str(e)
+                if "Authentication" in _m or "auth" in _m.lower():
+                    errors.append("SSH 인증 실패(:%d) — 이 서버의 계정/비밀번호를 "
+                                  "확인하세요(공통 계정 하나로는 OS가 다른 서버에 "
+                                  "모두 접속되지 않습니다)" % ssh_port)
+                else:
+                    errors.append("SSH(:%d): %s" % (ssh_port, _m[:110]))
+            # OS 계열과 무관하게, 사양이 하나도 안 채워졌으면 사유를 남긴다.
+            # (윈도우 경로에도 동일 적용 — 예전엔 UNIX 경로에만 힌트가 있었다)
+            _spec_keys = ("cpu_model", "cpu_cores", "mem_total_mb", "disk_total_gb")
+            if not any(fields.get(k) for k in _spec_keys) and not errors:
+                errors.append("사양 명령이 응답하지 않았습니다 — 계정 권한·셸 제한을 확인하세요")
+                utils.log_event("warning", "server_spec_empty_after_ssh",
+                                server_id=server_id, ip=ip, port=ssh_port,
+                                os_type=os_type)
 
     # VM 자동 추정(MAC 확보 시) — 사용자가 이미 VM으로 지정했으면 유지
     mac = fields.get("mac") or sv.get("mac")
