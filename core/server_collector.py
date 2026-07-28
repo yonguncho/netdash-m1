@@ -11,8 +11,10 @@ VM 판정: MAC OUI(가상화 벤더 대역)로 자동 추정. 수동 지정이 �
 """
 import base64
 import json
+import os
 import re
 import socket
+import subprocess
 import threading
 
 from . import db, utils, credentials
@@ -124,6 +126,43 @@ def guess_vm_from_mac(mac):
     if vendor:
         return True, vendor
     return False, ""
+
+
+def local_arp_mac(ip):
+    """이 PC의 ARP 캐시에서 IP의 MAC을 읽는다. 없으면 빈 문자열.
+
+    같은 서브넷의 서버라면, 포트 스캔(TCP SYN)만으로도 ARP 캐시가 채워진다
+    (ARP는 TCP보다 먼저 일어나므로 **접속이 거부돼도** 항목이 남는다).
+    계정도, 스위치 ARP 테이블도 필요 없는 **공짜 경로**인데 예전에는 쓰지 않아,
+    바로 옆 대역 서버조차 MAC이 비어 있었다.
+
+    다른 서브넷 IP는 캐시에 없다(게이트웨이만 ARP한다) → 빈 문자열. 즉
+    게이트웨이 MAC을 서버 MAC으로 잘못 넣을 위험이 없다.
+    """
+    try:
+        if os.name == "nt":
+            p = subprocess.run(["arp", "-a", str(ip)], capture_output=True,
+                               timeout=5,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            p = subprocess.run(["ip", "neigh", "show", str(ip)],
+                               capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    text = (p.stdout or b"").decode("utf-8", "replace")
+    for line in text.splitlines():
+        # 조회한 IP가 있는 줄에서만 MAC을 뽑는다 — arp -a가 인자를 무시하고
+        # 전체 테이블을 뱉는 환경이 있어, 남의 MAC을 가져오면 안 된다.
+        if str(ip) not in line:
+            continue
+        m = re.search(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", line)
+        if not m:
+            continue
+        mac = _norm_mac(m.group(0))
+        # 미완성(incomplete) 항목은 00:00:… 이나 FF:FF:… 로 나온다
+        if mac and mac not in ("00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF"):
+            return mac
+    return ""
 
 
 def scan_ports(ip, ports=None, timeout=_SCAN_TIMEOUT):
@@ -1442,10 +1481,10 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
         if inferred:
             fields["os_type"] = inferred
     # 연결 위치: ARP→MAC→스위치포트. 물리 포트 우선, Po면 물리 멤버로 해석.
-    loc = db.find_mac_location(db_path, ip)
-    if loc.get("mac"):
-        fields["mac"] = _norm_mac(loc["mac"])
-    if loc.get("switch_name"):
+    def _apply_location(loc):
+        """{switch_name, switch_id, port} → fields. 포트채널은 물리 멤버로 풀어 쓴다."""
+        if not loc.get("switch_name"):
+            return False
         fields["switch_name"] = loc["switch_name"]
         port = loc.get("port") or ""
         pl = port.lower()
@@ -1459,6 +1498,21 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
             except Exception:
                 pass
         fields["switch_port"] = port
+        return True
+
+    loc = db.find_mac_location(db_path, ip)
+    if loc.get("mac"):
+        fields["mac"] = _norm_mac(loc["mac"])
+    _apply_location(loc)
+
+    # 스위치 ARP에 없으면 이 PC의 ARP 캐시를 본다 — 같은 서브넷이면 포트 스캔만으로
+    # 이미 채워져 있다. 계정도 스위치 수집도 필요 없는 공짜 경로.
+    if not fields.get("mac") and not sv.get("mac"):
+        _lm = local_arp_mac(ip)
+        if _lm:
+            fields["mac"] = _lm
+            utils.log_event("info", "server_mac_from_local_arp",
+                            server_id=server_id, ip=ip)
 
     # ② SSH 상세(자격증명 시) — 포트 번호로 추측하지 않고 **열린 포트의 배너를 확인**해
     #    실제 SSH 포트를 찾는다. 22를 막고 비표준 포트로 옮긴 서버가 많은데, 예전에는
@@ -1653,6 +1707,18 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                     "SNMP 응답 없음 — UDP 161 차단 또는 커뮤니티 불일치"
                     "(설정▸SNMP 커뮤니티 확인) (%s)" % str(e)[:60])
                 utils.log_event("info", "server_snmp_no_reply", server_id=server_id, ip=ip)
+
+    # 연결 위치 재조회 — MAC을 뒤늦게 얻는 경로가 많다(SSH·WMI·SNMP·로컬 ARP).
+    # 위 ①단계는 IP→MAC(스위치 ARP)이 있을 때만 동작해서, MAC은 채워졌는데
+    # 연결스위치·포트만 비는 서버가 많았다. MAC이 있으면 여기서 한 번 더 찾는다.
+    if not fields.get("switch_name"):
+        _mac = fields.get("mac") or sv.get("mac")
+        if _mac:
+            _loc2 = db.find_location_by_mac(db_path, _mac)
+            if _apply_location(_loc2):
+                utils.log_event("info", "server_port_resolved_by_mac",
+                                server_id=server_id, ip=ip,
+                                switch=_loc2.get("switch_name"))
 
     # VM 자동 추정(MAC 확보 시) — 사용자가 이미 VM으로 지정했으면 유지
     mac = fields.get("mac") or sv.get("mac")

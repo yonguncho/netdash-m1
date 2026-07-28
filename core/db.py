@@ -2971,6 +2971,46 @@ def get_server_credential(db_path, server_id):
         return row["cred_blob"] if row and row["cred_blob"] else None
 
 
+def find_location_by_mac(db_path, mac):
+    """MAC만 아는 경우의 연결 위치 조회 → {switch_name, switch_id, port}.
+
+    IP→MAC(arp_entries)이 없어도, 사양 수집(SSH·WMI·SNMP)이나 로컬 ARP 캐시에서
+    MAC을 얻었다면 스위치·포트는 찾을 수 있다. 예전에는 이 경로가 없어서
+    'MAC은 채워졌는데 연결스위치·포트만 빈' 서버가 많았다.
+
+    mac_entries의 MAC 표기는 벤더마다 다르다(콜론·하이픈·점) → 정규화해 맞춘다.
+    """
+    if not mac:
+        return {}
+    import re as _re
+    norm = _re.sub(r"[^0-9a-fA-F]", "", str(mac)).lower()
+    if len(norm) != 12:
+        return {}
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT m.port, m.switch_id, s.name AS switch_name "
+                "FROM mac_entries m JOIN switches s ON s.id = m.switch_id "
+                "WHERE REPLACE(REPLACE(REPLACE(LOWER(m.mac),':',''),'-',''),'.','')=? "
+                "ORDER BY m.id DESC LIMIT 20", (norm,))
+            rows = cur.fetchall()
+            if not rows:
+                return {}
+            # 물리 포트 우선 — 포트채널 집합보다 실제 케이블이 꽂힌 멤버포트가 쓸모 있다.
+            loc = None
+            for r in rows:
+                p = (r["port"] or "").lower()
+                if not p.startswith(("po", "port-channel", "vl", "vlan")):
+                    loc = r
+                    break
+            loc = loc or rows[0]
+            return {"switch_name": loc["switch_name"], "switch_id": loc["switch_id"],
+                    "port": loc["port"]}
+        except Exception:
+            return {}
+
+
 def find_mac_location(db_path, ip):
     """이미 수집된 스위치 데이터에서 IP의 MAC과 연결 위치(스위치/포트)를 대조.
 
