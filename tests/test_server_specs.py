@@ -453,15 +453,19 @@ def test_export_includes_spec_columns(temp_db):
 def test_server_table_has_spec_headers():
     html = HTML.read_text(encoding="utf-8")
     head = html[html.index('id="srv-check-all"'):html.index('id="server-table-body"')]
-    for th in ("<th>이름</th>", ">CPU</th>", ">메모리</th>", ">디스크</th>"):
+    # 이름 컬럼 제거(호스트네임과 대부분 같은 값) + CPU·메모리·디스크 → '사양' 1컬럼
+    for th in (">호스트네임</th>", ">사양</th>"):
         assert th in head, th
+    for gone in ("<th>이름</th>", ">CPU</th>", ">메모리</th>", ">디스크</th>"):
+        assert gone not in head, gone
     # 헤더 수와 빈 목록 colspan이 어긋나면 표가 깨진다
-    assert head.count("</th>") == 16
-    assert 'colspan="16"' in html
+    assert head.count("</th>") == 13
+    assert 'colspan="13"' in html
 
 
 def test_server_row_renders_spec_cells():
     js = APPJS.read_text(encoding="utf-8")
     for fn in ("fmtCpu(s)", "fmtMem(s.mem_total_mb)", "fmtDisk(s)"):
         assert fn in js, fn
-    assert "colspan='16'" in js
+    # CPU·메모리·디스크 3컬럼을 '사양' 1컬럼으로 합쳐 13컬럼이 됐다
+    assert "colspan='13'" in js

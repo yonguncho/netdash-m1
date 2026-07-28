@@ -70,4 +70,4 @@ def test_ui_low_fixes_static():
     assert "구성도를 불러오지 못했습니다" in js
     html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     # colspan(설비 7 — 비고 컬럼 추가, 방화벽 7)
-    assert 'colspan="7"' in html
+    assert 'colspan="8"' in html   # 설비 표 상태 컬럼 추가

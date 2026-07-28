@@ -401,6 +401,7 @@
         <span class="pane-toolbar__title">서버 현황</span>
         <div class="pane-toolbar__actions">
           <input id="server-search" class="loc-filter" placeholder="검색 (이름·IP·hostname·MAC...)" style="width:200px">
+          <select id="status-filter-srv" class="loc-filter" title="수집 상태로 걸러 봅니다" style="width:110px"><option value="">상태 전체</option><option value="done">정상</option><option value="collecting">수집중</option><option value="failed">오류</option><option value="new">미수집</option></select>
           <button id="btn-server-add" class="btn btn--primary" style="font-size:12px">+ 서버 추가</button>
           <button id="btn-server-import" class="btn btn--primary" style="font-size:12px" title="이름·IP가 담긴 엑셀(.xlsx)로 서버를 일괄 등록. 계정·OS·상세는 이후 '수집'에서 자동 채웁니다.">📥 엑셀 등록</button>
           <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="체크한 서버를 수집(미체크 시 전체). 계정이 필요하면 팝업에서 입력합니다.">정보 수집 (0)</button>
@@ -424,16 +425,15 @@
         <table class="data-table">
           <thead>
             <tr><th style="width:34px;text-align:center"><input type="checkbox" id="srv-check-all" title="전체 선택"></th>
-                <th>이름</th><th>IP</th><th>hostname</th><th>MAC</th><th>OS</th>
-                <th title="CPU 모델 · 논리 코어 수">CPU</th>
-                <th title="설치된 물리 메모리 총량">메모리</th>
-                <th title="로컬 디스크 사용량 / 전체 용량">디스크</th>
-                <th>구분</th>
+                <th title="물리 서버 / 가상머신(VM)">구분</th>
+                <th title="수집된 실제 호스트네임. 미수집 장비는 등록 이름을 대신 표시합니다">호스트네임</th>
+                <th>IP</th><th>MAC</th><th>OS</th>
+                <th title="CPU · 메모리 · 디스크 사양(클릭하면 메모리 모듈·물리 디스크 장착 구성)">사양</th>
                 <th>열린 포트</th><th>연결 스위치</th><th>포트</th><th>위치</th><th>상태</th>
                 <th title="수집 · 수정 · 진단 · SSH 터미널 · 삭제">작업</th></tr>
           </thead>
           <tbody id="server-table-body">
-            <tr><td colspan="16" style="color:#64748b">등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.</td></tr>
+            <tr><td colspan="13" style="color:#64748b">등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.</td></tr>
           </tbody>
         </table>
       </div>
@@ -449,6 +449,7 @@
           </select>
           <button id="btn-fac-delete-subnet" class="btn btn--ghost" style="font-size:12px" title="위에서 선택한 대역의 수집 결과를 삭제" disabled>선택 대역 삭제</button>
           <input id="fac-search" placeholder="IP·대역·MAC·연결 스위치 검색..." style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:210px">
+          <select id="status-filter-fac" class="loc-filter" title="연결 상태로 걸러 봅니다" style="width:110px"><option value="">상태 전체</option><option value="online">연결됨</option><option value="offline">끊김</option></select>
           <select id="fac-switch" style="font-size:13px;padding:5px"></select>
           <button id="btn-fac-detect" class="btn btn--secondary">대역 자동 찾기</button>
           <input id="fac-subnet" type="text" placeholder="10.92.174.0/23" style="padding:5px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;width:150px">
@@ -465,10 +466,10 @@
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th>대역</th><th id="fac-sort-ip" style="cursor:pointer" title="클릭하면 IP 오름/내림차순 전환">IP <span id="fac-sort-arrow">▲</span></th><th>MAC</th><th>연결 스위치</th><th>포트</th><th>포트 설명</th><th>비고</th></tr>
+            <tr><th>대역</th><th id="fac-sort-ip" style="cursor:pointer" title="클릭하면 IP 오름/내림차순 전환">IP <span id="fac-sort-arrow">▲</span></th><th>MAC</th><th>연결 스위치</th><th>포트</th><th>포트 설명</th><th title="MAC 테이블·ARP에서 확인되면 '연결됨'">상태</th><th>비고</th></tr>
           </thead>
           <tbody id="facility-table-body">
-            <tr><td colspan="7" style="color:#64748b">11번 스위치를 선택하고 대역을 입력해 '대역 수집(ping)'을 실행하세요. (스위치가 직접 대역에 ping → ARP/MAC 대조)</td></tr>
+            <tr><td colspan="8" style="color:#64748b">11번 스위치를 선택하고 대역을 입력해 '대역 수집(ping)'을 실행하세요. (스위치가 직접 대역에 ping → ARP/MAC 대조)</td></tr>
           </tbody>
         </table>
       </div>
@@ -479,7 +480,8 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">방화벽 현황</span>
         <div class="pane-toolbar__actions">
-          <input id="fw-search" class="loc-filter" type="text" placeholder="검색 (이름·벤더·호스트·위치...)" style="width:210px">
+          <input id="fw-search" class="loc-filter" type="text" placeholder="검색 (이름·벤더·IP·위치...)" style="width:210px">
+          <select id="status-filter-fw" class="loc-filter" title="수집 상태로 걸러 봅니다" style="width:110px"><option value="">상태 전체</option><option value="done">정상</option><option value="collecting">수집중</option><option value="failed">오류</option><option value="new">미수집</option></select>
           <button id="btn-add-firewall" class="btn btn--primary">+ 방화벽 추가</button>
           <button id="btn-firewall-import" class="btn btn--primary" title="이름·벤더·호스트IP·포트가 담긴 엑셀(.xlsx)로 방화벽을 일괄 등록">📥 엑셀 등록</button>
           <button id="btn-firewall-collect-all" class="btn btn--secondary" title="체크한 방화벽을 저장된 계정으로 수집(미체크 시 전체)">정보 수집 (0)</button>
@@ -494,7 +496,7 @@
         <table class="data-table">
           <thead>
             <tr><th style="width:34px;text-align:center"><input type="checkbox" id="fw-check-all" title="전체 선택"></th>
-                <th>이름</th><th>벤더</th><th>호스트</th><th>위치</th><th>상태</th><th>연결 상태</th>
+                <th>이름</th><th>벤더</th><th>IP</th><th>위치</th><th>상태</th><th>연결 상태</th>
                 <th title="수집 · 상세 · 수정 · 진단 · SSH 터미널 · 삭제">작업</th></tr>
           </thead>
           <tbody id="firewall-table-body">
@@ -511,6 +513,7 @@
         <span class="pane-toolbar__title">스위치 현황</span>
         <div class="pane-toolbar__actions">
           <input id="loc-filter-sw" class="loc-filter" type="text" placeholder="검색 (IP·호스트네임·모델·버전·위치...)" style="width:230px">
+          <select id="status-filter-sw" class="loc-filter" title="수집 상태로 걸러 봅니다" style="width:110px"><option value="">상태 전체</option><option value="done">정상</option><option value="collecting">수집중</option><option value="failed">오류</option><option value="new">미수집</option></select>
           <button id="btn-sw-add" class="btn btn--primary" style="font-size:12px" title="스위치 1대 수동 등록">+ 스위치 추가</button>
           <button id="btn-sw-import" class="btn btn--primary" style="font-size:12px" title="IP·호스트네임 등이 담긴 엑셀(.xlsx)로 스위치를 일괄 등록">📥 엑셀 등록</button>
           <button id="btn-sw-collect" class="btn btn--secondary" style="font-size:12px" title="체크한 스위치를 계정 입력 후 일괄 수집" disabled>정보 수집 (0)</button>
@@ -527,9 +530,10 @@
           <thead>
             <tr>
               <th style="width:34px;text-align:center"><input type="checkbox" id="sw-check-all" title="전체 선택"></th>
-              <th title="등록할 때 붙인 이름. 호스트네임은 수집에 성공해야 채워집니다">이름</th>
-              <th>구분</th><th>IP</th><th>호스트네임</th><th>벤더</th><th>모델</th><th>버전</th><th>시리얼</th>
-              <th>위치</th><th>상태</th><th title="포트 flapping·loop 등 감지 시 표시. 정상이면 비어있음(-)">경보</th><th>마지막 수집</th><th>작업</th>
+              <th>구분</th>
+              <th title="수집된 실제 호스트네임. 미수집 장비는 등록 이름을 대신 표시합니다">호스트네임</th>
+              <th>IP</th><th>벤더</th><th>모델</th><th>버전</th><th>시리얼</th>
+              <th>위치</th><th>상태</th><th title="포트 flapping(FLAP)·loop(LOOP) 감지 시 표시. 장비 전원·회선 장애는 '상태' 컬럼에 나옵니다">경보</th><th>마지막 수집</th><th>작업</th>
             </tr>
           </thead>
           <tbody id="switch-table-body"></tbody>
@@ -617,7 +621,16 @@
           <div class="field-row" style="margin-top:8px">
             <div><label>알람 보존 기간 (일, 지난 이벤트 자동 정리)</label>
               <input id="ac-retention" type="number" min="7" max="365" style="width:100px"></div>
+            <div style="flex:1"><label>표시 시간대 (화면에 보이는 시각 기준)</label>
+              <select id="ac-timezone">
+                <option value="America/New_York">미국 동부 (EST/EDT)</option>
+                <option value="Asia/Seoul">한국 (KST)</option>
+                <option value="UTC">UTC</option>
+                <option value="local">이 PC의 시간대</option>
+              </select>
+            </div>
           </div>
+          <p class="ac-section__hint">수집 시각은 서버 PC의 시각으로 저장되고, 화면에는 여기서 고른 시간대로 표시됩니다(저장된 값은 바뀌지 않습니다).</p>
         </div>
 
         <!-- ④ 이메일 알림 (넓은 팝업에서 전체 폭) -->

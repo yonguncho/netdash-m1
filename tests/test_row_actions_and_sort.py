@@ -62,12 +62,13 @@ def test_new_actions_are_routed():
 
 
 def test_server_table_action_column_merged():
-    """수집 컬럼을 작업 컬럼으로 합쳐 스위치와 같은 구성이 된다(17→16열)."""
+    """수집 컬럼을 작업 컬럼으로 합쳐 스위치와 같은 구성(현재 13열)."""
     head = HTML[HTML.index('id="srv-check-all"'):HTML.index('id="server-table-body"')]
-    assert head.count("</th>") == 16
+    # CPU·메모리·디스크 3컬럼 → '사양' 1컬럼, 이름 컬럼 제거 → 13컬럼
+    assert head.count("</th>") == 13
     assert ">작업</th>" in head
     assert ">수집</th>" not in head, "수집 전용 컬럼이 남아 있다"
-    assert 'colspan="16"' in HTML and "colspan='16'" in APPJS
+    assert 'colspan="13"' in HTML and "colspan='13'" in APPJS
 
 
 def test_terminal_url_includes_kind():

@@ -184,6 +184,8 @@ function _applyLocFilter(list, inputId) {
       _setVal("ac-fac-time", d.facility_time || "07:00");
       _setChk("ac-reach-enabled", d.reach_enabled !== false);
       _setVal("ac-retention", d.retention_days || "90");
+      _setVal("ac-timezone", d.display_timezone || "America/New_York");
+      _applyTimezone(d);            // 표시 즉시 반영
       var info = document.getElementById("ac-fac-info");
       if (info) info.textContent = (d.facility_bands || 0) + "개 대역이 자동 스캔 대상으로 기억되어 있습니다. " +
         "(설비 탭에서 '대역 수집'을 한 번 실행한 대역이 자동 등록. 스위치에 저장된 계정 필요)";
@@ -252,6 +254,7 @@ function _applyLocFilter(list, inputId) {
       facility_time: _val("ac-fac-time", "07:00"),
       reach_enabled: _chk("ac-reach-enabled"),
       retention_days: _val("ac-retention", "90"),
+      display_timezone: _val("ac-timezone", "America/New_York"),
     };
     var emailBody = {
       enabled: _chk("em-enabled"), smtp_host: _val("em-host", ""), smtp_port: _val("em-port", "25"),
@@ -266,7 +269,12 @@ function _applyLocFilter(list, inputId) {
         method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(emailBody),
       });
     }).then(function (r) {
-      if (r) { closeModal("modal-auto-collect"); alert("자동화 설정이 저장되었습니다."); }
+      if (!r) return;
+      closeModal("modal-auto-collect");
+      // 시간대를 바꿨으면 표시 시각을 즉시 다시 그린다(새로고침 없이)
+      _TZ.zone = body.display_timezone || _TZ.zone;
+      pollState(); loadServers(); loadFirewalls();
+      alert("자동화 설정이 저장되었습니다.");
     }).catch(function (e) { console.error(e); alert("서버 오류"); });
   });
 })();
@@ -953,6 +961,95 @@ function _statusKo(st) {
     : "미수집";
 }
 
+
+// ─── 상태 필터(4개 현황 공용) ─────────────────────────────────────
+// 표의 '상태' 컬럼 값으로 걸러 본다. 빈 값이면 전체.
+function _statusFilterValue(selId) {
+  var el = document.getElementById(selId);
+  return el ? (el.value || "") : "";
+}
+function _byStatusSel(rows, selId, getStatus) {
+  var want = _statusFilterValue(selId);
+  if (!want) return rows;
+  return (rows || []).filter(function (r) {
+    var st = (getStatus ? getStatus(r) : r.status) || "new";
+    // 'new'는 미수집(빈 값·pending 포함)
+    if (want === "new") return !(st === "done" || st === "collecting" || st === "failed");
+    return st === want;
+  });
+}
+// 셀렉트 변경 시 각 표를 다시 그린다.
+(function () {
+  var wire = [
+    ["status-filter-sw", function () { pollState(); }],
+    ["status-filter-srv", function () { renderServers(); }],
+    ["status-filter-fw", function () { loadFirewalls(); }],
+    ["status-filter-fac", function () { _renderFacilityRows(); }],
+  ];
+  wire.forEach(function (w) {
+    var el = document.getElementById(w[0]);
+    if (el) el.addEventListener("change", w[1]);
+  });
+})();
+
+// ─── 표 공용 셀(스위치·서버·방화벽·설비 동일 표기) ────────────────
+// 화면마다 다른 배지·이모지·색을 쓰던 것을 하나로 모았다.
+function _statusCls(st) {
+  // CSS에 정의된 클래스만 쓴다(--done 은 존재하지 않는다 → --ok)
+  return st === "failed" ? "critical"
+    : st === "done" ? "ok"
+    : st === "collecting" ? "collecting"
+    : "new";
+}
+
+// 수집 상태 배지(+실패 사유). 4개 현황 화면 공용.
+function statusBadge(status, lastError) {
+  var h = "<span class='status-badge status-badge--" + _statusCls(status) + "'>" +
+    escHtml(_statusKo(status)) + "</span>";
+  if (status === "failed" && lastError) {
+    h += "<div class='cell-sub cell-sub--err'>" + escHtml(lastError) + "</div>";
+  }
+  return h;
+}
+
+// 도달성(연결 상태) 배지 — 이모지 없이 글씨체 통일.
+function reachBadge(reachable) {
+  if (reachable === true) return "<span class='status-badge status-badge--ok'>연결됨</span>";
+  if (reachable === false) {
+    return "<span class='status-badge status-badge--critical' " +
+      "title='도달성 감시: 관리 포트 TCP 응답 없음'>끊김</span>";
+  }
+  return "<span class='status-badge status-badge--new' title='아직 확인되지 않음'>확인 중</span>";
+}
+
+// 경보 배지 — 포트 flapping/loop 감지 결과. 전원 차단은 '상태'(도달 불가)로 나온다.
+function alertBadge(alert) {
+  if (!alert || alert === "none") {
+    return "<span class='cell-none' title='정상 — 포트 flapping/loop 이벤트 없음'>-</span>";
+  }
+  var ko = alert === "critical" ? "LOOP" : alert === "warning" ? "FLAP" : alert;
+  return "<span class='status-badge status-badge--" + escHtml(alert) + "' " +
+    "title='포트 로그 분석 결과(flapping/loop). 장비 전원·회선 장애는 상태 컬럼에 표시됩니다'>" +
+    escHtml(ko) + "</span>";
+}
+
+// 위치 셀 — 아이콘·파란색 강조 없이 본문과 같은 글씨. 원문 위치는 보조 줄로.
+function locationCell(dev) {
+  if (dev.tps_location) {
+    return escHtml(dev.tps_location) +
+      (dev.location ? "<div class='cell-sub'>" + escHtml(dev.location) + "</div>" : "");
+  }
+  return dev.location ? escHtml(dev.location) : "<span class='cell-none'>-</span>";
+}
+
+// 호스트네임 셀 — 이름 컬럼을 없앴으므로, 미수집 장비는 등록 이름으로 대체 표기한다
+// (hostname은 수집에 성공해야 채워져서, 그대로 두면 IP로만 구분해야 한다).
+function hostnameCell(dev) {
+  if (dev.hostname) return "<strong>" + escHtml(dev.hostname) + "</strong>";
+  return "<strong>" + escHtml(dev.name || "-") + "</strong>" +
+    "<div class='cell-sub' title='수집에 성공하면 실제 호스트네임으로 바뀝니다'>등록 이름</div>";
+}
+
 // 상태 분류: 오류 = 수집 실패 또는 도달 불가, 미수집 = 아직 한 번도 수집 안 됨
 function _swStatusBucket(sw) {
   if (sw.status === "failed" || sw.reachable === false) return "failed";
@@ -1630,12 +1727,9 @@ function renderSwitchTable(switches) {
     _updateBulkDeleteBtn();
     return;
   }
+  switches = _byStatusSel(switches, "status-filter-sw");
   tbody.innerHTML = switches.map(function(sw) {
-    var sc = swStatusClass(sw);
-    var locCell = sw.tps_location
-      ? "<span style='color:#2563eb;font-weight:600'>📍 " + escHtml(sw.tps_location) + "</span>" +
-        (sw.location ? "<br><span style='font-size:11px;color:#64748b'>" + escHtml(sw.location) + "</span>" : "")
-      : escHtml(sw.location || "-");
+    var locCell = locationCell(sw);
     // 구분: 수동 지정(수정에서 L2/L3/L4·BackBone 선택)이 있으면 그걸 우선,
     // 없으면 running-config·벤더로 자동 분류(kind_auto). 둘 다 없으면 'SWITCH'.
     var _manual = ["BackBone", "L2 Switch", "L3 Switch", "L4 Switch"].indexOf(sw.device_type) >= 0
@@ -1650,25 +1744,21 @@ function renderSwitchTable(switches) {
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='sw-check' value='" + sw.id + "'" +
       (_tblSel[sw.id] ? " checked" : "") + "></td>" +
-      // 이름: 등록 시 붙인 식별자. 호스트네임은 수집 성공 후에만 채워지므로
-      // 이 칸이 없으면 미수집 스위치를 IP로만 구분해야 한다.
-      "<td><strong>" + escHtml(sw.name || "-") + "</strong></td>" +
-      "<td>" + kindLabel + "</td><td><code>" + escHtml(sw.ip) + "</code></td><td>" +
-      escHtml(sw.hostname || "-") + "</td><td>" + escHtml(_vendorLabel(sw.vendor)) +
+      // 구분을 맨 앞에, 그다음 호스트네임(이름 컬럼 제거 — 대부분 같은 값이었다).
+      // 미수집 장비는 hostname이 비므로 hostnameCell이 등록 이름으로 대체 표기한다.
+      "<td>" + kindLabel + "</td>" +
+      "<td>" + hostnameCell(sw) + "</td>" +
+      "<td><code>" + escHtml(sw.ip) + "</code></td><td>" +
+      escHtml(_vendorLabel(sw.vendor)) +
       _nbrSrcBadge(sw) + "</td><td>" +
       (sw.model ? escHtml(sw.model)
-        : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 show version/show switch에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
+        : "<span class='cell-none' title='이 버전으로 한 번 재수집하면 show version/show switch에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.os_version ? escHtml(sw.os_version)
-        : "<span style='color:#94a3b8' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
+        : "<span class='cell-none' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.serial ? "<code style='font-size:11px'>" + escHtml(sw.serial) + "</code>"
-        : "<span style='color:#94a3b8' title='재수집하면 show version/inventory에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
-      locCell + "</td><td><span class='status-badge status-badge--" + sc + "'>" +
-      escHtml(sw.status) + "</span>" +
-      (sw.status === "failed" && sw.last_error
-        ? "<div style='font-size:11px;color:#991b1b;max-width:260px'>" + escHtml(sw.last_error) + "</div>"
-        : "") +
-      "</td><td>" +
-      (sw.alert && sw.alert !== "none" ? "<span class='status-badge status-badge--" + sw.alert + "'>" + sw.alert + "</span>" : "<span title='정상 — 포트 flapping/loop 이벤트 없음'>-</span>") +
+        : "<span class='cell-none' title='재수집하면 show version/inventory에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
+      locCell + "</td><td>" + statusBadge(sw.status, sw.last_error) + "</td><td>" +
+      alertBadge(sw.alert) +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +
       "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
@@ -2159,8 +2249,11 @@ function _renderFacilityRows() {
   var subnet = subnetSel ? subnetSel.value : "";
   var searchEl = document.getElementById("fac-search");
   var q = searchEl ? searchEl.value.trim() : "";
+  var stWant = _statusFilterValue("status-filter-fac");
   var filtered = all.filter(function (h) {
     if (subnet && h.subnet !== subnet) return false;
+    if (stWant === "online" && !h.online) return false;
+    if (stWant === "offline" && h.online) return false;
     return _facMatchesSearch(h, q);
   });
 
@@ -2225,11 +2318,13 @@ function _renderFacilityRows() {
     remarkCell = remarks.length
       ? "<span style='font-size:12px;color:#64748b'>" + escHtml(remarks.join(" · ")) + "</span>"
       : "<span style='color:#cbd5e1'>-</span>";
-    // 오프라인(연결 실패)은 행 배경(빨강)으로 신호
+    // 오프라인(연결 실패)은 행 배경(빨강) + 상태 배지로 신호.
+    // 예전엔 배경색만 있어 다른 현황 화면(상태 배지)과 표기가 달랐다.
     var trStyle = h.online ? "" : " style='background:#fef2f2'";
     return "<tr" + trStyle + "><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
       "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
-      portCell + "</td><td>" + descCell + "</td><td>" + remarkCell + "</td></tr>";
+      portCell + "</td><td>" + descCell + "</td><td>" + reachBadge(!!h.online) + "</td><td>" +
+      remarkCell + "</td></tr>";
   }).join("");
 }
 
@@ -2433,12 +2528,14 @@ function renderFirewalls(firewalls) {
     _updateFwSelBtns();
     return;
   }
+  // 이중화 대기 장비는 status_display 기준으로 걸러야 '정상'으로 보이는 것과 일치한다
+  firewalls = _byStatusSel(firewalls, "status-filter-fw",
+                           function (f) { return f.status_display || f.status; });
   tbody.innerHTML = firewalls.map(function(f) {
-    var sc = _fwStatusMeta[f.status] || "new";
     var fjson = payloadAttr((f));
-    var locCell = f.room_label
-      ? "<span style='color:#2563eb;font-weight:600'>🗄 " + escHtml(f.room_label) + "</span>"
-      : escHtml(f.location || "-");
+    // 위치: 아이콘·색 강조 없이 본문과 같은 글씨(스위치·서버 표와 통일)
+    var locCell = f.room_label ? escHtml(f.room_label)
+      : (f.location ? escHtml(f.location) : "<span class='cell-none'>-</span>");
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='fw-check' value='" + f.id + "'" +
       (_fwSel[f.id] ? " checked" : "") + "></td>" +
@@ -2446,12 +2543,14 @@ function renderFirewalls(firewalls) {
       "<td>" + escHtml(f.vendor) + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
-      "<td><span class='status-badge status-badge--" + sc + "'>" + _statusKo(f.status) + "</span></td>" +
-      "<td>" + (f.reachable === false
-        ? "<span class='status-badge status-badge--critical' title='도달성 감시: 관리 포트 TCP 응답 없음'>🔴 끊김</span>"
-        : f.reachable === true
-          ? "<span class='status-badge status-badge--ok'>🟢 연결됨</span>"
-          : "<span class='status-badge status-badge--new' title='감시 첫 주기(최대 1분) 대기 중'>확인 중</span>") + "</td>" +
+      // 이중화(동일 VIP) 대기 장비는 개별 수집이 실패할 수밖에 없다 →
+      // 짝이 정상이면 정상으로 표기하고 근거를 툴팁에 남긴다.
+      "<td>" + (f.ha_via
+        ? "<span class='status-badge status-badge--ok' title='이중화(HA) 대기 장비 — 동일 VIP의 " +
+          escHtml(f.ha_via) + " 수집 결과 기준'>정상</span>" +
+          "<div class='cell-sub'>HA 대기 · " + escHtml(f.ha_via) + " 기준</div>"
+        : statusBadge(f.status_display || f.status, f.last_error)) + "</td>" +
+      "<td>" + reachBadge(f.reachable) + "</td>" +
       "<td>" +
         "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
         "data-action='collect-fw' data-payload='" + fjson + "'>수집</button> " +
@@ -4348,6 +4447,37 @@ function diskCell(s) {
     "<div style='color:#2563eb'>" + escHtml(summary) + " ▸</div></a>";
 }
 
+// 사양 셀 — CPU·메모리·디스크를 한 칸에 세 줄로 묶는다.
+// 3개 컬럼으로 나눠 두면 폭이 좁아 내용이 잘려 안 보였다.
+// 장착 구성(메모리 모듈·물리 디스크)이 있으면 그 줄을 클릭해 상세 팝업을 연다.
+function specCell(s) {
+  function row(label, valueHtml, hw) {
+    var body = valueHtml;
+    if (hw) {
+      body = "<a href='#' data-action='hw-detail' data-id='" + s.id + "' data-hw='" + hw +
+        "' title='장착 구성 상세 보기' style='color:inherit;text-decoration:none'>" +
+        valueHtml + " <span style='color:#2563eb'>▸</span></a>";
+    }
+    return "<div><span class='cell-spec__k'>" + label + "</span>" + body + "</div>";
+  }
+  var mods = _hwList(s.mem_modules), disks = _hwList(s.disk_devices);
+  var cpu = fmtCpu(s);
+  var mem = escHtml(fmtMem(s.mem_total_mb));
+  var memSum = summarizeModules(mods, s.mem_slots_total);
+  if (memSum) mem += " <span style='color:#64748b'>(" + escHtml(memSum) + ")</span>";
+  var disk = fmtDisk(s);
+  var diskSum = summarizeDisks(disks);
+  if (diskSum) disk += " <span style='color:#64748b'>(" + escHtml(diskSum) + ")</span>";
+  if (!_num(s.cpu_cores) && !_num(s.mem_total_mb) && !_num(s.disk_total_gb)) {
+    return "<span class='cell-none' title='계정을 입력해 수집하면 채워집니다'>미수집</span>";
+  }
+  return "<div class='cell-spec'>" +
+    row("CPU", cpu, null) +
+    row("MEM", mem, mods.length ? "mem" : null) +
+    row("DISK", disk, disks.length ? "disk" : null) +
+    "</div>";
+}
+
 // 장착 구성 상세 팝업 — 메모리 모듈 / 물리 디스크 목록
 function showHwDetail(id, which) {
   var s = (_servers || []).find(function (x) { return x.id === id; });
@@ -4416,39 +4546,35 @@ function renderServers() {
   if (!body) return;
   var q = (document.getElementById("server-search") || {}).value;
   q = (q || "").trim().toLowerCase();
-  var rows = _servers.filter(function (s) {
+  var rows = _byStatusSel(_servers, "status-filter-srv").filter(function (s) {
     if (!q) return true;
     return [s.name, s.ip, s.hostname, s.mac, s.cpu_model].some(function (v) {
       return (v || "").toLowerCase().indexOf(q) >= 0;
     });
   });
   if (!rows.length) {
-    body.innerHTML = "<tr><td colspan='16' style='color:#64748b'>" +
+    body.innerHTML = "<tr><td colspan='13' style='color:#64748b'>" +
       (_servers.length ? "검색 결과가 없습니다." : "등록된 서버가 없습니다. [+ 서버 추가]로 추가하세요.") + "</td></tr>";
     return;
   }
   body.innerHTML = rows.map(function (s) {
     var kind = s.is_vm ? "<span style='color:#8b5cf6'>VM</span>"
                        : "<span style='color:#2563eb'>물리</span>";
-    var sc = s.status === "failed" ? "critical" : (s.status === "done" ? "done" : "new");
-    var swp = [s.switch_name, s.switch_port].filter(Boolean).join(" ");
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='srv-check' value='" + s.id + "'></td>" +
-      "<td>" + escHtml(s.name) + "</td>" +
+      // 구분을 맨 앞에, 그다음 호스트네임(이름 컬럼 제거 — 대부분 같은 값이었다)
+      "<td>" + kind + "</td>" +
+      "<td>" + hostnameCell(s) + "</td>" +
       "<td><code>" + escHtml(s.ip) + "</code></td>" +
-      "<td>" + escHtml(s.hostname || "-") + "</td>" +
       "<td><code style='font-size:11px'>" + escHtml(s.mac || "-") + "</code></td>" +
       "<td>" + escHtml(s.os_info || s.os_type || "-") + "</td>" +
-      "<td style='font-size:11px;max-width:200px'>" + fmtCpu(s) + "</td>" +
-      "<td style='font-size:11px;white-space:nowrap'>" + memCell(s) + "</td>" +
-      "<td style='font-size:11px;white-space:nowrap'>" + diskCell(s) + "</td>" +
-      "<td>" + kind + "</td>" +
+      // 사양: CPU·메모리·디스크를 한 칸에 모았다(3컬럼이라 내용이 잘려 안 보였다)
+      "<td>" + specCell(s) + "</td>" +
       "<td style='font-size:11px;max-width:180px'>" + escHtml(s.open_ports || "-") + "</td>" +
       "<td>" + escHtml(s.switch_name || "-") + "</td>" +
       "<td>" + escHtml(s.switch_port || "-") + "</td>" +
-      "<td>" + escHtml(s.location || "-") + "</td>" +
-      "<td><span class='status-badge status-badge--" + sc + "'>" + _statusKo(s.status) + "</span>" +
-        (s.status === "failed" && s.last_error ? "<div style='font-size:11px;color:#991b1b'>" + escHtml(s.last_error) + "</div>" : "") + "</td>" +
+      "<td>" + locationCell(s) + "</td>" +
+      "<td>" + statusBadge(s.status, s.last_error) + "</td>" +
       // 작업 — 스위치 현황과 같은 구성(수집·수정·진단·터미널·삭제)
       "<td style='white-space:nowrap'>" +
         "<button class='btn btn--primary' style='font-size:11px;padding:2px 8px' " +
@@ -4974,19 +5100,82 @@ function escHtml(s) {
 function payloadAttr(obj) {
   return encodeURIComponent(JSON.stringify(obj)).replace(/'/g, "%27");
 }
+// 표시 시간대 — 설정에서 고를 수 있고, 서버가 알려준 값으로 채워진다.
+// (기본 America/New_York = 미국 동부. 'local'이면 이 브라우저 PC 기준)
+var _TZ = { zone: "America/New_York", label: "미국 동부", srvOffsetMin: null };
+
+var _TZ_CHOICES = [
+  { zone: "America/New_York", label: "미국 동부 (EST/EDT)" },
+  { zone: "Asia/Seoul", label: "한국 (KST)" },
+  { zone: "UTC", label: "UTC" },
+  { zone: "local", label: "이 PC의 시간대" },
+];
+
+// 서버가 알려준 표시 시간대·오프셋을 적용한다.
+function _applyTimezone(d) {
+  if (!d) return;
+  if (d.display_timezone) _TZ.zone = d.display_timezone;
+  if (typeof d.server_tz_offset_min === "number") _TZ.srvOffsetMin = d.server_tz_offset_min;
+  _TZ.label = _tzLabel(_TZ.zone);
+}
+
+// 기동 시 1회 — 시간대 설정을 받아 첫 렌더부터 올바른 시각이 나오게 한다.
+function loadTimezone() {
+  return fetch("/api/settings/auto_collect").then(function (r) { return r.json(); })
+    .then(function (d) { _applyTimezone(d); }).catch(function () {});
+}
+
+function _tzLabel(zone) {
+  for (var i = 0; i < _TZ_CHOICES.length; i++) {
+    if (_TZ_CHOICES[i].zone === zone) return _TZ_CHOICES[i].label;
+  }
+  return zone;
+}
+
+// 시각 문자열 → 선택한 시간대 표기.
+//
+// DB는 `datetime('now','localtime')` 즉 **서버 PC의 로컬 시각**을 시간대 표기 없이
+// 저장한다. 예전 코드는 이 값을 UTC로 가정해 'Z'를 붙인 뒤 미국 동부로 변환해서,
+// 서버가 EDT(UTC-4)일 때 **4시간 이르게** 표시됐다("수집 시간이 안 맞는다").
+// 서버의 UTC 오프셋을 받아 실제 순간을 복원한 뒤 선택 시간대로 표기한다.
 function fmtTime(ts) {
   if (!ts) return "-";
   try {
-    // DB 시각은 UTC(SQLite datetime('now')/CURRENT_TIMESTAMP, TZ 표기 없음).
-    // 'Z'를 붙여 UTC로 해석 후 EST(America/New_York)로 표시.
-    var s = String(ts).trim().replace(" ", "T");
-    if (!/[zZ]|[+\-]\d\d:?\d\d$/.test(s)) s += "Z";
-    var d = new Date(s);
-    if (isNaN(d.getTime())) return String(ts);
-    return d.toLocaleString("en-US", { timeZone: "America/New_York",
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + " EST";
+    var raw = String(ts).trim();
+    var s = raw.replace(" ", "T");
+    var d;
+    if (/[zZ]|[+\-]\d\d:?\d\d$/.test(s)) {
+      d = new Date(s);                       // 이미 시간대가 명시된 값
+    } else if (_TZ.srvOffsetMin == null) {
+      d = new Date(s);                       // 오프셋 미확보 → 브라우저 로컬로 해석
+    } else {
+      // 서버 로컬 벽시계 → UTC 순간으로 환산
+      var m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+      if (!m) return raw;
+      var utcMs = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+      d = new Date(utcMs - _TZ.srvOffsetMin * 60000);
+    }
+    if (isNaN(d.getTime())) return raw;
+    var opt = { year: "numeric", month: "2-digit", day: "2-digit",
+                hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
+    if (_TZ.zone && _TZ.zone !== "local") opt.timeZone = _TZ.zone;
+    var out = d.toLocaleString("sv-SE", opt).replace("T", " ");
+    return out + (_TZ.zone === "local" ? "" : " " + _tzAbbr(d));
   } catch (e) { return String(ts); }
+}
+
+// 표기용 시간대 약어(EDT/KST/UTC …) — 브라우저가 계산해 주므로 DST도 맞는다.
+function _tzAbbr(d) {
+  if (_TZ.zone === "UTC") return "UTC";
+  try {
+    var p = new Intl.DateTimeFormat("en-US", {
+      timeZone: _TZ.zone, timeZoneName: "short",
+    }).formatToParts(d);
+    for (var i = 0; i < p.length; i++) {
+      if (p[i].type === "timeZoneName") return p[i].value;
+    }
+  } catch (e) { /* 무시 */ }
+  return "";
 }
 // 넷마스크/프리픽스 → "/N" 표기. 변환 불가 시 원문(있으면 앞에 /) 반환.
 function _fmtPrefix(mask) {
@@ -5117,6 +5306,8 @@ function refreshSessCred() {
 })();
 
 // ─── 초기화 ──────────────────────────────────────────────────────
+// 시간대를 먼저 받아야 첫 렌더부터 수집 시각이 올바르게 표시된다.
+loadTimezone().then(function () { pollState(); loadServers(); });
 loadNetInfo();
 pollState();
 loadFirewalls();  // 서버실 현황에 방화벽을 표시하려면 시작 시 방화벽 목록도 로드

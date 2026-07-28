@@ -18,15 +18,66 @@ import threading
 from . import db, utils, credentials
 
 # 스캔 대상 공통 포트(서버 용도 파악용 — 과도한 스캔 금지)
-COMMON_PORTS = [21, 22, 23, 25, 53, 80, 111, 135, 139, 443, 445, 1433, 1521,
-                2049, 2222, 3128, 3306, 3389, 5432, 5900, 5985, 5986,
-                8080, 8443, 9090]
-# SSH가 열려 있을 수 있는 포트 후보(22 우선, 대체 포트 폴백)
-SSH_PORT_CANDIDATES = [22, 2222]
+COMMON_PORTS = [21, 22, 23, 25, 53, 80, 111, 135, 139, 443, 445, 830, 1433, 1521,
+                2049, 2200, 2222, 3128, 3306, 3389, 5432, 5900, 5985, 5986,
+                8022, 8080, 8443, 9090, 22222]
+# SSH가 열려 있을 만한 관용 포트(먼저 확인할 우선순위).
+# 이 목록에 없어도 **열린 포트의 배너를 직접 확인**해 SSH를 찾는다(find_ssh_port).
+SSH_PORT_CANDIDATES = [22, 2222, 2200, 22222, 8022, 830]
+
+_BANNER_TIMEOUT = 1.5
+# SSH일 가능성이 없어 배너 확인을 건너뛰는 포트(웹·DB·RDP 등)
+_NON_SSH_PORTS = {80, 135, 139, 443, 445, 1433, 1521, 3306, 3389, 5432,
+                  5900, 5985, 5986, 8080, 8443}
+
+
+def looks_like_ssh(ip, port, timeout=_BANNER_TIMEOUT):
+    """그 포트가 실제 SSH인지 배너로 확인.
+
+    SSH 서버는 연결 직후 'SSH-2.0-...' 를 먼저 보낸다(RFC 4253). 포트 번호로
+    추측하지 않고 이 배너로 판정한다.
+    """
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            head = s.recv(64) or b""
+        return head[:4] == b"SSH-"
+    except OSError:
+        return False
+
+
+def find_ssh_port(ip, open_ports, probe=True):
+    """SSH 접속에 쓸 포트를 **실측으로** 찾는다. 없으면 None.
+
+    ① 관용 포트(22·2222·2200·22222·8022·830)가 열려 있으면 그것부터 배너 확인
+    ② 못 찾으면 **열린 포트 전체**를 배너로 확인 — 보안 정책으로 22를 막고
+       SSH를 비표준 포트로 옮겨 둔 서버가 흔하다. 예전에는 22/2222가 아니면
+       "SSH 포트 미개방 — 상세 수집 생략"으로 끝나 사양을 아예 못 가져왔다.
+    probe=False면 배너 확인 없이 관용 포트만 고른다(단위 테스트·오프라인용).
+    """
+    op = list(open_ports or [])
+    if not op:
+        return None
+    ordered = [p for p in SSH_PORT_CANDIDATES if p in op]
+    if not probe:
+        return ordered[0] if ordered else None
+    for p in ordered:
+        if looks_like_ssh(ip, p):
+            return p
+    for p in sorted(set(op) - set(ordered) - _NON_SSH_PORTS):
+        if looks_like_ssh(ip, p):
+            utils.log_event("info", "ssh_port_discovered", ip=ip, port=p)
+            return p
+    # 배너를 못 받았어도 관용 포트가 열려 있으면 그대로 시도한다.
+    # 배너가 느린 서버·중간 장비가 배너를 지우는 환경에서 **기존에 되던 수집을
+    # 잃지 않도록** 하는 안전망이다(탐색은 어디까지나 추가 기능).
+    if ordered:
+        return ordered[0]
+    return None
 
 
 def pick_ssh_port(open_ports):
-    """열린 포트 중 SSH로 쓸 포트 선택(22 우선, 없으면 2222 등). 없으면 None."""
+    """관용 포트만 보는 선택(배너 확인 없음) — 하위 호환용."""
     op = set(open_ports or [])
     for p in SSH_PORT_CANDIDATES:
         if p in op:
@@ -1302,12 +1353,16 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                 pass
         fields["switch_port"] = port
 
-    # ② SSH 상세(자격증명 시) — 22 고정이 아니라 스캔에서 열린 SSH 포트(22/2222)로 접속.
-    #    SSH 포트가 안 열렸으면 상세는 생략하되 무자격 결과(포트·hostname·MAC·OS추정)는 유지.
+    # ② SSH 상세(자격증명 시) — 포트 번호로 추측하지 않고 **열린 포트의 배너를 확인**해
+    #    실제 SSH 포트를 찾는다. 22를 막고 비표준 포트로 옮긴 서버가 많은데, 예전에는
+    #    22/2222만 보고 "SSH 포트 미개방"으로 끝나 사양을 아예 못 가져왔다.
     if username and password:
-        ssh_port = pick_ssh_port(open_ports)
+        ssh_port = find_ssh_port(ip, open_ports)
         if ssh_port is None:
-            errors.append("SSH 포트(22/2222) 미개방 — 상세 수집 생략(포트/hostname/MAC로 식별)")
+            errors.append(
+                "SSH 서버를 찾지 못해 상세 수집 생략 — 열린 포트(%s)에서 SSH 응답이 "
+                "없습니다(포트/hostname/MAC로 식별)"
+                % (",".join(str(p) for p in open_ports) if open_ports else "없음"))
         else:
             os_type = (sv.get("os_type") or "auto").lower()
             # OS 자동 인식: 사용자가 windows/UNIX계열로 확정하지 않았으면 접속해 판별.

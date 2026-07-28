@@ -811,5 +811,6 @@ def test_facility_ui_present():
     assert "/api/facility/delete-subnet" in js
     # 상태 컬럼 제거(표 헤더에서 '상태' 없음, 오프라인은 행 배경으로만)
     # 마지막 컬럼은 '비고'(직접 연결 미확인 사유·과거 연결) — 포트 설명 뒤에 신설
-    assert "<th>포트 설명</th><th>비고</th></tr>" in html
+    # 설비 표에도 상태 배지 컬럼을 추가했다(4개 현황 화면 표기 통일)
+    assert "<th>포트 설명</th>" in html and ">상태</th>" in html and "<th>비고</th>" in html
     assert "온라인" not in js   # 상태 배지 텍스트 제거

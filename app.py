@@ -449,6 +449,52 @@ def _server_eth_ip():
     return _SERVER_ETH_IP
 
 
+# 표시 시간대 — 화면 표기에만 쓴다(DB 저장 형식은 서버 로컬 시각 그대로).
+# 기본값은 미국 동부(운영 PC 기준). 'local'은 브라우저 PC 시간대를 따른다.
+DEFAULT_TIMEZONE = "America/New_York"
+ALLOWED_TIMEZONES = ("America/New_York", "Asia/Seoul", "UTC", "local")
+
+
+def _server_tz_offset_min():
+    """서버 PC의 현재 UTC 오프셋(분). DST를 반영한다.
+
+    DB는 `datetime('now','localtime')` 로 **시간대 표기 없는 서버 로컬 시각**을
+    저장한다. 화면이 실제 순간을 복원하려면 이 오프셋이 필요하다(예전에는 저장값을
+    UTC로 가정해 4시간 이르게 표시됐다).
+    """
+    import time as _t
+    return int(-(_t.altzone if _t.daylight and _t.localtime().tm_isdst else _t.timezone) // 60)
+
+
+def annotate_fw_ha(rows):
+    """동일 호스트(VIP)를 공유하는 이중화 쌍을 묶어 **표시용 상태**를 만든다.
+
+    이중화(HA) 구성은 VIP가 항상 활성 장비로만 연결되므로, 대기(standby) 장비를
+    같은 IP로 개별 수집하면 실패할 수밖에 없다. 그래서 관제·목록에 정상 동작 중인
+    이중화 쌍이 '수집 실패'로 뜨는 오해가 생겼다.
+
+    저장된 status는 실제 시도 결과 그대로 두고(사실 보존), 화면 표기용으로
+    `status_display` 를 따로 채운다 — 짝이 done이면 대기 장비도 done으로 본다.
+    """
+    by_host = {}
+    for r in rows or []:
+        by_host.setdefault((r.get("host") or "").strip(), []).append(r)
+    for host, group in by_host.items():
+        peers_done = [g for g in group if g.get("status") == "done"]
+        for r in group:
+            r["status_display"] = r.get("status")
+            r["ha_peer"] = None
+            if not host or len(group) < 2:
+                continue
+            others = [g.get("name") for g in group if g is not r and g.get("name")]
+            r["ha_peer"] = others[0] if others else None
+            r["ha_shared_ip"] = True
+            if r.get("status") != "done" and peers_done:
+                r["status_display"] = "done"
+                r["ha_via"] = peers_done[0].get("name")
+    return rows
+
+
 def _trusted_proxies():
     """XFF/X-Real-IP를 신뢰할 프록시 주소 목록(config `app.trusted_proxies`).
 
@@ -2052,8 +2098,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # 방화벽 장애 — 이벤트(firewall_unreachable)는 남는데 관제 화면에는
             # 카테고리도 타일도 없어서 아무 데도 안 보이던 것을 노출한다.
             firewalls = db.list_firewalls(db_path)
+            # 이중화(동일 VIP) 대기 장비는 개별 수집이 실패할 수밖에 없다 →
+            # 짝이 정상이면 장애로 세지 않는다(정상 이중화가 '수집 실패'로 뜨던 것).
+            annotate_fw_ha(firewalls)
             fw_unreach = [f for f in firewalls if fw_reach.get(f["id"]) is False]
-            fw_failed = [f for f in firewalls if f.get("status") == "failed"]
+            fw_failed = [f for f in firewalls if f.get("status_display") == "failed"]
             failed = [s for s in switches if s.get("status") == "failed"]
             alerts_sw = [s for s in switches if (s.get("alert") or "none") != "none"]
             unreach = [s for s in switches if reach.get(s["id"]) is False]
@@ -3459,6 +3508,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "facility_bands": len(_fac.get_band_map(db_path)),
                 "retention_days": db.get_setting(db_path, "alert_retention_days", "90") or "90",
                 "reach_enabled": db.get_setting(db_path, "reach_check_enabled", "1") != "0",
+                "display_timezone": (db.get_setting(db_path, "display_timezone",
+                                                    DEFAULT_TIMEZONE) or DEFAULT_TIMEZONE),
+                # DB는 서버 PC의 로컬 시각을 시간대 표기 없이 저장한다 →
+                # 화면이 실제 순간을 복원하려면 서버의 UTC 오프셋이 필요하다.
+                "server_tz_offset_min": _server_tz_offset_min(),
             })
         except Exception as e:
             log_event("error", "get_auto_collect_error", error=collector._sanitize_error_msg(str(e)))
@@ -3501,6 +3555,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # 도달성 감시 on/off
             db.set_setting(db_path, "reach_check_enabled",
                            "1" if data.get("reach_enabled", True) else "0")
+
+            # 표시 시간대(화면 표기에만 영향 — 저장 형식은 그대로 서버 로컬 시각)
+            tz = _sv_text(data.get("display_timezone"), 64)
+            if tz in ALLOWED_TIMEZONES:
+                db.set_setting(db_path, "display_timezone", tz)
 
             log_event("info", "auto_collect_set", enabled=enabled, times=",".join(valid[:6]),
                       facility=fac_enabled, retention=days)
@@ -3557,6 +3616,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         f["reachable"] = fr[f["id"]]
             except Exception:
                 pass
+            annotate_fw_ha(fws)
             return jsonify({"firewalls": fws})
         except Exception as e:
             log_event("error", "firewalls_list_error", error=collector._sanitize_error_msg(str(e)))

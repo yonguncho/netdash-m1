@@ -90,7 +90,8 @@ def test_fw_table_and_cards_show_reachability():
     assert "<th>연결 상태</th>" in html
     assert "<th>인터페이스</th><th>ARP</th>" not in html   # 컬럼 제거
     js = APP_JS.read_text(encoding="utf-8")
-    assert "🟢 연결됨" in js and "🔴 끊김" in js            # 방화벽 표
+    # 이모지를 없애고 글씨체를 통일했다(reachBadge 공용) — 4개 현황 화면 동일 표기
+    assert "reachBadge" in js and "연결됨" in js and "끊김" in js
     # 카드 배지: 빨간 원(reach-dot)이 반짝이는 마크업 + 텍스트
     assert "reach-dot" in js and "reach-down" in js
     assert "연결 끊김</span>" in js                         # 방화벽 카드 배지

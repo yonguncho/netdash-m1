@@ -116,7 +116,8 @@ def test_switch_name_is_visible_in_table_and_export(cli):
     cli.post("/api/switches/manual", json={"name": "1공장-A동-01", "ip": "10.4.2.1"})
     html = cli.get("/").get_data(as_text=True)
     head = html[html.index('id="sw-check-all"'):html.index('id="switch-table-body"')]
-    assert ">이름</th>" in head
+    # 이름 컬럼 제거 — 호스트네임이 맨 앞(미수집 장비는 등록 이름을 대신 표시)
+    assert ">호스트네임</th>" in head and ">이름</th>" not in head
     csv = cli.get("/api/export/switches?fmt=csv").get_data().decode("utf-8-sig")
     assert "1공장-A동-01" in csv
 
