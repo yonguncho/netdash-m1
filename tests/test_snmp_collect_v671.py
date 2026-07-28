@@ -299,7 +299,8 @@ def test_no_reply_leaves_actionable_message(temp_db, monkeypatch):
         sid = db.save_server(temp_db, "SRV", "127.0.0.1")
         sc.collect_server(temp_db, sid, None, None)
         err = db.get_server(temp_db, sid).get("last_error") or ""
-        assert "SNMP" in err and "snmpd" in err, err
+        # 응답이 아예 없으면 원인이 둘(방화벽 차단·커뮤니티 불일치)이라 둘 다 알린다.
+        assert "SNMP" in err and "커뮤니티" in err and "차단" in err, err
     finally:
         a.close()
 
@@ -358,3 +359,69 @@ def test_snmp_not_tried_when_unreachable(temp_db, monkeypatch):
     assert called["n"] == 0
     assert row["status"] == "failed"
     assert "도달 불가" in (row.get("last_error") or ""), row.get("last_error")
+
+
+# ── 무응답의 원인 구분 ──────────────────────────────────────────
+def test_closed_port_distinguished_from_blocked():
+    """161을 아무도 안 들으면 ICMP가 돌아온다 — 커뮤니티 문제와 조치가 다르다.
+
+    Windows는 이때 recvfrom에서 ConnectionResetError(10054)를 낸다.
+    이걸 타임아웃과 뭉뚱그리면 '커뮤니티 확인'만 안내하게 되는데,
+    snmpd가 아예 없는 서버에서는 커뮤니티를 백날 바꿔도 안 된다.
+    """
+    s = sn._Session("127.0.0.1", "public", timeout=1.0)
+    with pytest.raises(sn.SnmpClosed) as e:
+        s.get([sn._SYS_DESCR])          # 아무도 안 듣는 포트
+    assert "snmpd" in str(e.value)
+
+
+def test_closed_port_does_not_retry(monkeypatch):
+    """재시도해도 결과가 같다 — 서버마다 몇 초씩 낭비하면 안 된다."""
+    sent = {"n": 0}
+    real = socket.socket
+
+    class _S:
+        def __init__(self, *a, **k):
+            self._s = real(*a, **k)
+
+        def settimeout(self, t):
+            pass
+
+        def sendto(self, *a):
+            sent["n"] += 1
+
+        def recvfrom(self, n):
+            raise ConnectionResetError(10054, "reset")
+
+        def close(self):
+            self._s.close()
+
+    monkeypatch.setattr(socket, "socket", _S)
+    with pytest.raises(sn.SnmpClosed):
+        sn._Session("10.0.0.1", "public", timeout=1.0, retries=2).get([sn._SYS_DESCR])
+    assert sent["n"] == 1, "닫힌 포트에 재시도했다"
+
+
+def test_silent_agent_reports_both_causes(monkeypatch):
+    a = FakeAgent(silent=True)
+    monkeypatch.setattr(sn, "SNMP_PORT", a.port)
+    try:
+        with pytest.raises(sn.SnmpSilent) as e:
+            sn.collect("127.0.0.1", "public", timeout=0.4)
+        assert "커뮤니티" in str(e.value) and "차단" in str(e.value)
+    finally:
+        a.close()
+
+
+def test_collector_messages_differ_by_cause(temp_db, monkeypatch):
+    _stub(monkeypatch, [443])
+
+    def closed(*a, **k):
+        raise sn.SnmpClosed("161/UDP에서 응답할 프로세스가 없습니다 — snmpd 없음")
+
+    monkeypatch.setattr(sn, "collect", closed)
+    sid = db.save_server(temp_db, "NOSNMPD", "10.9.9.20")
+    sc.collect_server(temp_db, sid, None, None)
+    err = db.get_server(temp_db, sid).get("last_error") or ""
+    assert "snmpd가 떠 있지 않" in err, err
+    assert "커뮤니티" not in err, "조치와 무관한 안내를 섞으면 안 된다: %s" % err

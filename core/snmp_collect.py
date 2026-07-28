@@ -32,6 +32,24 @@ _ST_RAM = "1.3.6.1.2.1.25.2.1.2"
 _ST_FIXED_DISK = "1.3.6.1.2.1.25.2.1.4"
 _IF_PHYS_ADDR = "1.3.6.1.2.1.2.2.1.6"
 
+class SnmpError(Exception):
+    """SNMP 조회 실패의 공통 상위 — 사유별로 조치가 다르다."""
+
+
+class SnmpClosed(SnmpError):
+    """서버는 살아 있는데 161에서 아무도 안 듣는다(ICMP port unreachable).
+
+    → 그 서버에 snmpd가 없거나 꺼져 있다. 재시도해도 결과가 같다.
+    """
+
+
+class SnmpSilent(SnmpError):
+    """아무 응답도 오지 않았다(타임아웃).
+
+    → 방화벽이 UDP 161을 버리거나, 커뮤니티가 틀렸다(v2c는 무응답).
+    """
+
+
 # 디스크 합계에서 뺄 것 — 실제 저장 공간이 아니다(메모리 기반 FS·가상 장치)
 _DISK_SKIP = ("tmpfs", "devtmpfs", "/dev/shm", "/run", "/sys", "/proc",
               "shared memory", "ram disk", "swap")
@@ -195,6 +213,12 @@ class _Session(object):
         return _tlv(0x30, _enc_int(1) + _tlv(0x04, self.community) + pdu)
 
     def _send(self, msg):
+        # UDP라 '무응답'의 원인이 여러 가지인데, 하나는 갈라낼 수 있다.
+        # 서버가 살아 있고 161을 아무도 안 들으면 ICMP port-unreachable이 오고,
+        # 이때 Windows는 recvfrom에서 ConnectionResetError(10054)를 낸다(실측 확인).
+        # 방화벽이 조용히 버리거나 커뮤니티가 틀리면 그냥 타임아웃이다.
+        # 원인이 다르면 조치도 다르므로 메시지를 나눈다. 10054는 재시도해도
+        # 결과가 같으니 바로 끝낸다(서버마다 몇 초씩 낭비하지 않게).
         last = None
         for _ in range(self.retries + 1):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -203,13 +227,18 @@ class _Session(object):
                 s.sendto(msg, (self.ip, SNMP_PORT))
                 data, _addr = s.recvfrom(65535)
                 return _parse_varbinds(data)
+            except ConnectionResetError:
+                raise SnmpClosed("161/UDP에서 응답할 프로세스가 없습니다"
+                                 " — 서버에 snmpd가 떠 있지 않습니다")
             except socket.timeout as e:
                 last = e
             except OSError as e:
                 last = e
             finally:
                 s.close()
-        raise TimeoutError("SNMP 무응답: %s" % (last or ""))
+        raise SnmpSilent("응답이 오지 않았습니다 — UDP 161 차단 또는 "
+                         "커뮤니티 불일치(SNMPv2c는 커뮤니티가 틀리면 "
+                         "응답하지 않습니다): %s" % (last or ""))
 
     def get(self, oids):
         return self._send(self._pdu(0xA0, list(oids), 0, 0))

@@ -35,6 +35,8 @@ function slice(from, to, label) {
 const renderSrc = slice("function renderRoomRackView(", "// ─── 랙 실장 높이(U) 드래그 조절",
   "renderRoomRackView");
 const dragSrc = slice("var _RU_H = 21;", "function renderSwitchGrid(", "드래그 핸들러");
+// jsdom은 레이아웃을 계산하지 않아 offsetWidth/elementFromPoint가 0/null이다.
+// 좌표 → 칸 매핑을 테스트가 직접 쥐도록 스텁을 심는다(아래 dropAt 참고).
 
 const dom = new JSDOM("<div id='room-rack-view'></div>", { pretendToBeVisual: true });
 const { window } = dom;
@@ -67,9 +69,10 @@ const api = new Function(...names,
   renderSrc + "\n" + dragSrc + "\nreturn {renderRoomRackView: renderRoomRackView};")
   (...names.map((k) => stub[k]));
 
-function srv(id, name, unit, height) {
-  return { id: id, name: name, ip: "10.0.0." + id, room_rack: "A09",
-           room_unit: unit, room_height: height, location: "A09U" + unit,
+function srv(id, name, unit, height, rack) {
+  rack = rack || "A09";
+  return { id: id, name: name, ip: "10.0.0." + id, room_rack: rack,
+           room_unit: unit, room_height: height, location: rack + "U" + unit,
            status: "done" };
 }
 function render(servers) {
@@ -147,6 +150,71 @@ c = cellOf("SRV-C");
 drag(c, 21);
 check("드래그로 상세가 열리지 않음", detailOpened === false);
 
+// ── ⑦ 장비 드래그 이동 ──────────────────────────────────────────
+// jsdom은 레이아웃이 없으므로 elementFromPoint가 항상 null이다.
+// '커서 아래 칸'을 테스트가 지정할 수 있게 스텁을 심는다.
+let _under = null;
+doc.elementFromPoint = () => _under;
+
+function moveTo(cell, rack, unit) {
+  _under = doc.querySelector('.ru[data-rack="' + rack + '"][data-unit="' + unit + '"]');
+  cell.dispatchEvent(new window.MouseEvent("mousedown",
+    { bubbles: true, button: 0, clientX: 100, clientY: 100 }));
+  doc.dispatchEvent(new window.MouseEvent("mousemove",
+    { bubbles: true, clientX: 140, clientY: 140 }));   // 임계값(4px) 넘김
+  doc.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true }));
+}
+
+console.log("\n[장비 드래그 이동]");
+saved.length = 0;
+render([srv(10, "SRV-MOVE", 20, 1), srv(11, "SRV-STAY", 10, 1)]);
+let mv = cellOf("SRV-MOVE");
+moveTo(mv, "A09", 30);
+check("빈 유닛으로 옮기면 위치가 저장된다", saved.length === 1 &&
+  saved[0].body.location === "A09U30", saved.map((s) => s.body.location));
+check("옮긴 장비의 엔드포인트", saved[0].url === "/api/servers/10", saved[0].url);
+
+saved.length = 0;
+render([srv(12, "SRV-A2", 20, 1), srv(13, "SRV-B2", 10, 1)]);
+moveTo(cellOf("SRV-A2"), "A09", 10);
+check("다른 장비가 쓰는 칸에는 못 놓는다(저장 없음)", saved.length === 0,
+  saved.map((s) => s.body.location));
+
+saved.length = 0;
+render([srv(14, "SRV-3U", 18, 3)]);                 // U18-U20
+moveTo(cellOf("SRV-3U"), "A09", 30);
+check("3U 장비는 커서 칸이 윗변 → U28-U30", saved[0].body.location === "A09U28-U30",
+  saved[0].body.location);
+
+saved.length = 0;
+render([srv(15, "SRV-EDGE", 20, 3)]);               // U20-U22
+moveTo(cellOf("SRV-EDGE"), "A09", 2);               // 아래가 U1 밖으로 넘어감
+check("랙 아래로 삐져나가는 자리에는 못 놓는다", saved.length === 0,
+  saved.map((s) => s.body.location));
+
+saved.length = 0;
+render([srv(18, "SRV-CROSS", 20, 1), srv(19, "SRV-OTHER", 5, 1, "B12")]);
+moveTo(cellOf("SRV-CROSS"), "B12", 30);
+check("다른 랙으로도 옮길 수 있다", saved.length === 1 &&
+  saved[0].body.location === "B12U30", saved.map((s) => s.body.location));
+
+saved.length = 0;
+render([srv(16, "SRV-SAME", 20, 1)]);
+moveTo(cellOf("SRV-SAME"), "A09", 20);              // 제자리
+check("제자리에 놓으면 저장하지 않는다", saved.length === 0);
+
+// 클릭(이동 없음)은 상세를 막지 않아야 한다
+saved.length = 0;
+render([srv(17, "SRV-CLICK", 25, 1)]);
+mv = cellOf("SRV-CLICK");
+mv.dispatchEvent(new window.MouseEvent("mousedown",
+  { bubbles: true, button: 0, clientX: 100, clientY: 100 }));
+doc.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true }));
+let clicked = false;
+doc.addEventListener("click", () => { clicked = true; });
+mv.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("이동 없이 클릭하면 상세가 열린다", clicked === true);
+
 console.log("\n" + "=".repeat(60));
 if (fails) { console.log("FAILED " + fails + "건"); process.exit(1); }
-console.log("ALL PASS — 랙 높이 드래그(아래로 = U 감소) 검증 통과");
+console.log("ALL PASS — 랙 높이 드래그 + 장비 이동 검증 통과");

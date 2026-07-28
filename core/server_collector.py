@@ -1642,11 +1642,16 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                                     server_id=server_id, ip=ip)
                 else:
                     errors.append("SNMP 응답에 사양 정보(HOST-RESOURCES-MIB)가 없습니다")
+            except snmp_collect.SnmpClosed:
+                # 서버는 살아 있는데 161을 아무도 안 듣는다 → 커뮤니티를 백날 바꿔도 안 된다.
+                errors.append("SNMP 미동작 — 이 서버에 snmpd가 떠 있지 않습니다"
+                              "(설치·기동해야 사양 수집 가능)")
+                utils.log_event("info", "server_snmp_closed", server_id=server_id, ip=ip)
             except Exception as e:
-                # 무응답이 대부분이다 — 사용자에게 '다음에 뭘 하면 되는지'만 알린다.
+                # 타임아웃 등 — 원인이 둘(차단/커뮤니티)이라 둘 다 알린다.
                 errors.append(
-                    "SNMP(161/UDP) 응답 없음 — 서버에서 snmpd 허용 또는 "
-                    "설정▸SNMP 커뮤니티 확인 (%s)" % str(e)[:60])
+                    "SNMP 응답 없음 — UDP 161 차단 또는 커뮤니티 불일치"
+                    "(설정▸SNMP 커뮤니티 확인) (%s)" % str(e)[:60])
                 utils.log_event("info", "server_snmp_no_reply", server_id=server_id, ip=ip)
 
     # VM 자동 추정(MAC 확보 시) — 사용자가 이미 VM으로 지정했으면 유지

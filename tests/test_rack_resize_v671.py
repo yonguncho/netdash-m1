@@ -80,3 +80,56 @@ def test_jsdom_drag_behaviour():
         pytest.skip("jsdom 미설치")
     assert p.returncode == 0, out[-2000:]
     assert "ALL PASS" in out
+
+
+# ── 장비 드래그 이동 (v6.7.2) ───────────────────────────────────
+def _move_block():
+    i = APPJS.index("function _rackOccupancy(")
+    return APPJS[i:i + 5200]
+
+
+def test_move_uses_screen_occupancy():
+    """어느 U가 찼는지는 화면에 그려진 것에서 읽어야 어긋나지 않는다."""
+    b = _move_block()
+    assert 'querySelectorAll(".rackframe")' in b
+    assert "o.taken[i] = cell.getAttribute(\"data-devid\")" in b
+
+
+def test_move_rejects_occupied_and_out_of_rack():
+    b = _move_block()
+    assert "if (base < 1 || topU > o.maxU) return null;" in b \
+        or "base < 1 || topU > o.maxU" in b, "랙 경계를 안 본다"
+    assert "o.taken[u] != null && o.taken[u] !== selfId" in b, "겹침을 안 막는다"
+
+
+def test_move_ignores_resize_grip():
+    """손잡이는 높이 조절이다 — 이동으로 가로채면 크기 조절이 안 된다."""
+    b = _move_block()
+    assert 'if (e.target.closest(".ru__grip")) return;' in b
+
+
+def test_move_has_click_threshold():
+    """살짝 흔들린 것으로 상세 팝업을 막으면 안 된다."""
+    b = _move_block()
+    assert "< 4 && Math.abs(ev.clientY - startY) < 4) return;" in b
+
+
+def test_click_swallow_does_not_leak():
+    """드래그 뒤 click이 안 오면, 남은 리스너가 나중의 정상 클릭을 잡아먹었다."""
+    b = _move_block()
+    assert 'removeEventListener("click", swallow, true);' in b
+    i = b.index("function swallow(")
+    head = b[i:i + 320]
+    assert "=== dragged" in head, "아무 클릭이나 삼키면 안 된다"
+
+
+def test_ghost_does_not_block_hit_testing():
+    """유령이 커서를 가리면 놓을 칸을 못 찾는다."""
+    css = (ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    i = css.index(".ru--ghost")
+    assert "pointer-events: none" in css[i:i + 200]
+    assert ".ru--drop-ok" in css and ".ru--drop-bad" in css, "놓을 자리 표시가 없다"
+
+
+def test_drag_is_discoverable():
+    assert "장비를 끌어 옮기면 위치가 저장" in APPJS, "드래그 가능하다는 안내가 없다"

@@ -1478,7 +1478,9 @@ function renderRoomRackView(switches, firewalls, servers) {
       "<div class='rackframe__slots'>" + slots + "</div></div>";
   }
 
-  var legend = "<div class='rack-legend'>" +
+  var legend = "<div class='rack-legend'><span class='rack-legend__how'>" +
+    "장비를 끌어 옮기면 위치가 저장되고, 아래 모서리를 끌면 높이(U)가 조절됩니다" +
+    "</span>" +
     Object.keys(_RACK_KIND).filter(function (k) { return k !== "_" && _RACK_KIND[k].t; }).map(function (k) {
       return "<span><i style='background:" + _RACK_KIND[k].c + "'></i>" + _RACK_KIND[k].t + "</span>";
     }).join("") + "</div>";
@@ -1584,6 +1586,142 @@ document.addEventListener("mousedown", function (e) {
       if (typeof loadServers === "function") loadServers();
       pollState();
     }).catch(function (err) { console.error(err); alert("높이 저장 오류: " + err); });
+  }
+
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+});
+
+// ─── 랙 장비 드래그 이동 ─────────────────────────────────────────
+// 장비를 잡아 다른 유닛(다른 랙도 가능)으로 끌어다 놓으면 위치가 바로 저장된다.
+// 손잡이(.ru__grip)는 높이 조절이므로 여기서 제외한다.
+
+function _rackOccupancy(host) {
+  // 화면에 그려진 것에서 '어느 랙의 어느 U가 찼는지'를 읽는다.
+  // 서버 응답을 다시 조합하는 것보다 화면과 어긋날 여지가 없다.
+  var occ = {};
+  host.querySelectorAll(".rackframe").forEach(function (frame) {
+    frame.querySelectorAll(".ru").forEach(function (cell) {
+      var rk = cell.getAttribute("data-rack");
+      var u = parseInt(cell.getAttribute("data-unit"), 10);
+      if (!rk || !u) return;
+      var o = (occ[rk] = occ[rk] || { maxU: 1, taken: {} });
+      var h = Math.max(1, parseInt(cell.getAttribute("data-h"), 10) || 1);
+      if (cell.classList.contains("ru--dev")) {
+        for (var i = u; i < u + h; i++) o.taken[i] = cell.getAttribute("data-devid");
+      }
+      if (u + h - 1 > o.maxU) o.maxU = u + h - 1;
+    });
+  });
+  return occ;
+}
+
+function _rackDropTarget(occ, rack, topU, h, selfId) {
+  // topU를 장비 윗변으로 삼는다 — 커서가 가리킨 칸이 곧 장비의 맨 위 칸.
+  var base = topU - h + 1;
+  var o = occ[rack];
+  if (!o || base < 1 || topU > o.maxU) return null;
+  for (var u = base; u <= topU; u++) {
+    if (o.taken[u] != null && o.taken[u] !== selfId) return null;   // 다른 장비가 이미 씀
+  }
+  return { rack: rack, unit: base, top: topU };
+}
+
+document.addEventListener("mousedown", function (e) {
+  if (e.button !== 0) return;
+  if (e.target.closest(".ru__grip")) return;          // 높이 조절 손잡이
+  var cell = e.target.closest(".ru--dev");
+  if (!cell) return;
+  var host = cell.closest("#room-rack-view");
+  if (!host) return;
+
+  var kind = cell.getAttribute("data-kind");
+  var devId = cell.getAttribute("data-devid");
+  var h = Math.max(1, parseInt(cell.getAttribute("data-h"), 10) || 1);
+  var fromRack = cell.getAttribute("data-rack");
+  var fromUnit = parseInt(cell.getAttribute("data-unit"), 10);
+  var startX = e.clientX, startY = e.clientY;
+  var occ = null, ghost = null, target = null, moved = false;
+
+  function clearHint() {
+    host.querySelectorAll(".ru--drop-ok, .ru--drop-bad").forEach(function (c) {
+      c.classList.remove("ru--drop-ok", "ru--drop-bad");
+    });
+  }
+
+  function begin() {
+    moved = true;
+    occ = _rackOccupancy(host);
+    ghost = cell.cloneNode(true);
+    ghost.classList.add("ru--ghost");
+    ghost.style.width = cell.offsetWidth + "px";
+    ghost.style.height = cell.offsetHeight + "px";
+    document.body.appendChild(ghost);
+    cell.classList.add("ru--moving");
+    document.body.classList.add("ru-moving");
+  }
+
+  function onMove(ev) {
+    if (!moved) {
+      // 클릭과 구분한다 — 살짝 흔들린 것으로 상세 팝업을 막으면 안 된다.
+      if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+      begin();
+    }
+    ev.preventDefault();
+    ghost.style.left = (ev.clientX + 10) + "px";
+    ghost.style.top = (ev.clientY - 8) + "px";
+
+    // 유령은 pointer-events:none 이라 아래 칸이 그대로 잡힌다
+    var under = document.elementFromPoint(ev.clientX, ev.clientY);
+    var slot = under && under.closest ? under.closest(".ru") : null;
+    clearHint();
+    target = null;
+    if (!slot || !host.contains(slot)) return;
+    var rk = slot.getAttribute("data-rack");
+    var u = parseInt(slot.getAttribute("data-unit"), 10);
+    if (!rk || !u) return;
+    target = _rackDropTarget(occ, rk, u, h, devId);
+    if (!target) { slot.classList.add("ru--drop-bad"); return; }
+    for (var i = target.unit; i <= target.top; i++) {
+      var c = host.querySelector('.ru[data-rack="' + rk + '"][data-unit="' + i + '"]');
+      if (c) c.classList.add("ru--drop-ok");
+    }
+  }
+
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (!moved) return;                       // 그냥 클릭 — 상세 팝업은 그대로 열린다
+    clearHint();
+    if (ghost) ghost.remove();
+    cell.classList.remove("ru--moving");
+    document.body.classList.remove("ru-moving");
+    // 드래그 직후의 click 한 번은 삼킨다(장비 상세가 딸려 열리지 않게).
+    // 단 '방금 끈 그 장비'일 때만 삼킨다 — 무조건 삼키면, 드롭 뒤 click이 오지
+    // 않은 경우 리스너가 남아 나중의 멀쩡한 클릭을 대신 잡아먹는다.
+    var dragged = cell;
+    document.addEventListener("click", function swallow(ce) {
+      document.removeEventListener("click", swallow, true);
+      if (ce.target.closest && ce.target.closest(".ru--dev") === dragged) {
+        ce.stopPropagation();
+      }
+    }, true);
+    if (!target) return;                      // 놓을 자리가 아님 — 원위치
+    if (target.rack === fromRack && target.unit === fromUnit) return;
+    var loc = _ruLocation(target.rack, target.unit, h);
+    fetch(_ruEndpoint(kind, devId), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ location: loc }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; })
+        .then(function (b) { return { ok: r.ok, b: b }; });
+    }).then(function (res) {
+      if (!res.ok) alert((res.b && res.b.error) || "위치 저장 실패");
+      if (typeof loadFirewalls === "function") loadFirewalls();
+      if (typeof loadServers === "function") loadServers();
+      pollState();
+    }).catch(function (err) { console.error(err); alert("위치 저장 오류: " + err); });
   }
 
   document.addEventListener("mousemove", onMove);
