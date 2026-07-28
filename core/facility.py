@@ -13,6 +13,7 @@
 import ipaddress
 import re
 import threading
+import time
 
 from . import db, utils
 from . import collector as _collector
@@ -22,19 +23,66 @@ _SWEEP_CHUNK = 32
 _SWEEP_PING_GAP = 0.05   # 초 — /23(510개) 기준 총 +26초, 제어평면 여유 확보
 
 # 진행 상태(메모리). {"running","subnet","done","total","message"}
-_status = {"running": False, "subnet": None, "done": 0, "total": 0, "message": ""}
+_status = {"running": False, "subnet": None, "done": 0, "total": 0, "message": "",
+           "started_at": None}
 _lock = threading.Lock()
 _stop_requested = False   # 사용자 '수집 중지' 요청 플래그
+_worker = None            # 진행 중인 수집 스레드 — 죽었는데 running이 남는 것 방지
+
+
+def _reap_dead_worker():
+    """수집 스레드가 죽었는데 running 플래그만 남은 상태를 스스로 푼다.
+
+    이 플래그가 한 번 걸리면 재수집이 전부 409로 막히고, 되돌릴 방법이 exe 재시작
+    뿐이었다. 스레드가 이미 끝났다면 '수집 중'이라고 우길 근거가 없다.
+    호출자는 _lock을 잡은 상태여야 한다.
+    """
+    global _worker
+    if not _status.get("running"):
+        return False
+    if _worker is None or _worker.is_alive():
+        # 등록된 스레드가 없으면 판단 근거가 없다 — 함부로 풀면 진행 중인
+        # 수집을 '끝났다'고 단정해 두 개가 동시에 돌 수 있다.
+        return False
+    _worker = None
+    _status["running"] = False
+    _status["message"] = "이전 수집이 비정상 종료되어 상태를 초기화했습니다"
+    utils.log_event("warning", "facility_stale_running_cleared",
+                    subnet=_status.get("subnet"))
+    return True
 
 
 def get_status():
     with _lock:
+        _reap_dead_worker()
         st = dict(_status)
         # 중지 요청이 접수됐음을 화면이 알 수 있게 노출한다.
         # 이게 없으면 진행바가 1.5초마다 '⏹ 수집 중지' 버튼을 새로 그려서,
         # 사용자는 중지가 안 먹은 것으로 오해한다(실제로는 마무리 중).
         st["stopping"] = bool(_stop_requested and _status.get("running"))
+        st["elapsed_sec"] = (int(time.time() - st["started_at"])
+                             if st.get("started_at") and st.get("running") else 0)
         return st
+
+
+def busy_reason():
+    """수집 중이면 '무엇이 얼마나 진행됐는지' 한 줄로. 아니면 빈 문자열.
+
+    409를 그냥 '이미 수집 중입니다'로만 돌려주면, 사용자는 무엇이 왜 막는지
+    알 수 없어 '버튼이 고장났다'로 받아들인다.
+    """
+    st = get_status()
+    if not st.get("running"):
+        return ""
+    parts = []
+    if st.get("subnet"):
+        parts.append("%s 대역" % st["subnet"])
+    if st.get("total"):
+        parts.append("%d/%d" % (st.get("done") or 0, st["total"]))
+    if st.get("elapsed_sec"):
+        m, s = divmod(st["elapsed_sec"], 60)
+        parts.append("%d분 %d초 경과" % (m, s) if m else "%d초 경과" % s)
+    return " · ".join(parts)
 
 
 def request_stop():
@@ -1120,7 +1168,7 @@ def run_auto_scan(db_path):
     """
     from . import credentials
     from . import pcprofile
-    global _stop_requested
+    global _stop_requested, _worker
     with _lock:
         _stop_requested = False   # 새 전체 스캔 시작 — 이전 중지 요청 잔류 해제
     band_map = get_band_map(db_path)
@@ -1150,11 +1198,16 @@ def run_auto_scan(db_path):
         username, password = dec.split("|", 1)
         try:
             with _lock:
+                _reap_dead_worker()
                 if _status["running"]:
                     skipped += 1
                     continue
                 _status["running"] = True
                 _status["message"] = "자동 스캔: " + subnet
+                _status["started_at"] = time.time()
+                # 이 스레드를 주인으로 등록해야, 도중에 죽어도 다음 요청이
+                # 잔류 플래그를 풀 수 있다(안 하면 재수집이 영영 409).
+                _worker = threading.current_thread()
             _res = collect_band(db_path, switch_id, subnet, username, password, src)
             scanned += 1
             # collect_band는 중지 플래그를 '소비 완료'로 보고 스스로 해제한다.
@@ -1171,6 +1224,9 @@ def run_auto_scan(db_path):
                             error=_collector._sanitize_error_msg(str(e)))
         finally:
             dec = username = password = None
+    with _lock:
+        if _worker is threading.current_thread():
+            _worker = None
     utils.log_event("info", "facility_auto_scan_done", scanned=scanned, skipped=skipped)
     return {"scanned": scanned, "skipped": skipped}
 
@@ -1180,20 +1236,36 @@ def start_collect_band(db_path, switch_id, subnet, username, password, source_ip
 
     TOCTOU 방지: running 플래그를 같은 lock 구간에서 즉시 True로 set한다.
     """
-    global _stop_requested
+    global _stop_requested, _worker
     with _lock:
+        # 죽은 스레드의 잔류 플래그면 여기서 푼다 — 아니면 재수집이 영영 409다.
+        _reap_dead_worker()
         if _status["running"]:
             return False
         _status["running"] = True
         _status["message"] = "시작 중"
+        _status["started_at"] = time.time()
         # 이전 스캔의 잔류 플래그를 여기서 해제한다(스레드 시작 전 = 경합 없음)
         _stop_requested = False
     def _run():
+        global _worker
         try:
             collect_band(db_path, switch_id, subnet, username, password, source_ip)
         except Exception as e:
             _set(running=False, message="실패: " + _collector._sanitize_error_msg(str(e)))
             utils.log_event("error", "facility_collect_error",
                             error=_collector._sanitize_error_msg(str(e)))
-    threading.Thread(target=_run, daemon=True).start()
+        finally:
+            # 어떤 경로로 끝나든 '수집 중'으로 남지 않게 한다. collect_band가
+            # running=False를 놓치는 경로(중간 return 등)까지 여기서 덮는다.
+            _set(running=False)
+            # 끝난 스레드를 주인으로 남겨두면, 나중에 다른 경로가 running을 켰을 때
+            # '죽은 주인'으로 보여 엉뚱하게 초기화된다.
+            with _lock:
+                if _worker is t:
+                    _worker = None
+    t = threading.Thread(target=_run, daemon=True)
+    with _lock:
+        _worker = t
+    t.start()
     return True

@@ -152,16 +152,54 @@ function clock() {
     var btn = e.target.closest(".pcard__recollect");
     if (!btn) return;
     var ip = btn.getAttribute("data-ip"), subnet = btn.getAttribute("data-subnet");
+    startRecollect(btn, ip, subnet, true);
+  });
+
+  function reset(btn) { btn.disabled = false; btn.textContent = "재수집"; }
+
+  // 대역 수집은 스위치 제어평면 부담 때문에 동시에 하나만 돈다. 다른 대역이
+  // 도는 중이면 409가 온다. 예전에는 '이미 수집 중입니다' 한 줄만 띄워서
+  // 사용자에겐 버튼이 그냥 안 먹는 것처럼 보였다 → 무엇이 도는지 보여주고,
+  // 원하면 그걸 멈추고 이어서 실행한다.
+  function startRecollect(btn, ip, subnet, allowTakeover) {
     btn.disabled = true; btn.textContent = "시작…";
     fetch("/api/facility/recollect", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ip: ip, subnet: subnet}),
     }).then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (res) {
-        if (res.ok) { btn.textContent = "재수집 중…"; }
-        else { alert((res.b && res.b.error) || "재수집 실패"); btn.disabled = false; btn.textContent = "재수집"; }
-      }).catch(function () { btn.disabled = false; btn.textContent = "재수집"; });
-  });
+        if (res.ok) { btn.textContent = "재수집 중…"; return; }
+        var b = res.b || {};
+        if (b.busy && allowTakeover &&
+            confirm((b.error || "다른 수집이 진행 중입니다.") +
+                    "\n\n진행 중인 수집을 중지하고 이 대역을 재수집할까요?" +
+                    "\n(중지해도 그때까지 수집된 결과는 저장됩니다)")) {
+          btn.textContent = "중지 중…";
+          stopThenRetry(btn, ip, subnet);
+          return;
+        }
+        alert(b.error || "재수집 실패");
+        reset(btn);
+      }).catch(function () { reset(btn); });
+  }
+
+  function stopThenRetry(btn, ip, subnet) {
+    fetch("/api/facility/stop", {method: "POST"}).then(function () {
+      // 중지는 즉시 끝나지 않는다 — 워커가 진행 중인 청크를 마치고 부분 저장한다.
+      var tries = 0;
+      (function wait() {
+        if (++tries > 30) {
+          alert("이전 수집이 아직 끝나지 않았습니다. 잠시 후 다시 시도하세요.");
+          reset(btn);
+          return;
+        }
+        fetch("/api/facility").then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.status && d.status.running) { setTimeout(wait, 2000); return; }
+          startRecollect(btn, ip, subnet, false);   // 한 번만 — 무한 가로채기 방지
+        }).catch(function () { setTimeout(wait, 2000); });
+      })();
+    }).catch(function () { reset(btn); });
+  }
 })();
 
 refresh();

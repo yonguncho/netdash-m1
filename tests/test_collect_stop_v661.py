@@ -64,7 +64,7 @@ def test_collect_band_does_not_reset_stop_flag():
 def test_start_resets_stop_flag_before_thread():
     src = (ROOT / "core" / "facility.py").read_text(encoding="utf-8")
     i = src.index("def start_collect_band(")
-    body = src[i:i + 900]
+    body = src[i:i + 2000]
     assert "_stop_requested = False" in body
     assert body.index("_stop_requested = False") < body.index("threading.Thread"), \
         "스레드를 띄운 뒤에 초기화하면 경합이 남는다"
