@@ -142,9 +142,15 @@ def test_rackview_renders_span_not_duplicate_rows():
 
 
 def test_rackview_put_does_not_overwrite_occupied():
+    """이미 찬 유닛은 덮어쓰지 않는다 — 단, 장비를 통째로 빠뜨려서도 안 된다.
+
+    v6.7.1 이전에는 겹치면 그냥 return 해서 장비가 랙뷰에서 사라졌다
+    ('갑자기 장비가 삭제된다'의 실제 원인).
+    """
     i = APPJS.index("function _put(d)")
-    block = APPJS[i:i + 700]
-    assert "return;   // 이미 다른 장비가 차지" in block or "이미 다른 장비가 차지" in block
+    block = APPJS[i:i + 1200]
+    assert "if (slot[x] || span[x] != null) break;" in block, "겹침을 안 막는다"
+    assert "conflicts.push(d)" in block, "겹친 장비를 조용히 버리면 안 된다"
 
 
 def test_resize_grip_exists_and_saves():

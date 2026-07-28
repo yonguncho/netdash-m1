@@ -184,6 +184,11 @@ function _applyLocFilter(list, inputId) {
       _setChk("ac-reach-enabled", d.reach_enabled !== false);
       _setVal("ac-retention", d.retention_days || "90");
       _setVal("ac-timezone", d.display_timezone || "America/New_York");
+      _setChk("ac-snmp-enabled", d.snmp_enabled !== false);
+      // 커뮤니티는 자격증명이라 서버가 값을 안 내려준다 — 저장 여부만 안내한다.
+      _setVal("ac-snmp-community", "");
+      var sc = document.getElementById("ac-snmp-community");
+      if (sc) sc.placeholder = d.snmp_has_community ? "저장됨 (변경 시에만 입력)" : "public";
       _applyTimezone(d);            // 표시 즉시 반영
       var info = document.getElementById("ac-fac-info");
       if (info) info.textContent = (d.facility_bands || 0) + "개 대역이 자동 스캔 대상으로 기억되어 있습니다. " +
@@ -254,6 +259,8 @@ function _applyLocFilter(list, inputId) {
       reach_enabled: _chk("ac-reach-enabled"),
       retention_days: _val("ac-retention", "90"),
       display_timezone: _val("ac-timezone", "America/New_York"),
+      snmp_enabled: _chk("ac-snmp-enabled"),
+      snmp_community: _val("ac-snmp-community", ""),
     };
     var emailBody = {
       enabled: _chk("em-enabled"), smtp_host: _val("em-host", ""), smtp_port: _val("em-port", "25"),
@@ -1392,19 +1399,27 @@ function renderRoomRackView(switches, firewalls, servers) {
   }
   // {rack: {unit: device}} — 다중 U 장비는 시작 유닛에 두고, 나머지 유닛은
   // spans에 '주인 유닛'을 적어 빈 칸으로 그리지 않는다(한 덩어리로 보이게).
-  var racks = {}, spans = {};
+  var racks = {}, spans = {}, conflicts = [];
   function _put(d) {
     var rk = d.o.room_rack, u = d.o.room_unit;
     if (!rk || !u) return;
     var h = Math.max(1, _num(d.o.room_height) || 1);
-    d.h = h;
     var slot = (racks[rk] = racks[rk] || {});
     var span = (spans[rk] = spans[rk] || {});
+    // 겹치면 장비를 통째로 빠뜨리면 안 된다. 예전에는 조용히 건너뛰어서,
+    // 높이를 잘못 저장하는 순간 장비가 랙뷰에서 사라져 '삭제된 것처럼' 보였다.
+    // → 들어가는 만큼만 줄여 배치하고, 시작 유닛까지 이미 찼으면 랙 아래에
+    //   '위치 겹침'으로 드러내 사용자가 고칠 수 있게 한다.
+    var fit = 0;
     for (var x = u; x < u + h; x++) {
-      if (slot[x] || span[x] != null) return;   // 이미 다른 장비가 차지 — 덮어쓰지 않음
+      if (slot[x] || span[x] != null) break;
+      fit++;
     }
+    if (!fit) { d.h = h; conflicts.push(d); return; }
+    d.h = fit;
+    d.clipped = fit < h;
     slot[u] = d;
-    for (var y = u + 1; y < u + h; y++) span[y] = u;
+    for (var y = u + 1; y < u + fit; y++) span[y] = u;
   }
   switches.forEach(function (sw) { _put({ k: "sw", o: sw }); });
   firewalls.forEach(function (f) { _put({ k: "fw", o: f }); });
@@ -1437,7 +1452,8 @@ function renderRoomRackView(switches, firewalls, servers) {
         var act = isFw ? ("data-action='detail-fw' data-id='" + obj.id + "'")
                        : isSrv ? ""   // 서버는 랙뷰에서 클릭 상세 없음(서버 현황 탭에서 관리)
                        : ("data-action='detail-switch' data-payload='" + payloadAttr((obj)) + "'");
-        var uLabel = h > 1 ? ("U" + u + "-" + (u + h - 1)) : ("U" + u);
+        var uLabel = h > 1 ? ("U" + u + "-U" + (u + h - 1)) : ("U" + u);
+        if (d.clipped) uLabel = "⚠ " + uLabel;
         slots += "<div class='ru ru--dev" + (h > 1 ? " ru--multi" : "") + "' " + act +
           " data-rack='" + escHtml(rk) + "' data-unit='" + u + "' data-h='" + h + "'" +
           " data-kind='" + d.k + "' data-devid='" + obj.id + "'" +
@@ -1467,11 +1483,19 @@ function renderRoomRackView(switches, firewalls, servers) {
       return "<span><i style='background:" + _RACK_KIND[k].c + "'></i>" + _RACK_KIND[k].t + "</span>";
     }).join("") + "</div>";
 
+  // 자리가 겹쳐 랙에 못 그린 장비 — 화면에서 사라지지 않게 따로 보여준다.
+  var conflictHtml = !conflicts.length ? "" :
+    "<div class='rack-conflicts'><b>⚠ 위치 겹침 " + conflicts.length + "대</b> — " +
+    "다른 장비가 이미 쓰는 유닛입니다. 위치(U)를 고쳐주세요: " +
+    conflicts.map(function (d) {
+      return escHtml((d.o.name || "") + " (" + (d.o.location || "") + ")");
+    }).join(", ") + "</div>";
+
   host.innerHTML = legend + Object.keys(rows).sort().map(function (letter) {
     var racksHtml = rows[letter].sort().map(_rackHtml).join("");
     return "<div class='rack-group'><div class='rack-group__title'>🗄 " + escHtml(letter) +
       " 열</div><div class='rack-row rack-row--frames'>" + racksHtml + "</div></div>";
-  }).join("");
+  }).join("") + conflictHtml;
 }
 
 // ─── 랙 실장 높이(U) 드래그 조절 ─────────────────────────────────
@@ -1505,19 +1529,36 @@ document.addEventListener("mousedown", function (e) {
   var startY = e.clientY;
   var curH = startH;
 
+  // 랙은 위가 U42, 아래가 U1이다. 손잡이는 장비 **아래쪽**에 있으므로 아래로 끌면
+  // 아래 유닛(= 더 작은 번호)까지 차지한다 → 윗변(topU)은 그대로, 시작 유닛이 내려간다.
+  // 예전에는 시작 유닛을 고정한 채 h만 키워, 화면은 아래로 늘어나는데 저장은
+  // 위쪽(U13→U15)으로 됐다. 그래서 새로고침하면 장비가 위로 튀고, 위 장비와
+  // 겹치면 랙뷰에서 아예 사라져(= 삭제된 것처럼) 보였다.
+  var topU = unit + startH - 1;
+
+  // 아래로 몇 칸까지 늘릴 수 있는지 — 바로 아래 빈 칸 수만큼만 허용한다.
+  // (겹치도록 놔두면 저장 후 한 장비가 화면에서 사라진다)
+  var freeBelow = 0;
+  for (var sib = cell.nextElementSibling; sib; sib = sib.nextElementSibling) {
+    if (!sib.classList.contains("ru--empty")) break;
+    freeBelow++;
+  }
+  var maxH = Math.min(42, topU, startH + freeBelow);
+
   cell.classList.add("ru--resizing");
   document.body.classList.add("ru-resizing");
 
   function onMove(ev) {
     // 아래로 끌수록(+dy) 아래 유닛을 더 차지 → 높이 증가
     var dy = ev.clientY - startY;
-    var h = Math.max(1, Math.min(42, startH + Math.round(dy / _RU_H)));
+    var h = Math.max(1, Math.min(maxH, startH + Math.round(dy / _RU_H)));
     if (h === curH) return;
     curH = h;
     cell.style.setProperty("--ru-span", h);
     cell.classList.toggle("ru--multi", h > 1);
     var lbl = cell.querySelector(".ru__u");
-    if (lbl) lbl.textContent = h > 1 ? ("U" + unit + "-" + (unit + h - 1)) : ("U" + unit);
+    var base = topU - h + 1;              // 아래로 늘어난 만큼 시작 유닛이 내려간다
+    if (lbl) lbl.textContent = h > 1 ? ("U" + base + "-U" + topU) : ("U" + topU);
   }
 
   function onUp() {
@@ -1526,7 +1567,7 @@ document.addEventListener("mousedown", function (e) {
     cell.classList.remove("ru--resizing");
     document.body.classList.remove("ru-resizing");
     if (curH === startH) return;                 // 변화 없음
-    var loc = _ruLocation(rack, unit, curH);
+    var loc = _ruLocation(rack, topU - curH + 1, curH);
     fetch(_ruEndpoint(kind, devId), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

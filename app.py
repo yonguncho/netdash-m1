@@ -3569,6 +3569,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 # DB는 서버 PC의 로컬 시각을 시간대 표기 없이 저장한다 →
                 # 화면이 실제 순간을 복원하려면 서버의 UTC 오프셋이 필요하다.
                 "server_tz_offset_min": _server_tz_offset_min(),
+                # SNMP 사양 수집(SSH가 닫힌 리눅스·UNIX 서버용) — 커뮤니티 값은
+                # 자격증명이므로 내려주지 않고 '설정됨' 여부만 알린다.
+                "snmp_enabled": db.get_setting(db_path, "snmp_enabled", "1") != "0",
+                "snmp_has_community": bool(
+                    db.get_setting(db_path, "snmp_community_blob", "")),
             })
         except Exception as e:
             log_event("error", "get_auto_collect_error", error=collector._sanitize_error_msg(str(e)))
@@ -3616,6 +3621,17 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             tz = _sv_text(data.get("display_timezone"), 64)
             if tz in ALLOWED_TIMEZONES:
                 db.set_setting(db_path, "display_timezone", tz)
+
+            # SNMP 사양 수집 on/off + 커뮤니티(암호화 저장, 빈 값이면 기존 값 유지)
+            db.set_setting(db_path, "snmp_enabled",
+                           "1" if data.get("snmp_enabled", True) else "0")
+            # 빈 값은 '변경 없음'이다 — 화면이 저장된 커뮤니티를 되돌려주지 않으므로
+            # 빈 값으로 덮어쓰면 다른 설정을 저장할 때마다 커뮤니티가 지워진다.
+            comm = data.get("snmp_community")
+            if isinstance(comm, str) and comm.strip():
+                blob = credentials.encrypt_text(comm.strip()[:64])
+                if blob:
+                    db.set_setting(db_path, "snmp_community_blob", blob)
 
             log_event("info", "auto_collect_set", enabled=enabled, times=",".join(valid[:6]),
                       facility=fac_enabled, retention=days)

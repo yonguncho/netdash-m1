@@ -42,7 +42,8 @@ def test_auth_failure_says_why(temp_db, monkeypatch):
     sc.collect_server(temp_db, sid, "svc", "wrong")
     err = db.get_server(temp_db, sid).get("last_error") or ""
     assert "인증 실패" in err, err
-    assert "공통 계정" in err, "OS가 다른 서버에 공통 계정이 안 되는 점을 알려야 한다"
+    # 어떤 계정으로 시도했는지와 조치를 알려야 한다(v6.7.1에서 문구 구체화)
+    assert "시도한 계정" in err and "계정을 저장" in err, err
 
 
 def test_specs_empty_after_ssh_says_why(temp_db, monkeypatch):

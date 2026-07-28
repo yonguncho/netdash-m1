@@ -202,6 +202,62 @@ def netbios_name(ip, timeout=2):
                 pass
 
 
+def _cred_candidates(db_path, server_id, username, password):
+    """시도할 계정 후보 [(user, pw, 라벨)] — 입력 계정 → 이 서버에 저장된 계정.
+
+    수집 팝업에 공통 계정을 넣으면 **서버별 저장 계정을 덮어써서**, OS가 섞인
+    환경(Windows·RHEL·SUSE·Debian)에서는 대부분 인증 실패가 났다.
+    입력 계정이 거부되면 그 서버에 저장된 계정으로 한 번 더 시도한다.
+
+    시도 횟수는 최대 2회로 제한한다 — 계정 잠금 정책이 있는 환경에서 후보를
+    무한정 돌리면 계정이 잠긴다.
+    """
+    out = []
+    if username and password:
+        out.append((username, password, "입력 계정"))
+    try:
+        blob = db.get_server_credential(db_path, server_id)
+        if blob:
+            dec = credentials.decrypt_credential(blob)
+            if dec and "|" in dec:
+                u, pw = dec.split("|", 1)
+                if u and pw and (u, pw) not in [(c[0], c[1]) for c in out]:
+                    out.append((u, pw, "저장 계정"))
+    except Exception:
+        pass
+    return out[:2]
+
+
+def _is_auth_error(e):
+    t = str(e).lower()
+    return "authentication" in t or "auth failed" in t or "인증" in t
+
+
+# SNMP 기본값 — 폐쇄망 운영 서버는 감시용 snmpd가 이미 떠 있는 경우가 많다.
+# 읽기 전용 GET만 쓰므로 기본 켬으로 두되, 커뮤니티는 설정에서 바꿀 수 있다.
+SNMP_DEFAULT_COMMUNITY = "public"
+
+
+def snmp_enabled(db_path):
+    try:
+        return db.get_setting(db_path, "snmp_enabled", "1") != "0"
+    except Exception:
+        return True
+
+
+def snmp_community(db_path):
+    """설정에 저장된 SNMP 커뮤니티(암호화 저장). 없으면 기본값."""
+    try:
+        blob = db.get_setting(db_path, "snmp_community_blob", "") or ""
+        if blob:
+            v = credentials.decrypt_text(blob)
+            if v:
+                return v
+    except Exception:
+        pass
+    return SNMP_DEFAULT_COMMUNITY
+
+
 def _ssh_connect(cli, ip, port, username, password, timeout):
     """SSH 접속 — password 인증이 거부되면 keyboard-interactive로 재시도.
 
@@ -1437,42 +1493,62 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                                     server_id=server_id, os_type=detected, port=ssh_port)
                 else:
                     os_type = "unknown"   # 접속 실패 — 아래에서 범용 경로로 재시도
-            try:
-                if os_type == "windows":
-                    fields.update(_ssh_detail_windows(ip, username, password, port=ssh_port))
-                else:
-                    # linux 및 그 외 모든 OS(aix/solaris/hpux/bsd/macos/esxi/unknown)
-                    d = _ssh_detail_unix(ip, username, password, port=ssh_port)
-                    # 윈도우 폴백 판정에 'd가 비었는가'를 쓰면 안 된다 — hostname·
-                    # netstat는 cmd.exe에도 있어 윈도우에서도 d가 채워진다. UNIX 고유
-                    # 신호(uname의 os_info / ifconfig·ip link의 MAC)가 없을 때만 윈도우로 본다.
-                    # (Bitvise 등 서드파티 SSH 서버는 배너·uname으로 OS를 못 잡아 unknown이 된다)
-                    if os_type == "unknown" and not (d.get("os_info") or d.get("mac")):
-                        w = _ssh_detail_windows(ip, username, password, port=ssh_port)
-                        if w.get("os_info") or w.get("cpu_model") or w.get("mem_total_mb"):
-                            fields["os_type"] = "windows"
-                            d = dict(d, **w)      # 무자격 단계에서 얻은 값은 보존
-                    _hint = d.pop("_spec_hint", None)
-                    if _hint:
-                        errors.append(_hint)
-                    fields.update(d)
-                    # 수집된 OS 원문으로 계열을 확정(os_type이 unknown으로 남지 않게)
-                    if fields.get("os_info") and (fields.get("os_type") or os_type) in ("unknown", "auto"):
-                        fam = os_family_from_uname(fields["os_info"])
-                        if fam != "unknown":
-                            fields["os_type"] = fam
-            except Exception as e:
-                _m = str(e)
-                if "Authentication" in _m or "auth" in _m.lower():
-                    errors.append("SSH 인증 실패(:%d) — 이 서버의 계정/비밀번호를 "
-                                  "확인하세요(공통 계정 하나로는 OS가 다른 서버에 "
-                                  "모두 접속되지 않습니다)" % ssh_port)
+            # 계정 후보: 입력 계정 → 이 서버에 저장된 계정.
+            # 수집 팝업의 공통 계정이 서버별 저장 계정을 덮어써서, OS가 섞인 환경
+            # (Windows·RHEL·SUSE·Debian)에서는 대부분 인증 실패가 났다.
+            # 인증이 거부된 경우에만 다음 후보로 넘어간다(최대 2회 — 계정 잠금 방지).
+            _cands = _cred_candidates(db_path, server_id, username, password)                 or [(username, password, "입력 계정")]
+            _auth_err = None
+            for _u, _pw, _label in _cands:
+                try:
+                    if os_type == "windows":
+                        fields.update(_ssh_detail_windows(ip, _u, _pw, port=ssh_port))
+                    else:
+                        # linux 및 그 외 모든 OS(aix/solaris/hpux/bsd/macos/esxi/unknown)
+                        d = _ssh_detail_unix(ip, _u, _pw, port=ssh_port)
+                        # 윈도우 폴백 판정에 'd가 비었는가'를 쓰면 안 된다 — hostname·
+                        # netstat는 cmd.exe에도 있어 윈도우에서도 d가 채워진다. UNIX 고유
+                        # 신호(uname의 os_info / ip link의 MAC)가 없을 때만 윈도우로 본다.
+                        if os_type == "unknown" and not (d.get("os_info") or d.get("mac")):
+                            w = _ssh_detail_windows(ip, _u, _pw, port=ssh_port)
+                            if w.get("os_info") or w.get("cpu_model") or w.get("mem_total_mb"):
+                                fields["os_type"] = "windows"
+                                d = dict(d, **w)      # 무자격 단계에서 얻은 값은 보존
+                        _hint = d.pop("_spec_hint", None)
+                        if _hint:
+                            errors.append(_hint)
+                        fields.update(d)
+                        # 수집된 OS 원문으로 계열 확정(os_type이 unknown으로 남지 않게)
+                        if fields.get("os_info") and                                 (fields.get("os_type") or os_type) in ("unknown", "auto"):
+                            fam = os_family_from_uname(fields["os_info"])
+                            if fam != "unknown":
+                                fields["os_type"] = fam
+                    username, password = _u, _pw      # 성공한 계정을 이후 단계에서 재사용
+                    if _label != "입력 계정":
+                        utils.log_event("info", "server_cred_fallback_used",
+                                        server_id=server_id, ip=ip, used=_label)
+                    _auth_err = None
+                    break
+                except Exception as e:
+                    if _is_auth_error(e) and _label != _cands[-1][2]:
+                        _auth_err = e            # 다음 후보로
+                        utils.log_event("info", "server_cred_rejected",
+                                        server_id=server_id, ip=ip, tried=_label)
+                        continue
+                    _auth_err = e
+                    break
+            if _auth_err is not None:
+                _m = str(_auth_err)
+                if _is_auth_error(_auth_err):
+                    errors.append(
+                        "SSH 인증 실패(:%d) — 시도한 계정: %s. 이 서버의 계정을 "
+                        "저장하거나 수집 시 그 서버 계정을 입력하세요"
+                        % (ssh_port, ", ".join(c[2] for c in _cands)))
                 else:
                     errors.append("SSH(:%d): %s" % (ssh_port, _m[:110]))
             # OS 계열과 무관하게, 사양이 하나도 안 채워졌으면 사유를 남긴다.
-            # (윈도우 경로에도 동일 적용 — 예전엔 UNIX 경로에만 힌트가 있었다)
-            _spec_keys = ("cpu_model", "cpu_cores", "mem_total_mb", "disk_total_gb")
-            if not any(fields.get(k) for k in _spec_keys) and not errors:
+            _spec_keys0 = ("cpu_model", "cpu_cores", "mem_total_mb", "disk_total_gb")
+            if not any(fields.get(k) for k in _spec_keys0) and not errors:
                 errors.append("사양 명령이 응답하지 않았습니다 — 계정 권한·셸 제한을 확인하세요")
                 utils.log_event("warning", "server_spec_empty_after_ssh",
                                 server_id=server_id, ip=ip, port=ssh_port,
@@ -1491,7 +1567,21 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                      or bool(set(open_ports or []) & {135, 445, 3389}))
         if wmi_collect and wmi_collect.available() and _win_like                 and wmi_collect.can_try(open_ports):
             try:
-                w = wmi_collect.collect(ip, username, password)
+                # SSH와 같은 이유로 WMI도 계정이 서버마다 다를 수 있다 —
+                # 인증이 거부되면 이 서버에 저장된 계정으로 한 번 더 시도한다.
+                _wc = _cred_candidates(db_path, server_id, username, password)                     or [(username, password, "입력 계정")]
+                w, _we = None, None
+                for _u, _pw, _label in _wc:
+                    try:
+                        w = wmi_collect.collect(ip, _u, _pw)
+                        _we = None
+                        break
+                    except Exception as ex:
+                        _we = ex
+                        if not _is_auth_error(ex):
+                            break
+                if _we is not None:
+                    raise _we
                 for k in ("hostname", "os_info", "mac", "cpu_model", "cpu_cores",
                           "mem_total_mb", "disk_total_gb", "disk_used_gb"):
                     if w.get(k) and not fields.get(k):
@@ -1514,6 +1604,50 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                 utils.log_event("info", "server_spec_via_wmi", server_id=server_id, ip=ip)
             except Exception as e:
                 errors.append("WMI 폴백 실패 — %s" % str(e)[:110])
+
+    # ②-C SNMP(161/UDP) 폴백 — 여기까지 와서도 사양이 비어 있는 서버.
+    #     SSH가 닫혔거나 계정이 아예 없는 리눅스·UNIX 서버가 대상이다(WMI는 Windows 전용).
+    #     운영 서버는 감시용 snmpd가 이미 떠 있는 경우가 많고, 읽기 전용 GET만 쓴다.
+    #     도달 자체가 안 되는 서버에는 시도하지 않는다 — 진짜 사유('도달 불가')를
+    #     SNMP 무응답 메시지로 덮어쓰고, 서버마다 몇 초씩 헛되이 기다리게 된다.
+    _reachable = bool(open_ports) or bool(fields.get("hostname") or fields.get("mac"))
+    if (_reachable and not any(fields.get(k) for k in _spec_keys)
+            and snmp_enabled(db_path)):
+        try:
+            from . import snmp_collect
+        except Exception:
+            snmp_collect = None
+        if snmp_collect:
+            try:
+                sn = snmp_collect.collect(ip, snmp_community(db_path))
+                got = False
+                for k in ("hostname", "os_info", "mac", "cpu_model", "cpu_cores",
+                          "mem_total_mb", "disk_total_gb", "disk_used_gb"):
+                    if sn.get(k) and not fields.get(k):
+                        fields[k] = sn[k]
+                        got = got or k in _spec_keys
+                if got:
+                    # 사양을 확보했으므로 SSH/WMI 실패 사유는 더 이상 사용자에게
+                    # 보여줄 이유가 없다(해결된 문제로 화면을 어지럽히지 않는다).
+                    errors[:] = [e for e in errors
+                                 if "SSH" not in e and "사양" not in e
+                                 and "WMI" not in e and "계정 없음" not in e]
+                    if fields.get("os_info") and (fields.get("os_type")
+                                                  or sv.get("os_type")
+                                                  or "auto") in ("auto", "unknown", None):
+                        fam = os_family_from_uname(fields["os_info"])
+                        if fam != "unknown":
+                            fields["os_type"] = fam
+                    utils.log_event("info", "server_spec_via_snmp",
+                                    server_id=server_id, ip=ip)
+                else:
+                    errors.append("SNMP 응답에 사양 정보(HOST-RESOURCES-MIB)가 없습니다")
+            except Exception as e:
+                # 무응답이 대부분이다 — 사용자에게 '다음에 뭘 하면 되는지'만 알린다.
+                errors.append(
+                    "SNMP(161/UDP) 응답 없음 — 서버에서 snmpd 허용 또는 "
+                    "설정▸SNMP 커뮤니티 확인 (%s)" % str(e)[:60])
+                utils.log_event("info", "server_snmp_no_reply", server_id=server_id, ip=ip)
 
     # VM 자동 추정(MAC 확보 시) — 사용자가 이미 VM으로 지정했으면 유지
     mac = fields.get("mac") or sv.get("mac")
