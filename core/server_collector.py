@@ -202,6 +202,48 @@ def netbios_name(ip, timeout=2):
                 pass
 
 
+def _ssh_connect(cli, ip, port, username, password, timeout):
+    """SSH 접속 — password 인증이 거부되면 keyboard-interactive로 재시도.
+
+    paramiko의 SSHClient.connect()는 비밀번호를 주면 `auth_password` 만 시도하고
+    실패 시 그대로 예외를 낸다(로그: "Authentication (password) failed").
+    그런데 PAM을 쓰는 리눅스(RHEL·SUSE·Debian 등)는 `PasswordAuthentication no` +
+    `KbdInteractiveAuthentication yes` 로 **password 방식을 막아 둔 경우가 흔하다**.
+    이때 비밀번호가 맞아도 인증이 실패해 사양 수집이 통째로 건너뛰어졌다.
+    같은 비밀번호로 keyboard-interactive를 한 번 더 시도한다.
+    """
+    import paramiko
+    try:
+        cli.connect(ip, port=port, username=username, password=password,
+                    timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
+                    look_for_keys=False, allow_agent=False)
+        return "password"
+    except paramiko.AuthenticationException as first:
+        tr = None
+        try:
+            tr = paramiko.Transport((ip, port))
+            tr.banner_timeout = timeout
+            tr.start_client(timeout=timeout)
+
+            def _answer(title, instructions, prompt_list):
+                # 프롬프트가 몇 개든 같은 비밀번호로 응답(Password: 하나가 대부분)
+                return [password for _ in prompt_list]
+
+            tr.auth_interactive(username, _answer)
+            if not tr.is_authenticated():
+                raise first
+            cli._transport = tr          # 이후 exec_command가 이 세션을 쓴다
+            utils.log_event("info", "ssh_auth_keyboard_interactive", ip=ip, port=port)
+            return "keyboard-interactive"
+        except Exception:
+            if tr is not None:
+                try:
+                    tr.close()
+                except Exception:
+                    pass
+            raise first                  # 원래 인증 실패를 그대로 알린다
+
+
 _BATCH_MARK = "__NETDASH_CMD_%d__"
 _MAX_CMD_OUT = 20000
 
@@ -223,9 +265,7 @@ def _ssh_exec(ip, username, password, commands, timeout=15, port=22, batch=False
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     out = {}
     try:
-        cli.connect(ip, port=port, username=username, password=password,
-                    timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
-                    look_for_keys=False, allow_agent=False)
+        _ssh_connect(cli, ip, port, username, password, timeout)
         if batch and commands:
             try:
                 return _ssh_exec_batched(cli, commands, timeout)

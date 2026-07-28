@@ -1005,10 +1005,16 @@ function _statusCls(st) {
 function statusBadge(status, lastError) {
   var h = "<span class='status-badge status-badge--" + _statusCls(status) + "'>" +
     escHtml(_statusKo(status)) + "</span>";
-  if (status === "failed" && lastError) {
-    h += "<div class='cell-sub cell-sub--err'>" + escHtml(lastError) + "</div>";
+  if (!lastError) return h;
+  if (status === "failed") {
+    return h + "<div class='cell-sub cell-sub--err'>" + escHtml(lastError) + "</div>";
   }
-  return h;
+  // 도달은 했지만 일부를 못 가져온 경우(예: SSH 인증 실패로 사양 미수집).
+  // 예전엔 status==='failed'일 때만 사유를 보여줘서, 화면은 '정상'인데 사양만
+  // 비어 있고 **이유가 어디에도 안 보였다.** '부분 수집'으로 함께 알린다.
+  return h + " <span class='status-badge status-badge--warning' " +
+    "title='" + escHtml(lastError) + "'>부분 수집</span>" +
+    "<div class='cell-sub cell-sub--warn'>" + escHtml(lastError) + "</div>";
 }
 
 // 도달성(연결 상태) 배지 — 이모지 없이 글씨체 통일.
