@@ -151,8 +151,22 @@ def netbios_name(ip, timeout=2):
                 pass
 
 
-def _ssh_exec(ip, username, password, commands, timeout=15, port=22):
-    """paramiko로 명령 목록 실행 → {cmd: output}. 연결 실패 시 예외."""
+_BATCH_MARK = "__NETDASH_CMD_%d__"
+_MAX_CMD_OUT = 20000
+
+
+def _ssh_exec(ip, username, password, commands, timeout=15, port=22, batch=False):
+    """paramiko로 명령 목록 실행 → {cmd: output}. 연결 실패 시 예외.
+
+    batch=True면 **모든 명령을 한 세션에서 한 번에** 실행한다(POSIX 셸 전용).
+
+    왜 배치가 필요한가: paramiko의 exec_command()는 명령마다 새 SSH 세션 채널을
+    연다. OpenSSH의 `MaxSessions` 기본값은 **10**이라, 명령이 10개를 넘으면
+    11번째부터 서버가 채널 개설을 거부하고 여기서 조용히 빈 문자열이 된다.
+    UNIX 상세는 명령이 26개이고 사양(CPU/메모리/디스크) 명령이 전부 13번째
+    이후라, **hostname·OS·MAC·포트는 들어오는데 사양만 통째로 비는** 증상이
+    났다(Windows는 명령이 9개라 한도에 걸리지 않아 정상이었다).
+    """
     import paramiko
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -161,14 +175,57 @@ def _ssh_exec(ip, username, password, commands, timeout=15, port=22):
         cli.connect(ip, port=port, username=username, password=password,
                     timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
                     look_for_keys=False, allow_agent=False)
+        if batch and commands:
+            try:
+                return _ssh_exec_batched(cli, commands, timeout)
+            except Exception as e:
+                # 셸이 특이한 장비 등 — 개별 실행으로 폴백(한도 문제는 남지만
+                # 아무것도 못 얻는 것보다 낫다)
+                utils.log_event("warning", "ssh_batch_failed_fallback", ip=ip,
+                                error=str(e)[:120])
         for cmd in commands:
             try:
                 _, stdout, _ = cli.exec_command(cmd, timeout=timeout)
-                out[cmd] = stdout.read().decode("utf-8", "replace")[:20000]
+                out[cmd] = stdout.read().decode("utf-8", "replace")[:_MAX_CMD_OUT]
             except Exception:
                 out[cmd] = ""
     finally:
         cli.close()
+    return out
+
+
+def _ssh_exec_batched(cli, commands, timeout):
+    """명령 전체를 한 셸 세션에서 실행하고 구분자로 잘라 {cmd: output} 복원.
+
+    각 명령 앞에 고유 마커를 출력하고, 명령의 stderr는 버린다(없는 명령의
+    'not found'가 출력에 섞이지 않게). 마커는 줄 단위가 아니라 **문자열**로
+    쪼개므로 개행 없이 끝나는 출력도 안전하다.
+    """
+    parts = []
+    for i, cmd in enumerate(commands):
+        parts.append("echo '%s'" % (_BATCH_MARK % i))
+        parts.append("{ %s ; } 2>/dev/null" % cmd)
+    parts.append("echo '%s'" % (_BATCH_MARK % len(commands)))
+    # 줄바꿈으로 구분한다. '; '로 이으면 명령 자체에 포함된 세미콜론
+    # (예: cpuinfo 명령)과 구분되지 않아 읽기·디버깅이 어렵다.
+    script = "\n".join(parts)
+
+    # 한 세션에 26개 명령이 들어가므로 개별 타임아웃보다 넉넉히 준다.
+    _, stdout, _ = cli.exec_command(script, timeout=max(timeout * 3, 45))
+    text = stdout.read().decode("utf-8", "replace")
+
+    out = {}
+    for i, cmd in enumerate(commands):
+        start = text.find(_BATCH_MARK % i)
+        if start < 0:
+            out[cmd] = ""
+            continue
+        start += len(_BATCH_MARK % i)
+        end = text.find(_BATCH_MARK % (i + 1), start)
+        seg = text[start:] if end < 0 else text[start:end]
+        out[cmd] = seg.lstrip("\r\n")[:_MAX_CMD_OUT]
+    if not any(out.values()):
+        raise RuntimeError("배치 실행 결과가 전부 비었음")
     return out
 
 
@@ -610,8 +667,11 @@ _CMD_DF = "LC_ALL=C df -Pk"
 # (AIX는 df -P를 지원하므로 여기 넣지 않는다 — AIX `df -k`는 3번째가 Used가 아니라 Free)
 _CMD_DF_XPG4 = "LC_ALL=C /usr/xpg4/bin/df -Pk"     # Solaris
 _CMD_DF_BDF = "LC_ALL=C bdf"                        # HP-UX
-# 장착 구성 — dmidecode는 root 권한이 필요하다(일반 계정이면 빈 출력 → 총량만 표시).
+# 장착 구성 — dmidecode는 root 권한이 필요하다.
+# 일반 계정이면 빈 출력이므로 NOPASSWD sudo가 설정된 환경을 위해 sudo -n 도 시도한다
+# (-n: 비밀번호를 묻지 않고 즉시 실패 → 프롬프트로 세션이 멈추지 않는다).
 _CMD_DIMM = "LC_ALL=C dmidecode -t 17"
+_CMD_DIMM_SUDO = "LC_ALL=C sudo -n dmidecode -t 17"
 # -P(key="value") 형식: 모델명 공백 때문에 컬럼 분해가 깨지는 것 방지
 _CMD_LSBLK = "LC_ALL=C lsblk -dn -P -o NAME,MODEL,SIZE,ROTA,TYPE"
 _CMD_IOSTAT = "LC_ALL=C iostat -En"                 # Solaris 물리 디스크
@@ -633,7 +693,7 @@ _UNIX_CMDS = [
     # 디스크 — POSIX 우선, 안 되는 OS만 대체 명령이 값을 채운다
     _CMD_DF, _CMD_DF_XPG4, _CMD_DF_BDF,
     # 장착 구성 — 메모리 모듈 / 물리 디스크
-    _CMD_DIMM, _CMD_LSBLK, _CMD_IOSTAT,
+    _CMD_DIMM, _CMD_DIMM_SUDO, _CMD_LSBLK, _CMD_IOSTAT,
 ]
 
 
@@ -682,6 +742,8 @@ def _specs_from_unix(o):
 
     # 장착 구성 — 얻지 못하면 키를 넣지 않는다(기존 값 보존)
     mods, slots = parse_dmidecode_memory(o.get(_CMD_DIMM))
+    if not mods:                                   # root 아님 → sudo -n 결과 사용
+        mods, slots = parse_dmidecode_memory(o.get(_CMD_DIMM_SUDO))
     if mods:
         spec["mem_modules"] = json.dumps(mods, ensure_ascii=False)
     if slots:
@@ -972,7 +1034,9 @@ def _ssh_detail_unix(ip, username, password, port=22):
     반환: {hostname?, os_info?, mac?, open_ports?, cpu_model?, cpu_cores?,
            mem_total_mb?, disk_total_gb?, disk_used_gb?}
     """
-    o = _ssh_exec(ip, username, password, _UNIX_CMDS, port=port)
+    # batch=True: 26개 명령을 한 세션에서 실행 — OpenSSH MaxSessions(기본 10)에
+    # 걸려 사양 명령이 전부 빈값이 되던 것을 막는다(왕복도 26회 → 1회로 줄어든다).
+    o = _ssh_exec(ip, username, password, _UNIX_CMDS, port=port, batch=True)
     detail = {}
     # hostname: hostname → uname -n 폴백
     for c in ("hostname", "uname -n"):

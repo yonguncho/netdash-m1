@@ -74,7 +74,7 @@ def test_listening_ports_per_os():
 # ── 범용 UNIX 상세 수집: 되는 명령만 취합 ───────────────────────
 def test_ssh_detail_unix_partial_commands(monkeypatch):
     """AIX처럼 ip/ss가 없는 OS에서도 hostname·OS·MAC·포트를 수집한다."""
-    def fake_exec(ip, u, p, cmds, timeout=15, port=22):
+    def fake_exec(ip, u, p, cmds, timeout=15, port=22, batch=False):
         return {
             "hostname": "aixsrv01",
             "uname -n": "aixsrv01",
@@ -98,7 +98,7 @@ def test_ssh_detail_unix_partial_commands(monkeypatch):
 
 
 def test_ssh_detail_unix_esxi(monkeypatch):
-    def fake_exec(ip, u, p, cmds, timeout=15, port=22):
+    def fake_exec(ip, u, p, cmds, timeout=15, port=22, batch=False):
         return {
             "hostname": "esxi01",
             "uname -a": "VMkernel esxi01 7.0.3",

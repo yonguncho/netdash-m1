@@ -115,7 +115,7 @@ def test_specs_from_unix_uses_df_fallback_when_posix_df_missing():
 
 def test_unicode_digit_does_not_kill_ssh_detail(monkeypatch):
     """'²'.isdigit()는 True지만 int()는 예외 — 사양 파싱이 죽어도 나머지는 살아야 한다."""
-    def fake_exec(ip, u, p, cmds, timeout=15, port=22):
+    def fake_exec(ip, u, p, cmds, timeout=15, port=22, batch=False):
         return {"hostname": "db01", "uname -a": "Linux db01 5.15",
                 "ip -o link": "2: eth0: <BROADCAST> link/ether aa:bb:cc:dd:ee:ff",
                 "ss -tln": "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*",
@@ -277,7 +277,7 @@ def test_windows_powershell_runs_only_when_wmic_insufficient(monkeypatch):
                             "Size=107374182400\r\n"),
     }
 
-    def fake_exec(ip, u, p, cmds, timeout=15, port=22):
+    def fake_exec(ip, u, p, cmds, timeout=15, port=22, batch=False):
         calls.append(list(cmds))
         return full_wmic if cmds is sc._WIN_CMDS else {}
 
@@ -290,7 +290,7 @@ def test_windows_powershell_runs_only_when_wmic_insufficient(monkeypatch):
 
 def test_windows_falls_back_to_powershell_without_wmic(monkeypatch):
     """wmic이 없으면 PowerShell 2차 실행으로 사양을 채운다."""
-    def fake_exec(ip, u, p, cmds, timeout=15, port=22):
+    def fake_exec(ip, u, p, cmds, timeout=15, port=22, batch=False):
         if cmds is sc._WIN_CMDS:
             return {"hostname": "WIN-25",
                     sc._CMD_WIN_CPU: "'wmic' is not recognized as an internal or external command,"}
@@ -306,7 +306,7 @@ def test_windows_falls_back_to_powershell_without_wmic(monkeypatch):
 
 def test_windows_powershell_failure_keeps_partial(monkeypatch):
     """2차 SSH가 예외를 던져도 1차에서 얻은 정보는 살아남는다."""
-    def fake_exec(ip, u, p, cmds, timeout=15, port=22):
+    def fake_exec(ip, u, p, cmds, timeout=15, port=22, batch=False):
         if cmds is sc._WIN_CMDS:
             return {"hostname": "WIN-09", "ver": "Microsoft Windows [Version 6.3.9600]"}
         raise OSError("connection reset")
@@ -385,7 +385,7 @@ def test_collect_survives_db_save_failure(monkeypatch):
 
 def test_ssh_detail_unix_includes_specs(monkeypatch):
     """SSH 상세 수집 결과에 사양 필드가 함께 담긴다."""
-    def fake_exec(ip, u, p, cmds, timeout=15, port=22):
+    def fake_exec(ip, u, p, cmds, timeout=15, port=22, batch=False):
         return {"hostname": "web01", "uname -a": "Linux web01 5.15.0",
                 "lscpu": "CPU(s):              4\nModel name:          Intel Xeon E5\n",
                 "cat /proc/meminfo": "MemTotal:        8123456 kB\n"}
