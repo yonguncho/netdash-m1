@@ -342,7 +342,7 @@ function _searchBox(targetId, placeholder) {
         body: JSON.stringify({ids: sv.map(function (s) { return s.id; })}),
       }).then(function () {
         pollProgress("/api/servers/collect-all/status", "room-progress", loadServers,
-          "/api/servers/collect-all/stop");
+          "/api/servers/collect-all/stop", loadServers);
       }).catch(function () {});
     }
     if (fw.length) {
@@ -353,7 +353,7 @@ function _searchBox(targetId, placeholder) {
         pollProgress("/api/firewalls/collect-all/status", "room-progress", function () {
           loadFirewalls();
           _roomServers();          // 방화벽이 끝난 뒤 서버 수집 시작
-        }, "/api/firewalls/collect-all/stop");
+        }, "/api/firewalls/collect-all/stop", loadFirewalls);
       }).catch(function () { _roomServers(); });
     } else {
       _roomServers();
@@ -387,7 +387,7 @@ function _searchBox(targetId, placeholder) {
         .then(function (res) {
           if (!res.ok) { alert((res.b && res.b.error) || "서버 진단 시작 실패"); return; }
           pollProgress("/api/servers/collect-all/status", "room-progress", loadServers,
-            "/api/servers/collect-all/stop");
+            "/api/servers/collect-all/stop", loadServers);
         }).catch(function () {});
     }
     if (fw.length) {
@@ -400,7 +400,7 @@ function _searchBox(targetId, placeholder) {
           pollProgress("/api/firewalls/diagnose-all/status", "room-progress", function () {
             loadFirewalls();
             _roomDiagServers();
-          });
+          }, null, loadFirewalls);
         }).catch(function () { _roomDiagServers(); });
     } else {
       _roomDiagServers();
@@ -942,6 +942,17 @@ var _bulkSel = {};        // 일괄 수집 선택 집합 {switch_id: true} — �
 var _tblSel = {};         // 스위치 표 선택 집합(선택 삭제/구분변경용) — 5초 재렌더에도 유지
 var _dashStatusFilter = "all";  // all | ok | failed | new — 현황판 상태 필터 탭
 
+// 수집 상태 → 한글 표기(스위치·서버·방화벽 공용).
+// 예전엔 스위치만 한글이고 서버·방화벽 표는 'collecting'/'done' 영문을 그대로
+// 노출해 같은 상태가 화면마다 다르게 보였다.
+function _statusKo(st) {
+  return st === "done" ? "정상"
+    : st === "collecting" ? "수집중"
+    : st === "failed" ? "오류"
+    : st === "unsupported" ? "미지원"
+    : "미수집";
+}
+
 // 상태 분류: 오류 = 수집 실패 또는 도달 불가, 미수집 = 아직 한 번도 수집 안 됨
 function _swStatusBucket(sw) {
   if (sw.status === "failed" || sw.reachable === false) return "failed";
@@ -1157,7 +1168,7 @@ function _fwCardHTML(f) {
       "<span style='font-size:10px'>" + escHtml(f.vendor || "") + " · 방화벽</span>" +
     "</div>" +
     "<div class='sw-card__status'><span class='dot dot--" + sc + "'></span>" +
-      "<span>방화벽 · " + escHtml(f.status || "new") + "</span></div>" +
+      "<span>방화벽 · " + _statusKo(f.status) + "</span></div>" +
     "<div class='sw-card__actions'>" +
       "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' data-action='detail-fw' data-id='" + f.id + "'>상세</button> " +
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' data-action='delete-fw' data-id='" + f.id + "'>삭제</button>" +
@@ -1179,7 +1190,7 @@ function _srvCardHTML(s) {
     "<div class='sw-card__meta'><span>" + escHtml(s.ip) + "</span>" + loc +
       "<span style='font-size:10px'>" + escHtml((s.os_type || "linux")) + " · 서버</span></div>" +
     "<div class='sw-card__status'><span class='dot dot--" + sc + "'></span>" +
-      "<span>서버 · " + escHtml(s.status || "new") + "</span></div>" +
+      "<span>서버 · " + _statusKo(s.status) + "</span></div>" +
     "</div>";
 }
 
@@ -1491,10 +1502,7 @@ function swCardHTML(sw, withCheck) {
     : sw.status === "collecting" ? "dot--collecting"
     : "dot--new";
 
-  var statusLabel = sw.status === "done" ? "정상"
-    : sw.status === "collecting" ? "수집중"
-    : sw.status === "failed" ? "오류"
-    : "미수집";
+  var statusLabel = _statusKo(sw.status);
 
   var swJson = payloadAttr((sw));
 
@@ -2027,11 +2035,16 @@ document.addEventListener("click", function (e) {
 });
 
 // 진행 상태 폴링: url을 1.5초마다 조회 → el에 진행바. running=false면 종료 후 onDone().
-function pollProgress(url, elId, onDone, stopUrl) {
+// onTick(선택): 매 폴링마다 호출 — **수집 중에도 표를 갱신**하기 위한 훅.
+//   예전엔 onDone(완료 시 1회)만 있어서, 일괄 수집 중 서버/방화벽 표가 갱신되지 않아
+//   상태가 '수집중'으로 바뀌는 것을 볼 수 없었고 마지막에 결과만 툭 바뀌었다.
+//   (스위치 표는 5초 전역 폴러(pollState)가 있어 이 증상이 없었다)
+function pollProgress(url, elId, onDone, stopUrl, onTick) {
   var el = document.getElementById(elId);
   var timer = setInterval(function () {
     fetch(url).then(function (r) { return r.json(); }).then(function (st) {
       renderProgressBar(el, st, stopUrl);
+      if (st.running && typeof onTick === "function") onTick(st);
       if (!st.running) {
         clearInterval(timer);
         if (typeof onDone === "function") onDone(st);
@@ -2433,7 +2446,7 @@ function renderFirewalls(firewalls) {
       "<td>" + escHtml(f.vendor) + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
-      "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(f.status || "new") + "</span></td>" +
+      "<td><span class='status-badge status-badge--" + sc + "'>" + _statusKo(f.status) + "</span></td>" +
       "<td>" + (f.reachable === false
         ? "<span class='status-badge status-badge--critical' title='도달성 감시: 관리 포트 TCP 응답 없음'>🔴 끊김</span>"
         : f.reachable === true
@@ -4295,6 +4308,9 @@ function fmtSize(gb) {
   gb = _num(gb);
   return gb >= 1024 ? (gb / 1024).toFixed(1) + " TB" : gb.toFixed(gb < 10 ? 1 : 0) + " GB";
 }
+// 주의: fmtDisk는 **HTML**을 돌려준다(사용률 색상 span 포함).
+// escHtml()로 감싸는 자리에는 쓰면 안 된다 — 태그가 글자로 그대로 보인다.
+// 그런 자리에는 fmtDiskText()를 쓴다.
 function fmtDisk(s) {
   var total = _num(s.disk_total_gb);
   if (!total) return "-";
@@ -4303,6 +4319,13 @@ function fmtDisk(s) {
   var color = pct >= 90 ? "#dc2626" : (pct >= 80 ? "#d97706" : "#64748b");
   return fmtSize(used) + " / " + fmtSize(total) +
     " <span style='color:" + color + "'>(" + pct + "%)</span>";
+}
+function fmtDiskText(s) {
+  var total = _num(s.disk_total_gb);
+  if (!total) return "-";
+  var used = _num(s.disk_used_gb);
+  return fmtSize(used) + " / " + fmtSize(total) +
+    " (" + Math.round((used / total) * 100) + "%)";
 }
 
 // 표 셀 — 총량(굵게) + 장착 구성 요약. 구성이 있으면 클릭해 상세를 연다.
@@ -4356,7 +4379,7 @@ function showHwDetail(id, which) {
       "일반 계정으로 수집하면 총량만 보입니다.</p>";
   }
 
-  html += "<h4 style='margin:0 0 6px;font-size:13px'>디스크 " + escHtml(fmtDisk(s)) +
+  html += "<h4 style='margin:0 0 6px;font-size:13px'>디스크 " + escHtml(fmtDiskText(s)) +
     (disks.length ? " · " + disks.length + "개 장착" : "") + "</h4>";
   if (disks.length) {
     html += "<table class='data-table' style='font-size:12px'><thead><tr>" +
@@ -4424,7 +4447,7 @@ function renderServers() {
       "<td>" + escHtml(s.switch_name || "-") + "</td>" +
       "<td>" + escHtml(s.switch_port || "-") + "</td>" +
       "<td>" + escHtml(s.location || "-") + "</td>" +
-      "<td><span class='status-badge status-badge--" + sc + "'>" + escHtml(s.status || "new") + "</span>" +
+      "<td><span class='status-badge status-badge--" + sc + "'>" + _statusKo(s.status) + "</span>" +
         (s.status === "failed" && s.last_error ? "<div style='font-size:11px;color:#991b1b'>" + escHtml(s.last_error) + "</div>" : "") + "</td>" +
       // 작업 — 스위치 현황과 같은 구성(수집·수정·진단·터미널·삭제)
       "<td style='white-space:nowrap'>" +
@@ -4520,7 +4543,7 @@ function renderServers() {
       .then(function (res) {
         if (!res.ok) { alert((res.b && res.b.error) || "진단 시작 실패"); return; }
         pollProgress("/api/servers/collect-all/status", "server-progress", loadServers,
-          "/api/servers/collect-all/stop");
+          "/api/servers/collect-all/stop", loadServers);   // 수집 중에도 표 갱신
       }).catch(function (e) { console.error(e); alert("진단 오류"); });
   });
 
@@ -4546,7 +4569,7 @@ function renderServers() {
     }).then(function (r) { return r.json(); })
       .then(function () {
         pollProgress("/api/servers/collect-all/status", "server-progress", loadServers,
-          "/api/servers/collect-all/stop");
+          "/api/servers/collect-all/stop", loadServers);   // 수집 중에도 표 갱신
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
   };
 
@@ -4618,7 +4641,7 @@ function renderServers() {
       .then(function (res) {
         if (!res.ok) { alert((res.b && res.b.error) || "일괄 수집 시작 실패"); return; }
         pollProgress("/api/firewalls/collect-all/status", "firewall-progress", loadFirewalls,
-          "/api/firewalls/collect-all/stop");
+          "/api/firewalls/collect-all/stop", loadFirewalls);   // 수집 중에도 표 갱신
       }).catch(function (e) { console.error(e); alert("수집 오류"); });
   }
   window._fwRunBulk = _fwRunBulk;
