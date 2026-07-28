@@ -153,11 +153,13 @@ def get_extreme_exos_outputs():
 
 
 def get_demo_outputs_for_vendor(vendor):
-    if vendor == "cisco_ios":
-        return get_cisco_ios_outputs()
-    elif vendor == "arista_eos":
+    """데모 모드 샘플 출력. 픽스처가 없는 벤더는 Cisco IOS 샘플로 대체한다.
+
+    예전엔 ValueError를 던져, 데모 데이터에 없는 벤더로 등록된 스위치가
+    '수집 실패'로 보였다 — 데모는 화면을 보여주기 위한 모드라 실패가 목적이 아니다.
+    """
+    if vendor == "arista_eos":
         return get_arista_eos_outputs()
-    elif vendor == "extreme_exos":
+    if vendor == "extreme_exos":
         return get_extreme_exos_outputs()
-    else:
-        raise ValueError(f"Unknown vendor: {vendor}")
+    return get_cisco_ios_outputs()

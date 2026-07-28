@@ -70,10 +70,16 @@ def test_b4_parse_outputs_propagates_parser_error():
         parsers.get_parser = orig
 
 
-def test_b4_unknown_vendor_still_empty():
-    """진짜 미지원 벤더는 빈 결과 폴백 유지."""
-    r = collector._parse_outputs("no_such_vendor_xyz", {}, 1)
-    assert r == {"ports": [], "macs": [], "arps": []}
+def test_b4_unknown_vendor_fails_loudly():
+    """진짜 미지원 벤더는 **명시적으로 실패**해야 한다.
+
+    예전엔 빈 결과를 돌려줘 status=done(초록 '완료' 배지)이 됐다. 접속·로그인은
+    성공하고 포트·MAC만 0건이라, 운영자는 수집이 됐다고 믿고 원인을 알 수 없었다.
+    """
+    import pytest
+    with pytest.raises(collector.UnsupportedVendorError) as e:
+        collector._parse_outputs("no_such_vendor_xyz", {}, 1)
+    assert "지원하지 않습니다" in str(e.value)
 
 
 # ── B5: Arista MAC 테이블 Moves/Last Move 컬럼 ──

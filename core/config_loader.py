@@ -407,9 +407,25 @@ def _get_default_collector_config() -> dict:
             "extreme_exos": {"status": "show ports no-refresh", "description": "show ports description",
                             "mac": "show fdb", "arp": "show iparp",
                             "logging": "show log messages memory-buffer",
-                            "sysinfo": "show switch"}
+                            "sysinfo": "show switch"},
+            # 아래 3종은 파서 모듈의 COMMANDS를 그대로 쓴다(중복 정의 방지).
+            # 배포 config.yaml에 commands 섹션이 있어도 벤더별로 병합되므로,
+            # 여기 기본값이 없으면 그 벤더는 명령이 비어 데이터 0건이 된다.
+            "juniper_junos": dict(_parser_commands("juniper_junos")),
+            "hp_procurve": dict(_parser_commands("hp_procurve")),
+            "aruba_osswitch": dict(_parser_commands("hp_procurve")),
+            "aruba_os": dict(_parser_commands("aruba_os")),
         }
     }
+
+
+def _parser_commands(vendor):
+    """파서 모듈에 선언된 기본 수집 명령(COMMANDS)."""
+    try:
+        from .parsers import get_parser
+        return getattr(get_parser(vendor), "COMMANDS", {}) or {}
+    except Exception:
+        return {}
 
 
 def _merge_collector_config(from_yaml: dict) -> dict:

@@ -53,6 +53,19 @@ _NETMIKO_VENDOR = {
     "exos": "extreme_exos",
     "extremenetworks": "extreme_exos",
     "juniper": "juniper_junos",
+    "junos": "juniper_junos",
+    "juniper_ex": "juniper_junos",
+    # HP ProCurve = ArubaOS-Switch(리브랜딩) — CLI가 같아 같은 파서를 쓴다.
+    "hp": "hp_procurve",
+    "hpe": "hp_procurve",
+    "procurve": "hp_procurve",
+    "aruba_procurve": "hp_procurve",
+    "arubaos_switch": "aruba_osswitch",
+    "aruba_switch": "aruba_osswitch",
+    # ArubaOS-CX는 CLI가 달라 별도 파서(netmiko device_type은 aruba_os)
+    "aruba": "aruba_os",
+    "aruba_cx": "aruba_os",
+    "arubaos_cx": "aruba_os",
     "paloalto": "paloalto_panos",
     "alteon": "alteon",
     "radware": "alteon",
@@ -70,6 +83,10 @@ def _norm_vendor(vendor):
     if v in ("", "unknown"):
         return "cisco_ios"
     return _NETMIKO_VENDOR.get(v, v)
+
+
+class UnsupportedVendorError(RuntimeError):
+    """파서가 없는 벤더 — 접속은 됐으나 파싱할 수 없다(0건 '성공' 위장 방지)."""
 
 
 class _DriverMismatchError(RuntimeError):
@@ -259,6 +276,17 @@ def _detect_vendor_from_version(text):
         return "juniper_junos"
     if "alteon" in t or "radware" in t or "standard adc" in t:
         return "alteon"
+    # ArubaOS-CX 가 ProCurve보다 먼저 — CX 배너에도 'aruba'가 들어간다.
+    if "arubaos-cx" in t or "arubaos cx" in t:
+        return "aruba_os"
+    # ProCurve/ArubaOS-Switch: 배너에 'ProCurve'/'Aruba'가 있거나,
+    # 이미지 스탬프 버전 표기(WC.16.10.0009 / YA.16.x)로 판별한다.
+    if "procurve" in t or "arubaos-switch" in t or "aruba" in t:
+        return "hp_procurve"
+    if "image stamp" in t and re.search(r"\b[a-z]{2}\.\d{2}\.\d{2}", t):
+        return "hp_procurve"
+    if "hewlett" in t or "hp j" in t or "hpe " in t:
+        return "hp_procurve"
     if "ios-xe" in t or "ios xe" in t or "cisco ios" in t or "ios software" in t or "cisco" in t:
         return "cisco_ios"
     return None
@@ -284,11 +312,21 @@ def _parse_os_version(vendor, text):
         "arista_eos": [(r"Software image version:\s*(\S+)", "EOS ")],
         "extreme_exos": [(r"ExtremeXOS\s+version\s+(\S+)", "EXOS "),
                          (r"IMG:\s*(\S+)", "EXOS ")],
-        "juniper_junos": [(r"Junos:\s*(\S+)", "JUNOS ")],
+        "juniper_junos": [(r"Junos:\s*(\S+)", "JUNOS "),
+                          (r"JUNOS.*?\[([\w.-]+)\]", "JUNOS ")],
+        # ArubaOS-CX: 'Version      : FL.10.08.1010'
+        "aruba_os": [(r"Version\s*:\s*([\w.]+)", "AOS-CX ")],
+        # ProCurve/ArubaOS-Switch: 이미지 스탬프 줄의 'WC.16.10.0009'
+        "hp_procurve": [(r"\b([A-Z]{2}\.\d{2}\.\d{2}\.\d{4})\b", "AOS-S "),
+                        (r"\b([A-Z]{2}\.\d{2}\.\d{2})\b", "AOS-S "),
+                        (r"Software revision\s*:\s*(\S+)", "AOS-S ")],
         "alteon": [(r"[Ss]oftware\s+[Vv]ersion:?\s*(\d[\w.]+)", "Alteon "),
                    (r"booted\s+software\s+version\s*:?\s*(\d[\w.]+)", "Alteon "),
                    (r"[Vv]ersion\s*:?\s*(\d+\.\d[\w.]*)", "Alteon ")],
     }
+    # ArubaOS-Switch는 ProCurve와 같은 형식
+    if v == "aruba_osswitch":
+        v = "hp_procurve"
     for pat, prefix in patterns.get(v, []):
         m = re.search(pat, t, re.IGNORECASE)
         if m:
@@ -1426,8 +1464,13 @@ def _parse_outputs(vendor, outputs, switch_id):
     try:
         parser = parsers.get_parser(vendor)
     except ValueError:
-        utils.log_event("warning", "parser_not_found", vendor=vendor)
-        return {"ports": [], "macs": [], "arps": []}
+        # 파서가 없으면 접속·로그인은 됐어도 얻을 수 있는 데이터가 0건이다.
+        # 예전엔 빈 결과를 돌려줘 status=done(초록 '완료' 배지)이 됐고, 운영자는
+        # 포트·MAC이 0인 이유를 알 수 없었다 → 명시적으로 실패 처리한다.
+        utils.log_event("warning", "parser_not_found", vendor=vendor, switch_id=switch_id)
+        raise UnsupportedVendorError(
+            "'%s' 벤더는 아직 지원하지 않습니다(지원: %s)"
+            % (vendor, ", ".join(parsers.supported_vendors())))
     return parser.parse(outputs, switch_id)
 
 

@@ -1551,11 +1551,17 @@ var _DEVICE_TYPES = ["BackBone", "L3 Switch", "L2 Switch", "L4 Switch",
 // 벤더 표준 값 ↔ 표시 라벨(표·카드·수정 모달을 하나의 표준으로 통일)
 var _VENDOR_ALIAS = { cisco: "cisco_ios", nexus: "cisco_nxos", cisco_nexus: "cisco_nxos",
                       arista: "arista_eos", extreme: "extreme_exos", extremexos: "extreme_exos",
-                      exos: "extreme_exos", juniper: "juniper_junos", radware: "alteon" };
+                      exos: "extreme_exos", juniper: "juniper_junos", junos: "juniper_junos",
+                      hp: "hp_procurve", hpe: "hp_procurve", procurve: "hp_procurve",
+                      aruba_procurve: "hp_procurve", arubaos_switch: "aruba_osswitch",
+                      aruba: "aruba_os", aruba_cx: "aruba_os", arubaos_cx: "aruba_os",
+                      radware: "alteon" };
 // 표기는 순수 벤더명만(OS 구분은 '버전' 컬럼이 담당: IOS-XE 17.x / NX-OS 9.x ...)
 var _VENDOR_LABELS = { cisco_ios: "Cisco", cisco_nxos: "Cisco",
                        arista_eos: "Arista", extreme_exos: "Extreme",
                        juniper_junos: "Juniper", alteon: "Radware",
+                       hp_procurve: "HP/Aruba", aruba_osswitch: "HP/Aruba",
+                       aruba_os: "Aruba",
                        unknown: "알 수 없음" };
 function _canonVendor(v) {
   v = (v || "").toLowerCase();
