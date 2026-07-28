@@ -1478,6 +1478,43 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                                 server_id=server_id, ip=ip, port=ssh_port,
                                 os_type=os_type)
 
+    # ②-B WMI(DCOM) 폴백 — SSH로 사양을 못 얻은 Windows 서버.
+    #     SSH가 아예 닫혀 있거나(포트 미개방) 인증이 막힌 경우가 대상이다.
+    #     Windows는 원래 WMI로 사양을 노출하므로 135(RPC)가 열려 있으면 시도한다.
+    _spec_keys = ("cpu_model", "cpu_cores", "mem_total_mb", "disk_total_gb")
+    if (username and password and not any(fields.get(k) for k in _spec_keys)):
+        try:
+            from . import wmi_collect
+        except Exception:
+            wmi_collect = None
+        _win_like = ((fields.get("os_type") or sv.get("os_type") or "").lower() == "windows"
+                     or bool(set(open_ports or []) & {135, 445, 3389}))
+        if wmi_collect and wmi_collect.available() and _win_like                 and wmi_collect.can_try(open_ports):
+            try:
+                w = wmi_collect.collect(ip, username, password)
+                for k in ("hostname", "os_info", "mac", "cpu_model", "cpu_cores",
+                          "mem_total_mb", "disk_total_gb", "disk_used_gb"):
+                    if w.get(k) and not fields.get(k):
+                        fields[k] = w[k]
+                if w.get("mem_modules"):
+                    # 제조사 코드(80CE…)는 SSH 경로와 같은 규칙으로 정규화
+                    for _m in w["mem_modules"]:
+                        if _m.get("maker"):
+                            _m["maker"] = _clean_maker(_m["maker"])
+                        if _m.get("speed"):
+                            _m["speed"] = "%s MT/s" % _m["speed"]
+                    fields["mem_modules"] = json.dumps(w["mem_modules"], ensure_ascii=False)
+                if w.get("mem_slots"):
+                    fields["mem_slots_total"] = int(w["mem_slots"])
+                if w.get("disk_devices"):
+                    fields["disk_devices"] = json.dumps(w["disk_devices"], ensure_ascii=False)
+                fields["os_type"] = "windows"
+                # SSH 실패 사유는 이제 의미가 없다 — WMI로 사양을 확보했다.
+                errors[:] = [e for e in errors if "SSH" not in e and "사양" not in e]
+                utils.log_event("info", "server_spec_via_wmi", server_id=server_id, ip=ip)
+            except Exception as e:
+                errors.append("WMI 폴백 실패 — %s" % str(e)[:110])
+
     # VM 자동 추정(MAC 확보 시) — 사용자가 이미 VM으로 지정했으면 유지
     mac = fields.get("mac") or sv.get("mac")
     if mac and not sv.get("is_vm"):
