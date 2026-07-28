@@ -1126,9 +1126,20 @@ def _ssh_detail_unix(ip, username, password, port=22):
     # 사양 파싱이 실패해도 위에서 얻은 hostname·OS·MAC·포트는 반드시 살린다
     # (여기서 예외가 새면 그 서버의 SSH 상세가 통째로 유실된다).
     try:
-        detail.update(_specs_from_unix(o))
+        spec = _specs_from_unix(o)
+        detail.update(spec)
+        if not spec:
+            # 사양이 하나도 안 나온 이유를 남긴다 — 어떤 명령이 응답했는지가 핵심 단서.
+            # (권한 부족·명령 부재·셸 제한 등은 서버마다 다르다)
+            got = sorted(k.split()[-1] for k, v in o.items() if (v or "").strip())
+            utils.log_event("warning", "server_spec_empty", ip=ip,
+                            responded=",".join(got[:12]) or "(없음)",
+                            total_cmds=len(o))
+            detail["_spec_hint"] = ("사양 명령이 응답하지 않음 — 응답한 명령: %s"
+                                    % (", ".join(got[:6]) or "없음"))
     except Exception as e:
         utils.log_event("warning", "server_spec_parse_failed", ip=ip, error=str(e)[:120])
+        detail["_spec_hint"] = "사양 파싱 실패: %s" % str(e)[:80]
     return detail
 
 
@@ -1391,6 +1402,9 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                         if w.get("os_info") or w.get("cpu_model") or w.get("mem_total_mb"):
                             fields["os_type"] = "windows"
                             d = dict(d, **w)      # 무자격 단계에서 얻은 값은 보존
+                    _hint = d.pop("_spec_hint", None)
+                    if _hint:
+                        errors.append(_hint)
                     fields.update(d)
                     # 수집된 OS 원문으로 계열을 확정(os_type이 unknown으로 남지 않게)
                     if fields.get("os_info") and (fields.get("os_type") or os_type) in ("unknown", "auto"):
@@ -1447,9 +1461,11 @@ _stop = False   # 전체 수집 중지 요청
 
 
 def get_progress():
-    """서버 전체 수집 진행 상태 스냅샷 {running, done, total, message}."""
+    """서버 전체 수집 진행 상태 스냅샷 {running, done, total, message, stopping}."""
     with _prog_lock:
-        return dict(_progress)
+        st = dict(_progress)
+        st["stopping"] = bool(_stop and _progress.get("running"))
+        return st
 
 
 def _set_progress(**kw):

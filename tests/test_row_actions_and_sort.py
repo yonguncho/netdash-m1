@@ -46,19 +46,22 @@ def test_firewall_row_has_all_actions():
 def test_server_row_has_all_actions():
     block = _row_block("body.innerHTML = rows.map",
                        'var addBtn = document.getElementById("btn-server-add")')
-    for action in ("collect-server", "edit-server", "diagnose-server",
-                   "terminal-server", "delete-server"):
+    # SSH 터미널은 서버 표에서 제거됐다 — 서버는 22번이 막힌 경우가 많아
+    # 이 버튼이 무의미하다(사용자 요청, v6.6.1)
+    for action in ("collect-server", "edit-server", "diagnose-server", "delete-server"):
         assert "data-action='%s'" % action in block, action
+    assert "data-action='terminal-server'" not in block
 
 
 def test_new_actions_are_routed():
     """버튼만 있고 위임 핸들러가 없으면 클릭이 무반응이 된다."""
-    for case in ("diagnose-fw", "terminal-fw", "diagnose-server", "terminal-server"):
+    for case in ("diagnose-fw", "terminal-fw", "diagnose-server"):
         assert 'case "%s":' % case in APPJS, case
+    # 서버 터미널은 버튼과 함께 위임 핸들러도 제거(도달 불가 코드 방지)
+    assert 'case "terminal-server":' not in APPJS
     assert "function diagnoseFirewall(" in APPJS
     assert "function diagnoseServer(" in APPJS
     assert 'openTerminal(nid, "firewall")' in APPJS
-    assert 'openTerminal(nid, "server")' in APPJS
 
 
 def test_server_table_action_column_merged():

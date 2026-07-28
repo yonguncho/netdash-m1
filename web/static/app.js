@@ -121,7 +121,6 @@ document.addEventListener("click", function (e) {
     case "terminal-fw": openTerminal(nid, "firewall"); break;
     case "delete-fw": deleteFirewall(nid); break;
     case "diagnose-server": diagnoseServer(nid); break;
-    case "terminal-server": openTerminal(nid, "server"); break;
     case "hw-detail":
       e.preventDefault();
       showHwDetail(nid, btn.getAttribute("data-hw"));
@@ -1035,11 +1034,18 @@ function alertBadge(alert) {
 
 // 위치 셀 — 아이콘·파란색 강조 없이 본문과 같은 글씨. 원문 위치는 보조 줄로.
 function locationCell(dev) {
+  var raw = (dev.location || "").trim();
+  // 서버실 랙 위치는 화면마다 'D10랙 U40' 같은 라벨로 제각각 보였다 →
+  // **서버실**로 통일 표기하고 원문 코드(D10U40)를 옆에 병기한다.
+  if (dev.room_rack || /^[A-Za-z]{1,3}\d{1,3}\s*U\d{1,3}(\s*-\s*U?\d{1,3})?$/.test(raw)) {
+    var code = raw || dev.room_label || "";
+    return "서버실" + (code ? " <span class='cell-inline'>(" + escHtml(code) + ")</span>" : "");
+  }
   if (dev.tps_location) {
     return escHtml(dev.tps_location) +
-      (dev.location ? "<div class='cell-sub'>" + escHtml(dev.location) + "</div>" : "");
+      (raw ? "<div class='cell-sub'>" + escHtml(raw) + "</div>" : "");
   }
-  return dev.location ? escHtml(dev.location) : "<span class='cell-none'>-</span>";
+  return raw ? escHtml(raw) : "<span class='cell-none'>-</span>";
 }
 
 // 호스트네임 셀 — 이름 컬럼을 없앴으므로, 미수집 장비는 등록 이름으로 대체 표기한다
@@ -2085,10 +2091,18 @@ function renderProgressBar(el, st, stopUrl) {
   var total = st.total || 0, done = st.done || 0;
   var pct = total ? Math.round(done / total * 100) : (st.running ? 0 : 100);
   var barCls = st.running ? "" : " np-progress__bar--done";
-  var stopBtn = (st.running && stopUrl)
-    ? "<button class='btn btn--ghost np-stop-btn' data-stop-url='" + escHtml(stopUrl) +
-      "' style='font-size:11px;padding:2px 10px;margin-left:8px'>⏹ 수집 중지</button>"
-    : "";
+  // 중지 요청이 접수된 뒤에는 버튼을 되살리지 않는다.
+  // 예전엔 1.5초마다 진행바를 다시 그리면서 '⏹ 수집 중지' 버튼을 새로 만들어,
+  // 눌러도 아무 일 없는 것처럼 보였다(실제로는 접수돼 마무리 중이었다).
+  var stopBtn = "";
+  if (st.running && stopUrl) {
+    stopBtn = st.stopping
+      ? "<button class='btn btn--ghost np-stop-btn' disabled " +
+        "style='font-size:11px;padding:2px 10px;margin-left:8px;opacity:.6' " +
+        "title='중지가 접수됐습니다. 이미 접속 중인 장비만 마무리한 뒤 멈춥니다'>중지 중…</button>"
+      : "<button class='btn btn--ghost np-stop-btn' data-stop-url='" + escHtml(stopUrl) +
+        "' style='font-size:11px;padding:2px 10px;margin-left:8px'>⏹ 수집 중지</button>";
+  }
   el.innerHTML =
     "<div class='np-progress'>" +
       "<div class='np-progress__track'><div class='np-progress__bar" + barCls +
@@ -2533,13 +2547,19 @@ function renderFirewalls(firewalls) {
                            function (f) { return f.status_display || f.status; });
   tbody.innerHTML = firewalls.map(function(f) {
     var fjson = payloadAttr((f));
-    // 위치: 아이콘·색 강조 없이 본문과 같은 글씨(스위치·서버 표와 통일)
-    var locCell = f.room_label ? escHtml(f.room_label)
-      : (f.location ? escHtml(f.location) : "<span class='cell-none'>-</span>");
+    // 위치: 스위치·서버 표와 완전히 같은 규칙(서버실 통일 표기 + 원문 병기)
+    var locCell = locationCell(f);
     return "<tr>" +
       "<td style='text-align:center'><input type='checkbox' class='fw-check' value='" + f.id + "'" +
       (_fwSel[f.id] ? " checked" : "") + "></td>" +
-      "<td>" + escHtml(f.name) + "</td>" +
+      // 이중화 역할(Master/Backup) — 같은 VIP를 공유하는 쌍에서만 표시
+      "<td>" + escHtml(f.name) +
+        (f.ha_role
+          ? " <span class='status-badge " +
+            (f.ha_role === "master" ? "status-badge--ok" : "status-badge--info") +
+            "' title='이중화(HA) 역할 — 동일 VIP 쌍에서 판정'>" +
+            (f.ha_role === "master" ? "Master" : "Backup") + "</span>"
+          : "") + "</td>" +
       "<td>" + escHtml(f.vendor) + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
@@ -4584,9 +4604,6 @@ function renderServers() {
         "<button class='btn btn--secondary' style='font-size:11px;padding:2px 8px' " +
         "title='계정 없이 도달성·열린 포트·hostname·연결 스위치를 확인' " +
         "data-action='diagnose-server' data-id='" + s.id + "'>진단</button> " +
-        "<button class='btn btn--secondary' style='font-size:11px;padding:2px 8px' " +
-        "title='SSH 터미널로 직접 접속(저장된 계정 필요)' " +
-        "data-action='terminal-server' data-id='" + s.id + "'>💻</button> " +
         "<button class='btn btn--ghost' style='font-size:11px;padding:2px 8px' " +
         "data-action='delete-server' data-id='" + s.id + "'>삭제</button>" +
       "</td></tr>";

@@ -496,6 +496,7 @@ body.nav-collapsed .sidebar__link { justify-content: center; }
 }
 .cell-sub--err { color: #991b1b; max-width: 260px; }
 .cell-none { color: #94a3b8; }    /* 값 없음(-) */
+.cell-inline { color: #64748b; font-size: 11px; }  /* 같은 줄 보조 표기 */
 /* 사양 셀 — CPU·메모리·디스크를 한 칸에 세 줄로 */
 .cell-spec { font-size: 11px; line-height: 1.5; white-space: nowrap; }
 .cell-spec__k { color: #64748b; display: inline-block; min-width: 34px; }

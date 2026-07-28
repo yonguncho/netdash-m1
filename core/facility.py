@@ -29,7 +29,12 @@ _stop_requested = False   # 사용자 '수집 중지' 요청 플래그
 
 def get_status():
     with _lock:
-        return dict(_status)
+        st = dict(_status)
+        # 중지 요청이 접수됐음을 화면이 알 수 있게 노출한다.
+        # 이게 없으면 진행바가 1.5초마다 '⏹ 수집 중지' 버튼을 새로 그려서,
+        # 사용자는 중지가 안 먹은 것으로 오해한다(실제로는 마무리 중).
+        st["stopping"] = bool(_stop_requested and _status.get("running"))
+        return st
 
 
 def request_stop():
@@ -467,8 +472,11 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     net = ipaddress.IPv4Network(subnet, strict=False)
     ips = [str(h) for h in net.hosts()]
     global _stop_requested
-    with _lock:
-        _stop_requested = False   # 새 스캔 시작 — 중지 플래그 초기화
+    # 중지 플래그는 여기서 초기화하지 않는다.
+    # 예전에는 워커 스레드가 이 지점에서 False로 되돌려서, 사용자가 '시작 직후'
+    # 누른 중지가 통째로 지워졌다(요청은 True로 접수되는데 스캔은 끝까지 진행 —
+    # /23 대역이면 15분+ 동안 "중지가 안 된다"). 초기화는 **스캔을 시작하는 쪽**
+    # (start_collect_band / run_auto_scan)이 스레드를 띄우기 전에 한다.
     # 새 스캔 시작 시 이전 diff 배너 초기화(직전 결과가 무기한 남지 않도록)
     _set(running=True, subnet=subnet, done=0, total=len(ips), message="연결 중",
          last_subnet=subnet, last_added=[], last_removed=[])
@@ -1172,11 +1180,14 @@ def start_collect_band(db_path, switch_id, subnet, username, password, source_ip
 
     TOCTOU 방지: running 플래그를 같은 lock 구간에서 즉시 True로 set한다.
     """
+    global _stop_requested
     with _lock:
         if _status["running"]:
             return False
         _status["running"] = True
         _status["message"] = "시작 중"
+        # 이전 스캔의 잔류 플래그를 여기서 해제한다(스레드 시작 전 = 경합 없음)
+        _stop_requested = False
     def _run():
         try:
             collect_band(db_path, switch_id, subnet, username, password, source_ip)

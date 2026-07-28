@@ -194,7 +194,7 @@ def _run_diagnose_all(db_path, source_ip):
 _fw_all_lock = threading.Lock()
 _fw_all = {"running": False, "total": 0, "done": 0, "ok": 0, "message": ""}
 # 스위치 일괄 수집 배치 — 진행바·중지용(수집 자체는 collector 워커 큐가 처리)
-_sw_bulk = {"ids": [], "total": 0, "started": False}
+_sw_bulk = {"ids": [], "total": 0, "started": False, "stopping": False}
 _sw_bulk_lock = threading.Lock()
 # 진단 전용 진행 상태 — 수집과 별개로 둔다(진단이 수집 상태를 덮어쓰지 않게)
 _fw_diag = {"running": False, "total": 0, "done": 0, "ok": 0, "message": "",
@@ -466,6 +466,45 @@ def _server_tz_offset_min():
     return int(-(_t.altzone if _t.daylight and _t.localtime().tm_isdst else _t.timezone) // 60)
 
 
+# 이름 접미사로 역할 판정. 구분자가 있든(FW_M·FW-Backup) 없든(FW1·FW02) 잡는다.
+# 숫자 규칙(1=Master, 2=Backup)은 **같은 IP를 공유하는 이중화 그룹 안에서만** 쓰므로
+# 일반 장비 번호(FW01 단독)에는 적용되지 않는다.
+_HA_MASTER_RE = re.compile(r"(?:^|[_\-\s])(?:m|master|act|active|primary|pri)$", re.I)
+_HA_BACKUP_RE = re.compile(r"(?:^|[_\-\s])(?:b|backup|s|standby|slave|secondary|sec)$", re.I)
+_HA_NUM_RE = re.compile(r"0*([12])$")
+
+
+def fw_ha_role(name, hostname="", ha_info=None):
+    """이중화 장비의 역할(master/backup) 판정. 못 정하면 None.
+
+    우선순위:
+      ① 장비에서 실제로 수집한 HA 정보(ha_info의 role/state) — 가장 정확
+      ② 이름·호스트네임 접미사 규칙 — FW_M/FW_B, FW1/FW2, FW-Master/FW-Backup 등
+         (사용자 요청: "hostname에서 M 또는 1이면 Master, B 또는 2면 Backup")
+    """
+    if isinstance(ha_info, dict):
+        for key in ("role", "state", "status"):
+            v = str(ha_info.get(key) or "").lower()
+            if "master" in v or "primary" in v or "active" in v:
+                return "master"
+            if "backup" in v or "slave" in v or "secondary" in v or "standby" in v:
+                return "backup"
+    for text in (name or "", hostname or ""):
+        t = str(text).strip()
+        if not t:
+            continue
+        if _HA_MASTER_RE.search(t):
+            return "master"
+        if _HA_BACKUP_RE.search(t):
+            return "backup"
+    # 숫자 접미사(FW1/FW2, FW01/FW02) — 그룹 안에서만 호출되므로 안전하다
+    for text in (name or "", hostname or ""):
+        m = _HA_NUM_RE.search(str(text).strip())
+        if m:
+            return "master" if m.group(1) == "1" else "backup"
+    return None
+
+
 def annotate_fw_ha(rows):
     """동일 호스트(VIP)를 공유하는 이중화 쌍을 묶어 **표시용 상태**를 만든다.
 
@@ -489,6 +528,14 @@ def annotate_fw_ha(rows):
             others = [g.get("name") for g in group if g is not r and g.get("name")]
             r["ha_peer"] = others[0] if others else None
             r["ha_shared_ip"] = True
+            _ha = r.get("ha_info")
+            if isinstance(_ha, str) and _ha:
+                try:
+                    import json as _j
+                    _ha = _j.loads(_ha)
+                except Exception:
+                    _ha = None
+            r["ha_role"] = fw_ha_role(r.get("name"), r.get("hostname"), _ha)
             if r.get("status") != "done" and peers_done:
                 r["status_display"] = "done"
                 r["ha_via"] = peers_done[0].get("name")
@@ -2857,9 +2904,16 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         if not running:
             with _sw_bulk_lock:
                 _sw_bulk.update(started=False)
+        with _sw_bulk_lock:
+            stopping = bool(_sw_bulk.get("stopping")) and running
+            if not running:
+                _sw_bulk.update(stopping=False)
+        msg = ("스위치 수집 중 (%d/%d)" % (done, total) if running else "완료(%d대)" % total)
+        if stopping:
+            # 큐에 있던 것은 취소됐고, 이미 접속 중인 장비만 마무리 중이라는 뜻.
+            msg = "중지 요청됨 — 접속 중인 장비만 마무리 중 (%d/%d)" % (done, total)
         return jsonify({"running": running, "done": done, "total": total,
-                        "message": ("스위치 수집 중 (%d/%d)" % (done, total) if running
-                                    else "완료(%d대)" % total)})
+                        "stopping": stopping, "message": msg})
 
     @app.route("/api/switches/bulk-collect/stop", methods=["POST"])
     def bulk_collect_stop():
@@ -2868,6 +2922,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             if not _sw_bulk.get("started"):
                 return jsonify({"ok": False, "error": "진행 중인 수집이 없습니다"}), 400
         n = collector.cancel_pending()
+        with _sw_bulk_lock:
+            _sw_bulk.update(stopping=True)
         log_event("info", "bulk_collect_stopped", cancelled=n)
         return jsonify({"ok": True, "cancelled": n})
 
@@ -3857,7 +3913,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     @app.route("/api/firewalls/collect-all/status", methods=["GET"])
     def collect_all_firewalls_status():
         with _fw_all_lock:
-            return jsonify(dict(_fw_all))
+            st = dict(_fw_all)
+        # 중지 요청 접수 여부를 화면에 알린다(버튼이 되살아나 오해하는 것 방지)
+        st["stopping"] = bool(st.get("stop")) and bool(st.get("running"))
+        if st["stopping"]:
+            st["message"] = "중지 요청됨 — 진행 중인 장비만 마무리 중"
+        return jsonify(st)
 
     @app.route("/api/firewalls/collect-all/stop", methods=["POST"])
     def collect_all_firewalls_stop():
