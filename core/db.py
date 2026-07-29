@@ -3078,6 +3078,29 @@ def list_firewall_credentials(db_path):
         return [dict(r) for r in cur.fetchall()]
 
 
+def clear_switch_credential(db_path, switch_id):
+    """스위치 저장 계정 + enable secret 삭제.
+
+    장비의 IP가 바뀌면 호출한다 — 저장된 계정은 '그 주소의 장비'에 주기로 한
+    것이므로, 주소만 바꾸고 계정을 남겨두면 그 계정이 새 주소로 전송된다
+    (웹셸·수집 경로). 자격증명 탈취로 이어진다.
+    """
+    utils.log_event("info", "clear_switch_credential", switch_id=switch_id)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("UPDATE switches SET cred_blob=NULL WHERE id=?", (switch_id,))
+            conn.execute("DELETE FROM app_settings WHERE key=?",
+                         ("enable_secret_%d" % switch_id,))
+
+
+def clear_server_credential(db_path, server_id):
+    """서버 저장 계정 삭제(IP 변경 시 — clear_switch_credential과 같은 이유)."""
+    utils.log_event("info", "clear_server_credential", server_id=server_id)
+    with _db_lock:
+        with get_db(db_path) as conn:
+            conn.execute("UPDATE servers SET cred_blob=NULL WHERE id=?", (server_id,))
+
+
 def clear_firewall_credential(db_path, firewall_id):
     """방화벽 저장 계정 삭제."""
     utils.log_event("info", "clear_firewall_credential", firewall_id=firewall_id)

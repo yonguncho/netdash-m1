@@ -116,6 +116,10 @@ class FakeAgent(object):
             return None                            # 커뮤니티 불일치 → 무응답
         i = j + ln
         pdu_tag = data[i]
+        # 요청의 request-id를 그대로 돌려줘야 한다 — 클라이언트가 대조한다(v6.7.5)
+        _, k = sn._read_len(data, i + 1)
+        rlen, m = sn._read_len(data, k + 1)
+        rid = sn._dec_int(data[m:m + rlen])
         vbs = sn._parse_varbinds(data)
         oids = [o for o, _v in vbs]
         keys = sorted(self.mib.keys(), key=_oid_key)
@@ -132,10 +136,10 @@ class FakeAgent(object):
                         cnt += 1
                         if cnt >= 20:
                             break
-        return self._encode(out)
+        return self._encode(out, rid, self.community)
 
     @staticmethod
-    def _encode(pairs):
+    def _encode(pairs, rid=1, community=b"public"):
         body = b""
         for oid, val in pairs:
             if val is None:
@@ -149,9 +153,9 @@ class FakeAgent(object):
             else:
                 v = sn._enc_oid(val)
             body += sn._tlv(0x30, sn._enc_oid(oid) + v)
-        pdu = sn._tlv(0xA2, sn._enc_int(1) + sn._enc_int(0) + sn._enc_int(0)
+        pdu = sn._tlv(0xA2, sn._enc_int(rid) + sn._enc_int(0) + sn._enc_int(0)
                       + sn._tlv(0x30, body))
-        return sn._tlv(0x30, sn._enc_int(1) + sn._tlv(0x04, b"public") + pdu)
+        return sn._tlv(0x30, sn._enc_int(1) + sn._tlv(0x04, community) + pdu)
 
     def close(self):
         self._stop = True
@@ -387,10 +391,13 @@ def test_closed_port_does_not_retry(monkeypatch):
         def settimeout(self, t):
             pass
 
-        def sendto(self, *a):
+        def connect(self, addr):
+            pass
+
+        def send(self, d):
             sent["n"] += 1
 
-        def recvfrom(self, n):
+        def recv(self, n):
             raise ConnectionResetError(10054, "reset")
 
         def close(self):
@@ -425,3 +432,129 @@ def test_collector_messages_differ_by_cause(temp_db, monkeypatch):
     err = db.get_server(temp_db, sid).get("last_error") or ""
     assert "snmpd가 떠 있지 않" in err, err
     assert "커뮤니티" not in err, "조치와 무관한 안내를 섞으면 안 된다: %s" % err
+
+
+# ── 응답 위조 방어 (v6.7.5 보안 감사) ──────────────────────────
+def _forged(rid=999999, community=b"WRONG", payload=b"PWNED-BY-SPOOFER"):
+    body = sn._tlv(0x30, sn._enc_oid(sn._SYS_DESCR) + sn._tlv(0x04, payload))
+    pdu = sn._tlv(0xA2, sn._enc_int(rid) + sn._enc_int(0) + sn._enc_int(0)
+                  + sn._tlv(0x30, body))
+    return sn._tlv(0x30, sn._enc_int(1) + sn._tlv(0x04, community) + pdu)
+
+
+def test_reply_from_other_source_is_dropped(monkeypatch):
+    """UDP는 아무나 답을 밀어 넣을 수 있다 — 커널이 걸러야 한다.
+
+    이걸 놓치면 경로상의 공격자가 조작한 사양(os_info·cpu_cores·메모리)을
+    자산 목록에 심을 수 있다. connect()로 상대를 고정해 막는다.
+    """
+    silent = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    silent.bind(("127.0.0.1", 0))
+    monkeypatch.setattr(sn, "SNMP_PORT", silent.getsockname()[1])
+    orig = socket.socket
+
+    class Spy(orig):
+        def send(self, d):
+            r = orig.send(self, d)
+            # 전혀 다른 소켓(=다른 소스포트)에서 위조 응답을 밀어 넣는다
+            f = orig(socket.AF_INET, socket.SOCK_DGRAM)
+            f.sendto(_forged(), ("127.0.0.1", self.getsockname()[1]))
+            f.close()
+            return r
+
+    monkeypatch.setattr(socket, "socket", Spy)
+    try:
+        with pytest.raises(sn.SnmpError):
+            sn._Session("127.0.0.1", "correct", timeout=0.5, retries=0).get([sn._SYS_DESCR])
+    finally:
+        silent.close()
+
+
+def test_request_id_must_match(monkeypatch):
+    """오프패스 공격자가 포트를 맞혀도 request-id가 남는다."""
+    a = FakeAgent()
+    monkeypatch.setattr(sn, "SNMP_PORT", a.port)
+    try:
+        s = sn._Session("127.0.0.1", "public", timeout=0.5, retries=0)
+        msg, rid = s._pdu(0xA0, [sn._SYS_DESCR], 0, 0)
+        with pytest.raises(sn.SnmpBadReply):
+            sn._parse_varbinds(_forged(rid=rid + 1, community=b"public"),
+                               want_rid=rid, want_community=b"public")
+        # 맞는 rid는 통과해야 한다(과잉 차단 방지)
+        assert sn._parse_varbinds(_forged(rid=rid, community=b"public"),
+                                  want_rid=rid, want_community=b"public")
+    finally:
+        a.close()
+
+
+def test_community_must_match():
+    with pytest.raises(sn.SnmpBadReply):
+        sn._parse_varbinds(_forged(rid=7, community=b"WRONG"),
+                           want_rid=7, want_community=b"public")
+
+
+def test_request_id_is_not_predictable():
+    """1001, 1002… 로 시작하면 오프패스 공격자가 맞히기 쉽다."""
+    rids = {sn._Session("127.0.0.1", "public")._rid for _ in range(20)}
+    assert len(rids) > 15, "요청 ID가 예측 가능하다: %r" % sorted(rids)[:5]
+
+
+def test_garbage_packet_does_not_abort_exchange(monkeypatch):
+    """쓰레기 패킷 하나로 수집이 죽으면 안 된다 — 버리고 진짜 응답을 기다린다."""
+    a = FakeAgent()
+    monkeypatch.setattr(sn, "SNMP_PORT", a.port)
+    orig = socket.socket
+
+    class Spy(orig):
+        def send(self, d):
+            r = orig.send(self, d)
+            f = orig(socket.AF_INET, socket.SOCK_DGRAM)
+            f.sendto(b"\x30\x02\x02\x01", ("127.0.0.1", self.getsockname()[1]))  # 잘린 패킷
+            f.close()
+            return r
+
+    monkeypatch.setattr(socket, "socket", Spy)
+    try:
+        got = sn.collect("127.0.0.1", "public", timeout=2.0)
+        assert got["cpu_cores"] == 4, "위조 패킷 때문에 정상 수집이 깨졌다"
+    finally:
+        a.close()
+
+
+# ── 잘린 패킷이 IndexError로 새지 않는다 ────────────────────────
+@pytest.mark.parametrize("raw", [
+    b"", b"\x30", b"\x30\x02\x02\x01", b"\x30\x84\xff\xff", b"\x30\x81",
+    b"\x00" * 8, b"\x30\x05\x02\x01\x01\x04\x00",
+])
+def test_truncated_packets_raise_snmp_error_not_indexerror(raw):
+    """IndexError가 새어 나가면 상위에서 '무응답'으로 오인해 사유가 틀린다."""
+    with pytest.raises(sn.SnmpBadReply):
+        sn._parse_varbinds(raw, want_rid=None, want_community=None)
+
+
+# ── 시간·행수 상한 ──────────────────────────────────────────────
+def test_walk_stops_at_budget(monkeypatch):
+    """매번 타임아웃 직전 한 줄씩만 주는 에이전트가 워커를 붙잡으면 안 된다."""
+    s = sn._Session("127.0.0.1", "public", timeout=0.2, retries=0, budget=0.0)
+    calls = {"n": 0}
+
+    def never(*a, **k):
+        calls["n"] += 1
+        return [("1.3.6.1.2.1.25.3.3.1.2.1", 1)]
+
+    monkeypatch.setattr(s, "_send", never)
+    assert s.walk(sn._HR_PROC_LOAD, max_rows=512) == []
+    assert calls["n"] == 0, "예산이 끝났는데도 요청을 보냈다"
+
+
+def test_walk_respects_max_rows_within_one_reply(monkeypatch):
+    """한 응답에 varbind를 수천 개 채우면 max_rows를 넘겨 cpu_cores가 조작된다."""
+    s = sn._Session("127.0.0.1", "public", timeout=0.2, retries=0)
+    flood = [("%s.%d" % (sn._HR_PROC_LOAD, i), 1) for i in range(5000)]
+    monkeypatch.setattr(s, "_send", lambda *a, **k: flood)
+    assert len(s.walk(sn._HR_PROC_LOAD, max_rows=512)) == 512
+
+
+def test_collect_accepts_budget():
+    import inspect
+    assert "budget" in inspect.signature(sn.collect).parameters

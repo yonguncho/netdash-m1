@@ -1779,7 +1779,7 @@ function swCardHTML(sw, withCheck) {
     : "sw-card--new";
 
   var alertBadge = (sw.alert && sw.alert !== "none")
-    ? "<span class='sw-card__alert-badge badge--" + sw.alert + "'>" + (sw.alert === "critical" ? "⚠ LOOP" : "⚠ FLAP") + "</span>"
+    ? "<span class='sw-card__alert-badge badge--" + escHtml(sw.alert) + "'>" + (sw.alert === "critical" ? "⚠ LOOP" : "⚠ FLAP") + "</span>"
     : (sw.reachable === false
        ? "<span class='sw-card__alert-badge badge--critical reach-down' title='도달성 감시(TCP-22)에서 응답 없음'><span class='reach-dot'></span> 도달불가</span>"
        : "");
@@ -2825,7 +2825,7 @@ function showFirewallDetail(fid) {
             // primary + secondary IP를 한 칸에 위·아래로. 마스크는 prefix(/N).
             var pfx = _fmtPrefix(i.mask);
             var ipStack = "<div><code>" + escHtml(i.ip || "-") + "</code>" +
-              (pfx ? "<span style='color:#94a3b8'>" + pfx + "</span>" : "") + "</div>";
+              (pfx ? "<span style='color:#94a3b8'>" + escHtml(pfx) + "</span>" : "") + "</div>";
             var secs = i.secondary_ips || [];
             secs.forEach(function (s) {
               // s는 "ip/prefix" 또는 "ip"
@@ -2835,7 +2835,7 @@ function showFirewallDetail(fid) {
                 " <span class='status-badge status-badge--new' style='font-size:9px'>2nd</span></div>";
             });
             return "<tr><td>" + escHtml(i.name) + "</td><td>" + ipStack + "</td><td>" +
-              (pfx || "-") + "</td><td>" + escHtml(i.vdom_zone || "-") + "</td></tr>";
+              escHtml(pfx || "-") + "</td><td>" + escHtml(i.vdom_zone || "-") + "</td></tr>";
           }).join("") + "</tbody></table>"
         : "<p style='color:#64748b'>인터페이스 정보 없음</p>";
       var arpHtml = arp.length
@@ -3630,7 +3630,9 @@ function _renderEditor() {
   // 존(그룹) 박스 — 가장 뒤(배경)에 반투명 색상 사각형 + 존 이름. 여러 아이콘을 감쌈.
   _tdiag.nodes.forEach(function (n) {
     var m = _TOPO_KIND[n.kind]; if (!m || !m.zone) return;
-    var col = n.color || m.color, w = n.w || 320, h = n.h || 220;
+    // color/w/h는 API로 저장되는 값이라 임의 문자열이 올 수 있다 — 속성에 그대로
+    // 넣으면 따옴표를 닫고 태그를 열 수 있다. 색은 이스케이프, 크기는 숫자로 강제.
+    var col = escHtml(n.color || m.color), w = _num(n.w) || 320, h = _num(n.h) || 220;
     var x = n.x - w / 2, y = n.y - h / 2;
     svg.push("<g class='tnode' data-id='" + escHtml(n.id) + "' style='cursor:" + (_tEditMode ? "move" : "default") + "'>");
     svg.push("<rect x='" + x + "' y='" + y + "' width='" + w + "' height='" + h +
@@ -4393,7 +4395,8 @@ function loadCreds() {
   }).then(function (d) {
     var delBtn = function (kind, key) {
       return "<button class='btn btn--secondary creds-del' style='font-size:11px;padding:2px 8px' " +
-        "data-kind='" + kind + "' data-key='" + encodeURIComponent(key) + "'>삭제</button>";
+        "data-kind='" + escHtml(kind) + "' data-key='" +
+        encodeURIComponent(key).replace(/'/g, "%27") + "'>삭제</button>";
     };
     var rows = (d.switches || []).map(function (s) {
       return "<tr><td>" + escHtml(s.name || "-") + "</td><td><code>" + escHtml(s.ip || "-") +

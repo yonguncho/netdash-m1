@@ -113,11 +113,18 @@ def clear(owner=None, kind=None):
 
 
 def purge_expired():
-    """만료 항목 정리(주기 호출용)."""
+    """만료 항목 정리(주기 호출용) → 지운 개수.
+
+    조회 시점 만료(lazy)만으로는 부족했다 — 아무도 그 키를 다시 찾지 않으면
+    영영 안 지워져서, 평문 비밀번호가 프로세스 수명 내내 메모리에 남았다
+    (TTL 30분이 무의미). scheduler가 매 주기 호출한다.
+    """
     now = _now()
     with _lock:
-        for k in [k for k, v in _store.items() if v["exp"] <= now]:
+        dead = [k for k, v in _store.items() if v["exp"] <= now]
+        for k in dead:
             _store.pop(k, None)
+    return len(dead)
 
 
 def active_kinds(owner):

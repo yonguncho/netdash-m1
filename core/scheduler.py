@@ -125,6 +125,18 @@ def _loop(db_path):
                 n = db.purge_device_events(db_path, days)
                 if n:
                     utils.log_event("info", "device_events_purged", count=n, retention_days=days)
+
+            # 4) 만료된 세션 계정 정리(매 주기)
+            # 만료가 '그 키를 다시 조회할 때'만 일어나서, 브라우저가 IP를 바꾸거나
+            # 탭을 닫고 다시 오지 않으면 평문 비밀번호가 프로세스 수명 내내 메모리에
+            # 남았다(TTL 30분이 무의미해진다). 주기적으로 직접 걷어낸다.
+            try:
+                from . import session_creds
+                _p = session_creds.purge_expired()
+                if _p:
+                    utils.log_event("info", "session_creds_purged", count=_p)
+            except Exception:
+                pass
             last_check = now
         except Exception as e:
             utils.log_event("error", "scheduler_loop_error",

@@ -4,6 +4,13 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# 로그에서 값을 통째로 가릴 키 이름
+_SENSITIVE_KEYS = frozenset((
+    "password", "passwd", "pw", "token", "secret", "authorization",
+    "credential", "cred", "cred_blob", "key", "api_key", "api_token",
+    "community", "snmp_community", "enable_secret", "secretkey",
+))
+
 
 def _mask_sensitive_data(obj):
     """CRITICAL FIX (CWE-532): Mask sensitive fields in all logged objects.
@@ -12,10 +19,13 @@ def _mask_sensitive_data(obj):
     Applies to dicts, lists, tuples, and string patterns.
     """
     if isinstance(obj, dict):
+        # 예전에는 민감 키일 때 **값을 재귀**시켜서, 평문 비밀번호가 그대로 통과했다
+        # ({'password': 'hunter2'} → 그대로 — 문자열 분기의 정규식은 'key=value'
+        # 형태만 잡는다). 민감 키는 값을 통째로 가리고, 나머지 키는 중첩까지 훑는다
+        # (중첩 dict를 아예 안 보던 것도 같은 버그였다).
         return {
-            k: _mask_sensitive_data(v)
-            if k.lower() in ['password', 'token', 'secret', 'authorization', 'credential', 'key', 'api_key', 'api_token']
-            else v
+            k: ("***" if isinstance(k, str) and k.lower() in _SENSITIVE_KEYS
+                else _mask_sensitive_data(v))
             for k, v in obj.items()
         }
     elif isinstance(obj, (list, tuple)):

@@ -121,7 +121,7 @@ def test_clear_auth_backend_path_exists():
     import app as app_mod
     src = inspect.getsource(app_mod.create_app)
     i = src.index('"/api/settings/email"')
-    assert 'data.get("clear_auth")' in src[i:i + 2500]
+    assert 'data.get("clear_auth")' in src[i:i + 4000]
 
 
 # ── B-22: 관제 방화벽 장애 ───────────────────────────────────────

@@ -81,6 +81,18 @@ def _install_log_redaction():
         lg = logging.getLogger(name)
         if not any(isinstance(x, _RedactTokenFilter) for x in lg.filters):
             lg.addFilter(f)
+    # 로거의 필터는 **그 로거로 직접 낸 레코드에만** 적용된다. 자식 로거
+    # (core.utils 등)의 레코드는 루트의 '핸들러'로 전파되지만 루트의 '필터'는
+    # 거치지 않는다 → 루트에 건 필터가 사실상 죽어 있었다. 핸들러에도 건다.
+    _attach_redaction_to_handlers(f)
+
+
+def _attach_redaction_to_handlers(f=None):
+    """루트 핸들러마다 마스킹 필터를 건다(핸들러가 추가된 뒤에도 호출)."""
+    f = f or _RedactTokenFilter()
+    for h in logging.getLogger().handlers:
+        if not any(isinstance(x, _RedactTokenFilter) for x in h.filters):
+            h.addFilter(f)
 
 
 def _attach_file_logger(path):
@@ -105,6 +117,8 @@ def _attach_file_logger(path):
     fh.setFormatter(logging.Formatter(
         '{"time":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":"%(message)s"}'))
     logging.getLogger().addHandler(fh)
+    # 새 핸들러에도 마스킹을 건다 — 이 파일 로그는 공유 폴더에 남는다.
+    _attach_redaction_to_handlers()
     _file_log_attached = True
 
 
@@ -375,6 +389,29 @@ def validate_credential(value, max_length=256):
     return value
 
 
+def validate_smtp_host(host):
+    """SMTP 서버 주소 검증 → 정규화된 문자열. 위험하면 ValueError.
+
+    IP면 validate_ipv4와 같은 기준으로 막는다. 호스트명이면 형식만 보되,
+    루프백을 가리키는 이름(localhost 등)은 거른다 — 이름은 DNS로 어디든
+    가리킬 수 있어 완전한 방어는 아니고, 명백한 우회만 차단한다.
+    """
+    h = (host or "").strip()
+    if not h:
+        raise ValueError("주소가 비었습니다")
+    try:
+        ipaddress.IPv4Address(h)
+    except ipaddress.AddressValueError:
+        if not re.match(r"^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+                        r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*$", h):
+            raise ValueError("호스트명 형식이 아닙니다")
+        if h.lower() in ("localhost", "localhost.localdomain") or \
+                h.lower().endswith(".localhost"):
+            raise ValueError("루프백 주소는 사용할 수 없습니다")
+        return h
+    return validate_ipv4(h)
+
+
 def validate_ipv4(ip_str, allowed_ip_ranges=None):
     """HARDENING (CWE-918 SSRF): Validate IPv4 address and reject reserved/dangerous ranges.
 
@@ -402,6 +439,10 @@ def validate_ipv4(ip_str, allowed_ip_ranges=None):
         raise ValueError(f"Link-local address not allowed: {ip_str}")
     if ip_obj.is_reserved:
         raise ValueError(f"Reserved address not allowed: {ip_str}")
+    # 0.0.0.0은 is_loopback/is_reserved 어디에도 안 걸리는데, connect() 하면
+    # 로컬호스트로 간다 → 루프백 차단을 그대로 우회한다(감사에서 확인).
+    if ip_obj.is_unspecified:
+        raise ValueError(f"Unspecified address not allowed: {ip_str}")
 
     # Check allowed_ip_ranges if provided (whitelist mode)
     if allowed_ip_ranges:
@@ -1904,7 +1945,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 fields["os_type"] = "auto"
             if "is_vm" in data:
                 fields["is_vm"] = 1 if data.get("is_vm") else 0
-            if not db.get_server(db_path, server_id):
+            _cur_sv = db.get_server(db_path, server_id)
+            if not _cur_sv:
                 return jsonify({"error": "not found"}), 404
             # IP 변경 — 화면 수정 모달이 IP 칸을 보여주고 보내는데 지금까지 조용히 무시됐다.
             if "ip" in data:
@@ -1918,6 +1960,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     if dup and dup.get("id") != server_id:
                         return jsonify({"error": "이미 등록된 IP입니다: %s" % new_ip}), 409
                     fields["ip"] = new_ip
+                    # 주소가 바뀌면 저장 계정을 지운다 — 안 지우면 그 계정이
+                    # 새 주소로 전송된다(수집 SSH). 스위치·방화벽과 같은 정책.
+                    if _cur_sv.get("ip") and _cur_sv["ip"] != new_ip:
+                        db.clear_server_credential(db_path, server_id)
+                        log_event("warning", "server_ip_changed_cred_cleared",
+                                  server_id=server_id, old=_cur_sv.get("ip"), new=new_ip)
             db.update_server(db_path, server_id, **fields)
             return jsonify({"ok": True})
         except Exception as e:
@@ -2402,6 +2450,21 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": "nodes/edges must be lists"}), 400
             if len(nodes) > 2000 or len(edges) > 4000:
                 return jsonify({"error": "too large"}), 400
+            # 저장된 구성도는 **모든 사용자 화면에 다시 그려진다.** color/w/h가 SVG
+            # 속성에 들어가므로, 임의 문자열을 그대로 보관하면 한 사람이 모두의
+            # 화면을 오염시킬 수 있다. 화면 이스케이프와 함께 이중으로 막는다.
+            for _n in nodes:
+                if not isinstance(_n, dict):
+                    return jsonify({"error": "node must be an object"}), 400
+                _c = _n.get("color")
+                if _c is not None and not (
+                        isinstance(_c, str)
+                        and re.match(r"^(#[0-9A-Fa-f]{3,8}|[A-Za-z]{3,20})$", _c)):
+                    return jsonify({"error": "invalid node color"}), 400
+                for _k in ("w", "h", "x", "y"):
+                    _v = _n.get(_k)
+                    if _v is not None and not isinstance(_v, (int, float)):
+                        return jsonify({"error": "node %s must be a number" % _k}), 400
             db.set_setting(db_path, "topology_diagram",
                            _json.dumps({"nodes": nodes, "edges": edges}))
             log_event("info", "topo_diagram_saved", nodes=len(nodes), edges=len(edges))
@@ -2546,7 +2609,16 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         try:
             data = request.get_json(silent=True) or {}
             db.set_setting(db_path, "email_enabled", "1" if data.get("enabled") else "0")
-            db.set_setting(db_path, "smtp_host", (data.get("smtp_host") or "").strip()[:200])
+            # SMTP 서버 주소는 저장된 SMTP 계정이 그대로 전송되는 곳이다.
+            # 검증이 없으면 주소만 바꿔 계정을 빼낼 수 있고(STARTTLS 실패는 무시되어
+            # 평문 AUTH가 나간다), 루프백·링크로컬을 넣어 내부 포트도 두드릴 수 있다.
+            _smtp_host = (data.get("smtp_host") or "").strip()[:200]
+            if _smtp_host:
+                try:
+                    _smtp_host = validate_smtp_host(_smtp_host)
+                except ValueError as e:
+                    return jsonify({"error": "SMTP 서버 거부: %s" % e}), 400
+            db.set_setting(db_path, "smtp_host", _smtp_host)
             port_raw = str(data.get("smtp_port") or "25").strip()
             db.set_setting(db_path, "smtp_port", port_raw if port_raw.isdigit() else "25")
             db.set_setting(db_path, "smtp_from", (data.get("smtp_from") or "netdash@localhost").strip()[:200])
@@ -3303,6 +3375,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     ip = validate_ipv4(ip, config.collector.get("allowed_ip_ranges"))
                 except ValueError as e:
                     return jsonify({"error": str(e)}), 400
+                # 저장된 계정은 '그 장비'에 주기로 한 것이다. IP를 다른 주소로 바꾸면
+                # 그 계정이 새 주소로 전송된다(웹셸·수집) → 자격증명 탈취 경로.
+                # 주소가 실제로 바뀌면 계정을 지우고 다시 입력받는다.
+                _cur = db.get_switch(db_path, switch_id) or {}
+                if _cur.get("ip") and _cur["ip"] != ip:
+                    db.clear_switch_credential(db_path, switch_id)
+                    log_event("warning", "switch_ip_changed_cred_cleared",
+                              switch_id=switch_id, old=_cur.get("ip"), new=ip)
             # device_type 화이트리스트 검증(bulk-set-type과 동일 정책) — 임의 값이
             # 저장돼 UI 드롭다운/토폴로지 분류와 어긋나는 것 방지. 빈 값='미지정' 허용.
             _dt = data.get("device_type") if "device_type" in data else None
@@ -3496,6 +3576,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     host = validate_ipv4(host, config.collector.get("allowed_ip_ranges"))
                 except ValueError as e:
                     return jsonify({"error": f"host rejected: {e}"}), 400
+                # 스위치와 같은 이유 — 주소를 바꾸면 저장된 관리자 계정/API 토큰이
+                # 새 주소로 전송된다(diagnose·collect). 주소가 바뀌면 지운다.
+                _cur = db.get_firewall(db_path, fid) or {}
+                if _cur.get("host") and _cur["host"] != host:
+                    db.clear_firewall_credential(db_path, fid)
+                    log_event("warning", "firewall_host_changed_cred_cleared",
+                              firewall_id=fid, old=_cur.get("host"), new=host)
             vendor = (data.get("vendor") or "").strip().lower()
             if vendor and vendor not in firewall_mod.SUPPORTED_VENDORS:
                 return jsonify({"error": "vendor must be fortigate or paloalto"}), 400
