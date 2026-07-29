@@ -315,6 +315,32 @@ _bindExcelImport("btn-server-import", "server-import-file", "/api/servers/import
 _bindExcelImport("btn-firewall-import", "firewall-import-file", "/api/firewalls/import",
   "방화벽 엑셀 등록", function () { if (typeof loadFirewalls === "function") loadFirewalls(); });
 
+// 서버 사양(CPU·메모리·디스크) 엑셀 일괄 등록 — IP로 **이미 등록된 서버에만** 매칭.
+// 응답 형식(matched/unmatched)이 등록용(imported/skipped)과 달라 별도 바인더로 둔다.
+(function () {
+  var btn = document.getElementById("btn-server-import-specs");
+  var inp = document.getElementById("server-import-specs-file");
+  if (!btn || !inp) return;
+  btn.addEventListener("click", function () { inp.click(); });
+  inp.addEventListener("change", function () {
+    if (!inp.files.length) return;
+    var fd = new FormData();
+    fd.append("file", inp.files[0]);
+    fetch("/api/servers/import-specs", { method: "POST", body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          alert("서버 사양 반영 완료: " + res.matched + "대 반영" +
+            (res.unmatched ? " / 등록 안 된 IP " + res.unmatched + "건(건너뜀)" : "") +
+            (res.skipped ? " / 형식 오류 " + res.skipped + "건" : "") +
+            " / 전체 " + res.total + "행");
+          if (typeof loadServers === "function") loadServers();
+        } else alert(res.error || "반영 실패");
+        inp.value = "";
+      }).catch(function (e) { console.error(e); alert("서버 오류"); inp.value = ""; });
+  });
+})();
+
 // 테이블 검색창 HTML 생성 헬퍼
 function _searchBox(targetId, placeholder) {
   return "<input class='tbl-search' data-target='" + targetId + "' placeholder='" +

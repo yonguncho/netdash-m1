@@ -46,6 +46,17 @@ ALIASES = {
     # 방화벽/서버 인벤토리용
     'port': {'port', '포트', 'mgmtport', '관리포트'},
     'os_type': {'ostype', 'osname', '운영체제', 'osversion', 'os version', 'os버전', '운영체제버전'},
+    # 서버 사양 일괄 등록용 — 실측 수집 없이 엑셀로 CPU·메모리·디스크를 채운다.
+    # 단위가 섞여 들어오는 칸이 많아(메모리를 GB로 적는 경우가 대부분) MB/GB를
+    # 별도 필드로 받아 파서에서 환산한다.
+    'cpu_model': {'cpumodel', 'cpu', 'processor', 'cpu모델', '프로세서', 'cpu종류'},
+    'cpu_cores': {'cpucores', 'cores', 'corecount', 'cpu코어', '코어수', '코어', 'cpu코어수'},
+    'mem_total_mb': {'memmb', 'memorymb', 'ram_mb', '메모리mb', '메모리(mb)'},
+    'mem_total_gb': {'memgb', 'memorygb', 'ram', 'ram_gb', '메모리', '메모리gb', '메모리(gb)',
+                     'memory'},
+    'disk_total_gb': {'diskgb', 'disktotal', 'disk', 'storage', '디스크', '디스크gb',
+                      '디스크(gb)', '디스크용량', '전체디스크'},
+    'disk_used_gb': {'diskused', 'diskusedgb', '사용디스크', '디스크사용량', '사용중디스크'},
 }
 
 IP_REGEX = re.compile(
@@ -212,6 +223,65 @@ def parse_server_inventory(source) -> List[Dict[str, Any]]:
         }
     return _inventory_rows(source, ('name', 'ip', 'hostname', 'location', 'os_type'),
                            'ip', _b)
+
+
+def _to_num(v):
+    """엑셀 셀 → float. '32 GB'·'1,024'처럼 단위·구분자가 섞여도 숫자만 뽑는다."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = re.sub(r"[^0-9.\-]", "", str(v))
+    if not s or s in ("-", "."):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def parse_server_specs(source) -> List[Dict[str, Any]]:
+    """IP + CPU·메모리·디스크 사양 엑셀 → 서버 사양 갱신 행 목록.
+
+    실측 수집(SSH·WMI·SNMP)이 막힌 서버가 있어, 이미 파악해 둔 사양을 엑셀로
+    한 번에 채우기 위한 경로다. **IP만 매칭용**이고 새 서버를 만들지 않는다
+    (호출부가 기존 서버와만 매칭해야 한다) — 이름·위치는 여기서 건드리지 않는다.
+
+    Returns: [{ip, cpu_model, cpu_cores, mem_total_mb, disk_total_gb, disk_used_gb}]
+    값이 비었거나 해석 안 되는 칸은 아예 키에서 빠진다(= 그 필드는 안 건드림).
+    메모리는 GB 칸으로 들어와도 MB로 환산해 mem_total_mb 하나로 합친다.
+    """
+    def _b(_get):
+        ip = _get('ip')
+        out = {"ip": ip}
+        model = _get('cpu_model')
+        if model:
+            out["cpu_model"] = model[:150]
+        cores = _to_num(_get('cpu_cores'))
+        if cores and cores > 0:
+            out["cpu_cores"] = int(cores)
+        mem_mb = _to_num(_get('mem_total_mb'))
+        if not mem_mb:
+            mem_gb = _to_num(_get('mem_total_gb'))
+            if mem_gb and mem_gb > 0:
+                mem_mb = mem_gb * 1024
+        if mem_mb and mem_mb > 0:
+            out["mem_total_mb"] = int(round(mem_mb))
+        disk_total = _to_num(_get('disk_total_gb'))
+        if disk_total and disk_total > 0:
+            out["disk_total_gb"] = round(disk_total, 1)
+        disk_used = _to_num(_get('disk_used_gb'))
+        if disk_used and disk_used >= 0:
+            out["disk_used_gb"] = round(disk_used, 1)
+        # 사양 칸이 전부 비어 있으면 반영할 게 없다 — IP만 있는 행은 버린다.
+        if len(out) <= 1:
+            return None
+        return out
+    return _inventory_rows(
+        source,
+        ('ip', 'cpu_model', 'cpu_cores', 'mem_total_mb', 'mem_total_gb',
+         'disk_total_gb', 'disk_used_gb'),
+        'ip', _b)
 
 
 def parse_firewall_inventory(source) -> List[Dict[str, Any]]:

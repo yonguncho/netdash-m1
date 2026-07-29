@@ -404,11 +404,13 @@
           <select id="status-filter-srv" class="loc-filter" title="수집 상태로 걸러 봅니다" style="width:110px"><option value="">상태 전체</option><option value="done">정상</option><option value="collecting">수집중</option><option value="failed">오류</option><option value="new">미수집</option></select>
           <button id="btn-server-add" class="btn btn--primary" style="font-size:12px">+ 서버 추가</button>
           <button id="btn-server-import" class="btn btn--primary" style="font-size:12px" title="이름·IP가 담긴 엑셀(.xlsx)로 서버를 일괄 등록. 계정·OS·상세는 이후 '수집'에서 자동 채웁니다.">📥 엑셀 등록</button>
+          <button id="btn-server-import-specs" class="btn btn--secondary" style="font-size:12px" title="IP·CPU·메모리·디스크가 담긴 엑셀(.xlsx)로 이미 등록된 서버에 사양만 채웁니다(새 서버는 만들지 않음). 실측 수집이 막힌 서버에 사용하세요.">📋 사양 엑셀 반영</button>
           <button id="btn-server-collect-all" class="btn btn--secondary" style="font-size:12px" title="체크한 서버를 수집(미체크 시 전체). 계정이 필요하면 팝업에서 입력합니다.">정보 수집 (0)</button>
           <button id="btn-server-diagnose" class="btn btn--secondary" style="font-size:12px" title="계정 없이 도달성·열린 포트·hostname·연결 스위치를 확인(무자격 진단)">전체 진단</button>
           <button class="btn btn--secondary nd-export" data-export="servers" data-label="서버 현황" style="font-size:12px" title="목록을 파일로 저장(CSV/TXT 선택)">⬇ 다운로드</button>
           <button id="btn-server-bulk-delete" class="btn btn--ghost" style="font-size:12px" title="체크한 서버 삭제" disabled>선택 삭제 (0)</button>
           <input id="server-import-file" type="file" accept=".xlsx" style="display:none">
+          <input id="server-import-specs-file" type="file" accept=".xlsx" style="display:none">
           <!-- 공통 계정 입력칸은 보안상 제거 — 수집 시 팝업에서만 입력(세션 유지) -->
           <input type="hidden" id="server-common-user"><input type="hidden" id="server-common-pass">
           <input type="checkbox" id="server-common-persist" style="display:none">

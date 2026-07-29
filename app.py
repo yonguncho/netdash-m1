@@ -27,6 +27,7 @@ from core.collector import _sanitize_error_msg
 from core.excel_loader import load_workbook as load_excel_workbook
 from core.excel_loader import parse_switch_inventory
 from core.excel_loader import parse_server_inventory, parse_firewall_inventory
+from core.excel_loader import parse_server_specs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1636,6 +1637,50 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify({"ok": True, "imported": imported, "skipped": skipped, "total": len(rows)})
         except Exception as e:
             log_event("error", "import_servers_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/servers/import-specs", methods=["POST"])
+    @rate_limit("import_server_specs", max_requests=5, window_seconds=60)
+    def import_server_specs():
+        """IP + CPU·메모리·디스크 사양 엑셀 → **이미 등록된** 서버에 사양만 채운다.
+
+        실측 수집(SSH·WMI·SNMP)이 막힌 서버가 있어, 파악해 둔 사양을 한 번에
+        반영하려는 용도다. 등록 자체는 이 라우트가 하지 않는다 — IP가 일치하는
+        서버가 없으면 그 행은 건너뛴다(엉뚱한 IP를 새 서버로 만들지 않기 위해).
+        """
+        log_event("info", "import_server_specs_requested")
+        if "file" not in request.files:
+            return jsonify({"error": "file field required"}), 400
+        content, err = _read_xlsx_safe(request.files["file"])
+        if err:
+            return err
+        try:
+            rows = parse_server_specs(io.BytesIO(content))
+            allowed = config.collector.get("allowed_ip_ranges")
+            matched = unmatched = skipped = 0
+            for r in rows:
+                try:
+                    ip = validate_ipv4(r["ip"], allowed)
+                except ValueError:
+                    skipped += 1
+                    continue
+                sv = db.get_server_by_ip(db_path, ip)
+                if not sv:
+                    unmatched += 1
+                    continue
+                fields = {k: v for k, v in r.items() if k != "ip"}
+                if not fields:
+                    skipped += 1
+                    continue
+                db.update_server(db_path, sv["id"], **fields)
+                matched += 1
+            log_event("info", "server_specs_imported", matched=matched,
+                      unmatched=unmatched, skipped=skipped, total=len(rows))
+            return jsonify({"ok": True, "matched": matched, "unmatched": unmatched,
+                            "skipped": skipped, "total": len(rows)})
+        except Exception as e:
+            log_event("error", "import_server_specs_error",
+                      error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/firewalls/import", methods=["POST"])
