@@ -119,7 +119,7 @@ def test_wmi_fills_specs_when_ssh_closed(temp_db, monkeypatch):
     """SSH가 닫힌 Windows 서버(135만 열림)에서 사양이 채워져야 한다."""
     _stub_scan(monkeypatch, [135, 445, 3389])
     monkeypatch.setattr(wmi_collect, "available", lambda: True)
-    monkeypatch.setattr(wmi_collect, "collect", lambda ip, u, p, timeout=60: dict(_WMI_OK))
+    monkeypatch.setattr(wmi_collect, "collect", lambda ip, u, p, timeout=60, **kw: dict(_WMI_OK))
     sid = db.save_server(temp_db, "WIN2016", "10.2.2.10")
     sc.collect_server(temp_db, sid, "admin", "pw")
     row = db.get_server(temp_db, sid)
@@ -134,7 +134,7 @@ def test_wmi_normalizes_jedec_maker(temp_db, monkeypatch):
     """WMI가 주는 제조사 코드(80CE…)를 SSH 경로와 같은 규칙으로 정리한다."""
     _stub_scan(monkeypatch, [135])
     monkeypatch.setattr(wmi_collect, "available", lambda: True)
-    monkeypatch.setattr(wmi_collect, "collect", lambda ip, u, p, timeout=60: dict(_WMI_OK))
+    monkeypatch.setattr(wmi_collect, "collect", lambda ip, u, p, timeout=60, **kw: dict(_WMI_OK))
     sid = db.save_server(temp_db, "WIN", "10.2.2.11")
     sc.collect_server(temp_db, sid, "admin", "pw")
     mods = json.loads(db.get_server(temp_db, sid)["mem_modules"])

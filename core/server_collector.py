@@ -1617,23 +1617,36 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
             from . import wmi_collect
         except Exception:
             wmi_collect = None
+        # RDP(3389)만 보여도 Windows로 본다 — 그런 서버는 대개 WinRM(5985)이
+        # 함께 열려 있고, 거기로 사양을 읽을 수 있다.
         _win_like = ((fields.get("os_type") or sv.get("os_type") or "").lower() == "windows"
-                     or bool(set(open_ports or []) & {135, 445, 3389}))
+                     or bool(set(open_ports or []) & {135, 445, 3389, 5985, 5986}))
         if wmi_collect and wmi_collect.available() and _win_like                 and wmi_collect.can_try(open_ports):
             try:
                 # SSH와 같은 이유로 WMI도 계정이 서버마다 다를 수 있다 —
                 # 인증이 거부되면 이 서버에 저장된 계정으로 한 번 더 시도한다.
                 _wc = _cred_candidates(db_path, server_id, username, password)                     or [(username, password, "입력 계정")]
+                # 전송은 열린 포트로 정한다: WinRM(단일 포트) 우선, 그다음 DCOM.
+                # DCOM은 135가 열려 있어도 동적 포트가 막혀 실패하는 일이 잦다.
+                _tr = wmi_collect.transports_for(open_ports)
                 w, _we = None, None
                 for _u, _pw, _label in _wc:
-                    try:
-                        w = wmi_collect.collect(ip, _u, _pw)
-                        _we = None
-                        break
-                    except Exception as ex:
-                        _we = ex
-                        if not _is_auth_error(ex):
+                    for _t, _tp in _tr:
+                        try:
+                            w = wmi_collect.collect(ip, _u, _pw, transport=_t, port=_tp)
+                            _we = None
                             break
+                        except Exception as ex:
+                            _we = ex
+                            if _is_auth_error(ex):
+                                break        # 계정 문제면 다른 전송도 같다
+                    if w is not None:
+                        if _label != "입력 계정":
+                            utils.log_event("info", "server_cred_fallback_used",
+                                            server_id=server_id, ip=ip, used=_label)
+                        break
+                    if _we is not None and not _is_auth_error(_we):
+                        break                 # 전송 문제 — 계정을 바꿔도 같다
                 if _we is not None:
                     raise _we
                 for k in ("hostname", "os_info", "mac", "cpu_model", "cpu_cores",

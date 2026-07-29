@@ -101,7 +101,9 @@ def test_diagnose_all_does_not_touch_specs(cli, monkeypatch):
                      mem_modules=json.dumps([{"size_mb": 32768, "type": "DDR4"}]),
                      mem_slots_total=4)
     assert cli.post("/api/servers/diagnose-all").status_code == 202
-    for _ in range(40):
+    # 무자격 경로도 네트워크를 탄다 — 로컬 ARP(~0.4초)와 SNMP 폴백(2초 타임아웃
+    # ×2회 = ~4초)이 실측으로 걸린다. 4초만 기다리면 경합으로 간헐 실패한다.
+    for _ in range(150):
         time.sleep(0.1)
         if not server_collector.get_progress().get("running"):
             break
