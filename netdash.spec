@@ -5,6 +5,8 @@ hiddenimports = []
 hiddenimports += collect_submodules('flask')
 hiddenimports += collect_submodules('werkzeug')
 hiddenimports += ['requests']
+# 사양 수집 진단(--diag-server) — exe에서도 쓸 수 있어야 현장에서 원인을 짚는다
+hiddenimports += ['scripts', 'scripts.diag_server_spec']
 # 웹 SSH 터미널(WebSocket)
 hiddenimports += ['flask_sock', 'simple_websocket', 'wsproto']
 # PPTX 구성도 자동 생성

@@ -4561,7 +4561,18 @@ if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser(description="NetDash - Network switch current status dashboard")
         parser.add_argument("--demo", action="store_true", help="Run in demo mode with sample data")
+        # 사양 수집이 안 될 때 어느 경로에서 막히는지 한 대씩 짚어본다.
+        # 화면에는 마지막 사유 한 줄만 남아 원인 파악이 어렵다.
+        parser.add_argument("--diag-server", metavar="IP",
+                            help="서버 사양 수집 경로 진단(SSH/WinRM/WMI/SNMP)")
+        parser.add_argument("--user", default="", help="--diag-server 용 계정")
+        parser.add_argument("--community", default="public",
+                            help="--diag-server 용 SNMP 커뮤니티")
         args = parser.parse_args()
+
+        if args.diag_server:
+            from scripts.diag_server_spec import run_diagnosis
+            raise SystemExit(run_diagnosis(args.diag_server, args.user, args.community))
 
         # CLI --demo flag takes precedence over DEMO_MODE environment variable
         demo_mode = args.demo if args.demo else (os.getenv("DEMO_MODE", "").lower() == "true")
