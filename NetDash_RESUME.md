@@ -1,9 +1,27 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.7.6 (커밋 66512ca, 릴리스 발행 완료)
+**현재 버전**: v6.7.8 (커밋 c26472d, 릴리스 발행 완료)
 **상태**: 백로그 비었음 — 다음 지시 대기
 
-## 방금 완료한 것 (v6.7.5 / v6.7.6) — 보안 감사
+## 방금 완료한 것 (v6.7.7 / v6.7.8)
+
+### v6.7.8 — claude-security 스캔 반영
+플러그인 스캔(medium, 연구원 31명 → 후보 46 → 검증 통과 10건) 중 재현 확인 5건 반영.
+- **자체 감사가 놓친 2건**(둘 다 '경로가 둘인데 한쪽만 봄'):
+  serverroom 랙 엑셀 수식 주입(exporter.py만 확인했었음),
+  /api/upload XML 엔티티 폭탄(_read_xlsx_safe를 안 거치는 별도 경로).
+  → `_xlsx_has_xml_entities()` 공통화 + '구현 1개·호출 2곳 이상' 테스트로 고정.
+- 진단·설비 라우트 4곳 validate_credential 적용, `_cred_owner`를 `_client_ip()`로.
+- **보류(사용자 판단 필요)**: FortiGate verify_ssl=False, SSH AutoAddPolicy —
+  둘 다 켜면 현재 수집이 깨진다(자체서명 인증서·known_hosts 부재).
+
+### v6.7.7 — WinRM 사양 수집
+RDP만 열린 Windows 서버. RDP 자체로는 조회 불가하나 그런 서버는 WinRM(5985)이
+대개 열려 있다. 기존엔 DCOM(135)만 시도해 동적 포트가 막히면 전멸이었다.
+`transports_for()`로 WinRM 우선 → DCOM 폴백. 한국어 stderr(cp949) 디코딩도 수정.
+**미검증**: 이 PC에 WinRM이 꺼져 있어 원격 수집 성공까지의 종단 확인 못 함.
+
+## v6.7.5 / v6.7.6 — 자체 보안 감사
 
 claude-security 플러그인(Anthropic 공식) 설치 완료. **스캔은 사용자가 직접 실행해야
 한다** — 스킬에 `disable-model-invocation: true`, 워크플로에 "do not improvise a
