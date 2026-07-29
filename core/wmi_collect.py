@@ -179,7 +179,18 @@ def _short_error(text):
     t = (text or "").lower()
     # 한국어 Windows는 같은 오류를 한국어로 낸다 — 영어 패턴만 두면 다 빗나간다.
     if "access is denied" in t or "액세스가 거부" in t:
-        return "WMI 접근 거부 — 계정 권한(로컬 Administrators) 확인"
+        # 가장 흔한 원인은 계정 권한 부족이 아니라 UAC 원격 제한이다.
+        # 도메인에 안 속한(워크그룹) 서버에서 **도메인 계정이 아닌 로컬 계정**으로
+        # 원격 WMI/DCOM에 붙으면, 그 계정이 로컬 Administrators에 있어도
+        # Windows가 원격 세션에서 관리자 토큰을 깎아 버린다(필터드 토큰).
+        # 예외는 빌트인 Administrator(RID-500) 계정 하나뿐이다 — 그래서 계정
+        # 권한을 아무리 확인해도 "이미 관리자인데 왜 거부되지?"가 반복된다.
+        return ("WMI 접근 거부 — 로컬 계정으로 원격 접속 시 Windows가 관리자 "
+                "권한을 제한합니다(UAC 원격 제한). 대상 서버에서 관리자 PowerShell로: "
+                "New-ItemProperty -Path HKLM:\\SOFTWARE\\Microsoft\\Windows\\"
+                "CurrentVersion\\Policies\\System -Name LocalAccountTokenFilterPolicy "
+                "-Value 1 -PropertyType DWord -Force  "
+                "(도메인 계정이거나 빌트인 Administrator 계정이면 이 문제가 없습니다)")
     if "rpc server is unavailable" in t or "0x800706ba" in t or "rpc 서버를 사용할 수 없" in t:
         return "WMI 연결 실패 — 방화벽에서 RPC(135) 및 동적 포트 허용 필요"
     if "logon failure" in t or "user name or password" in t \

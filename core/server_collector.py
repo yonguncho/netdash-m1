@@ -1671,7 +1671,9 @@ def _collect_server_locked(db_path, server_id, sv, username, password):
                 errors[:] = [e for e in errors if "SSH" not in e and "사양" not in e]
                 utils.log_event("info", "server_spec_via_wmi", server_id=server_id, ip=ip)
             except Exception as e:
-                errors.append("WMI 폴백 실패 — %s" % str(e)[:110])
+                # UAC 원격 제한 안내(레지스트리 명령 포함)처럼 조치가 긴 사유는
+                # 110자로 자르면 명령이 중간에 끊겨 그대로 실행할 수 없다.
+                errors.append("WMI 폴백 실패 — %s" % str(e)[:320])
 
     # ②-C SNMP(161/UDP) 폴백 — 여기까지 와서도 사양이 비어 있는 서버.
     #     SSH가 닫혔거나 계정이 아예 없는 리눅스·UNIX 서버가 대상이다(WMI는 Windows 전용).

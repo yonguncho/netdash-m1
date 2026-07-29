@@ -188,3 +188,28 @@ def test_wmi_failure_is_reported(temp_db, monkeypatch):
     sc.collect_server(temp_db, sid, "admin", "pw")
     err = db.get_server(temp_db, sid).get("last_error") or ""
     assert "WMI" in err and "권한" in err, err
+
+
+# ── v6.8.1: 액세스 거부의 진짜 원인은 대개 UAC 원격 제한 ────────
+def test_access_denied_points_at_uac_registry_fix():
+    """계정 권한을 아무리 확인해도 원인이 아닌 경우가 대부분이다.
+
+    워크그룹(도메인 미가입) 서버에서 로컬 관리자 계정으로 원격 WMI/DCOM에
+    붙으면, 그 계정이 로컬 Administrators에 있어도 Windows가 원격 세션에서
+    관리자 토큰을 깎는다(UAC 원격 제한). 예외는 빌트인 Administrator뿐이다.
+    """
+    msg = wmi_collect._short_error("New-CimSession : 액세스가 거부되었습니다.")
+    assert "LocalAccountTokenFilterPolicy" in msg
+    assert "New-ItemProperty" in msg, "그대로 실행할 명령이 없다"
+    assert "-Value 1" in msg and "-PropertyType DWord" in msg
+
+
+def test_english_access_denied_also_maps():
+    msg = wmi_collect._short_error("New-CimSession : Access is denied.")
+    assert "LocalAccountTokenFilterPolicy" in msg
+
+
+def test_access_denied_guidance_is_not_truncated():
+    """레지스트리 명령이 잘리면 그대로 실행할 수 없다."""
+    msg = wmi_collect._short_error("Access is denied.")
+    assert msg.rstrip().endswith(")")

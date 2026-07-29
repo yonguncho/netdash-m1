@@ -150,7 +150,9 @@ def run_diagnosis(ip, user="", community="public", password=None, emit=None):
             r, err, dt = _t(wmi_collect.collect, args.ip, args.user, pw,
                             transport=tr, port=port)
             if err:
-                out(NG + "%-5s:%-5s 실패 (%.1f초): %s" % (tr, port, dt, str(err)[:130]))
+                # UAC 원격 제한 안내처럼 레지스트리 명령이 포함된 사유는 짧게
+                # 자르면 그대로 실행할 수 없다.
+                out(NG + "%-5s:%-5s 실패 (%.1f초): %s" % (tr, port, dt, str(err)[:320]))
             else:
                 out(OK + "%-5s:%-5s 사양 수집됨: cores=%s mem=%sMB disk=%sGB"
                       % (tr, port, r.get("cpu_cores"), r.get("mem_total_mb"),

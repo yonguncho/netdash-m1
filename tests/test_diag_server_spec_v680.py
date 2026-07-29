@@ -210,3 +210,22 @@ def test_spec_diag_button_in_ui():
     js = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "diag-spec" in js and "_addSpecDiagButton" in js
     assert "사양 수집 경로 진단" in js
+
+
+def test_wmi_failure_reason_not_truncated_in_diag(quiet, monkeypatch):
+    """레지스트리 명령이 잘리면 사용자가 그대로 실행할 수 없다."""
+    monkeypatch.setattr(diag.sc, "scan_ports", lambda ip, *a, **k: [135, 3389])
+    monkeypatch.setattr(diag.sc, "find_ssh_port", lambda ip, p, **k: None)
+    monkeypatch.setattr(diag.wmi_collect, "available", lambda: True)
+
+    def boom(ip, u, p, transport="dcom", port=None):
+        raise RuntimeError(diag.wmi_collect._short_error(
+            "New-CimSession : 액세스가 거부되었습니다."))
+
+    monkeypatch.setattr(diag.wmi_collect, "collect", boom)
+    monkeypatch.setattr(diag.snmp_collect, "collect",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("무응답")))
+    diag.run_diagnosis("10.0.0.1", "localadmin")
+    joined = "\n".join(quiet)
+    assert "LocalAccountTokenFilterPolicy" in joined
+    assert joined.count("New-ItemProperty") >= 1
