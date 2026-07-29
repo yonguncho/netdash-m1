@@ -19,6 +19,16 @@ collector:
   max_concurrent: 3
   ssh_timeout: 30
   read_timeout: 60
+  # ── 전송 보안(기본값은 현행 동작 유지 — 켜면 수집이 막힐 수 있다) ──
+  # SSH 호스트키 검증:
+  #   auto   장비 키를 그냥 받는다(기본). 기억하지 않아 키가 바뀌어도 모른다.
+  #   tofu   처음 본 장비는 받아 적고, 이후 키가 바뀌면 거부한다(권장).
+  #          첫 수집을 막지 않으면서 중간자 교체를 잡는다. known_hosts는 DB 옆에 생성.
+  #   strict known_hosts에 미리 등록된 장비만 접속(사전 등록 필요).
+  ssh_host_key_policy: "auto"
+  # 방화벽 HTTPS 인증서 검증. 자체 서명 인증서를 쓰는 장비가 많아 기본은 false.
+  # true로 켜려면 그 인증서(사설 CA)를 이 PC의 신뢰 저장소에 먼저 넣어야 한다.
+  verify_firewall_tls: false
   # 정적 IP 화이트리스트는 기본 비활성(빈 목록). 등록은 '실제 도달(ping/TCP)'로 허용한다.
   # SSRF 위험 대역(loopback/link-local/multicast/reserved)은 validate_ipv4에서 항상 차단.
   # 특정 대역만 허용하도록 제한하려면 아래에 CIDR을 추가(예: "10.0.0.0/8").

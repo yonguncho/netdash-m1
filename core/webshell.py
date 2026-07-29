@@ -15,6 +15,7 @@ import time
 
 from . import db, credentials, utils, ssh_compat
 from .collector import _sanitize_error_msg
+from . import secpolicy
 
 _IDLE_TIMEOUT = 600      # 초 — 입력 없이 방치되면 종료
 _MAX_SESSION = 3600      # 초 — 세션 절대 상한
@@ -134,7 +135,7 @@ def run_shell(ws, db_path, switch_id, username, password, source_ip, validate_ip
 
     ssh_compat.enable_legacy_algorithms()
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    secpolicy.apply_host_key_policy(client)
     sock = None
     if source_ip:
         from . import netbind

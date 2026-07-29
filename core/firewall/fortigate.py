@@ -10,6 +10,7 @@
 """
 import logging
 import re
+from .. import secpolicy
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +332,7 @@ def get_arp_table_ssh(host, username, password, port=22, timeout=15):
     """FortiGate SSH로 ARP 테이블 수집 (REST API 대체). CLI: get system arp."""
     import paramiko
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    secpolicy.apply_host_key_policy(client)
     try:
         client.connect(host, port=port, username=username, password=password,
                        timeout=timeout, allow_agent=False, look_for_keys=False)

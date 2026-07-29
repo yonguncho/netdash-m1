@@ -10,6 +10,7 @@ import socket
 import logging
 
 from . import collector  # _sanitize_error_msg 재사용
+from . import secpolicy
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def test_switch(ip, vendor, username, password, port=22, timeout=8, source_ip=No
             ssh_compat.enable_legacy_algorithms()
             sock = netbind.bind_socket(ip, port, source_ip, timeout) if source_ip else None
             cli = paramiko.SSHClient()
-            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            secpolicy.apply_host_key_policy(cli)
             cli.connect(ip, port=port, username=username, password=password, timeout=timeout,
                         allow_agent=False, look_for_keys=False, sock=sock)
             cli.close()

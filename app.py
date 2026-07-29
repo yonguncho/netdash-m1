@@ -17,6 +17,7 @@ from pathlib import Path
 from config import get_config, reset_config
 from core import db, collector, correlator, credentials, report_builder, netinfo, connectivity
 from core import pcprofile
+from core import secpolicy
 from core import facility as facility_mod
 from core import firewall as firewall_mod
 from core.demo import run_demo
@@ -262,7 +263,7 @@ def _run_diagnose_all_firewalls(db_path, source_ip, ids=None):
                 item["has_login"] = bool(username and password)
                 res = connectivity.test_firewall(vendor, host, mgmt, token=token,
                                                  username=username, password=password,
-                                                 verify_ssl=False, source_ip=source_ip)
+                                                 verify_ssl=secpolicy.firewall_tls_verify(), source_ip=source_ip)
                 item["auth_ok"] = bool(res.get("ok")) and res.get("stage") == "auth"
                 item["detail"] = res.get("detail") or ""
                 if item["auth_ok"] or item["tcp_mgmt"]:
@@ -339,7 +340,7 @@ def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None,
                 result = firewall_mod.collect_firewall(
                     fw["vendor"], fw["host"], fw.get("port"),
                     token=token, username=username, password=password,
-                    verify_ssl=False, source_ip=source_ip)
+                    verify_ssl=secpolicy.firewall_tls_verify(), source_ip=source_ip)
                 db.save_firewall_interfaces(db_path, fid, result["interfaces"])
                 db.save_firewall_arp(db_path, fid, result["arp"])
                 if result.get("ha"):
@@ -3456,7 +3457,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             src = pcprofile.get_source_ip(db_path)
             res = connectivity.test_firewall(vendor, host, mgmt_port, token=token,
                                              username=username, password=password,
-                                             verify_ssl=False, source_ip=src)
+                                             verify_ssl=secpolicy.firewall_tls_verify(), source_ip=src)
             log_event("info", "firewall_diagnosed", firewall_id=fid,
                       ok=bool(res.get("ok")), stage=res.get("stage"))
             return jsonify({"ok": True, "diag": {

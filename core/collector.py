@@ -12,6 +12,7 @@ from . import fixtures
 from . import utils
 from . import credentials
 from . import ssh_compat  # 구형 장비 SSH 레거시 알고리즘 호환(import 시 적용)
+from . import secpolicy
 from config import get_config
 
 logger = logging.getLogger(__name__)
@@ -1222,7 +1223,7 @@ def _probe_os(switch, username, password, source_ip=None):
     from . import ssh_compat
     ssh_compat.enable_legacy_algorithms()
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    secpolicy.apply_host_key_policy(client)
     sock = None
     if source_ip:
         from . import netbind
@@ -1276,7 +1277,7 @@ def diagnose_switch(switch, username, password, source_ip=None):
         return res
     ssh_compat.enable_legacy_algorithms()
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    secpolicy.apply_host_key_policy(client)
     sock = None
     if source_ip:
         from . import netbind
@@ -1387,7 +1388,7 @@ def _alteon_collect(switch, username, password, source_ip=None):
 
     host = switch["ip"]
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    secpolicy.apply_host_key_policy(client)
     sock = None
     if source_ip:
         from . import netbind
@@ -1565,7 +1566,8 @@ def collect_all_registered(db_path):
                 r = firewall_mod.collect_firewall(
                     fw["vendor"], fw["host"], fw.get("port"),
                     token=saved.get("token", ""), username=saved.get("username", ""),
-                    password=saved.get("password", ""), source_ip=src)
+                    password=saved.get("password", ""), source_ip=src,
+                    verify_ssl=secpolicy.firewall_tls_verify())
                 db.save_firewall_interfaces(db_path, fw["id"], r["interfaces"])
                 db.save_firewall_arp(db_path, fw["id"], r["arp"])
                 db.set_firewall_status(db_path, fw["id"], "done")

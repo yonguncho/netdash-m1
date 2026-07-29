@@ -18,6 +18,7 @@ import subprocess
 import threading
 
 from . import db, utils, credentials
+from . import secpolicy
 
 # 스캔 대상 공통 포트(서버 용도 파악용 — 과도한 스캔 금지)
 COMMON_PORTS = [21, 22, 23, 25, 53, 80, 111, 135, 139, 443, 445, 830, 1433, 1521,
@@ -357,7 +358,7 @@ def _ssh_exec(ip, username, password, commands, timeout=15, port=22, batch=False
     """
     import paramiko
     cli = paramiko.SSHClient()
-    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    secpolicy.apply_host_key_policy(cli)
     out = {}
     try:
         _ssh_connect(cli, ip, port, username, password, timeout)
@@ -1373,7 +1374,7 @@ def detect_os(ip, username, password, timeout=15, port=22):
     """
     import paramiko
     cli = paramiko.SSHClient()
-    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    secpolicy.apply_host_key_policy(cli)
     try:
         cli.connect(ip, port=port, username=username, password=password,
                     timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
