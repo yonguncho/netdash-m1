@@ -3087,7 +3087,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         src = pcprofile.get_source_ip(db_path)
         started = facility_mod.start_collect_band(db_path, sid, subnet, username, password, src)
         if not started:
-            return False, 409, {"error": "이미 수집 중입니다"}
+            # 무엇이 막고 있는지 알려준다. 예전에는 '이미 수집 중입니다'만 떠서
+            # 사용자는 무엇이 왜 막는지 모른 채 버튼이 고장난 것으로 받아들였다.
+            why = facility_mod.busy_reason()
+            return False, 409, {
+                "error": ("다른 수집이 진행 중입니다 — %s. 끝나면 다시 시도하거나 "
+                          "'수집 중지'로 멈춘 뒤 실행하세요." % why) if why
+                         else "이미 수집 중입니다",
+                "busy": True, "status": facility_mod.get_status()}
         return True, 202, {"ok": True, "subnet": subnet}
 
     @app.route("/api/facility/recollect", methods=["POST"])
