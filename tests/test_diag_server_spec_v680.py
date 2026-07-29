@@ -176,3 +176,37 @@ def _cp949_ok(ch):
         return True
     except UnicodeEncodeError:
         return False
+
+
+# ── 화면에서도 돌아야 한다(콘솔을 못 쓰는 환경) ─────────────────
+def test_web_wrapper_returns_lines(monkeypatch):
+    """CLI를 못 쓰는 환경이 있다 - 같은 진단을 화면에서 볼 수 있어야 한다."""
+    monkeypatch.setattr(diag.sc, "scan_ports", lambda ip, *a, **k: [])
+    rc, lines = diag.diagnose_lines("10.0.0.1")
+    assert rc == 1 and lines, "출력 줄이 비었다"
+    assert any("도달 불가" in l for l in lines)
+
+
+def test_web_wrapper_does_not_prompt(monkeypatch):
+    """웹 요청에서 getpass가 뜨면 서버 스레드가 멈춘다."""
+    def boom(*a, **k):
+        raise AssertionError("getpass가 호출됐다")
+    monkeypatch.setattr(diag.getpass, "getpass", boom)
+    monkeypatch.setattr(diag.sc, "scan_ports", lambda ip, *a, **k: [])
+    diag.diagnose_lines("10.0.0.1", user="admin", password="pw")
+
+
+def test_spec_diag_endpoint_exists():
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "/api/servers/<int:server_id>/diag-spec" in src
+    i = src.index("def diag_server_spec_endpoint(")
+    block = src[i:i + 2500]
+    assert "validate_ipv4(" in block, "SSRF 검증이 없다"
+    assert "validate_credential(" in block, "자격증명 검증이 없다"
+    assert "get_server_credential" in block, "저장 계정을 안 쓴다"
+
+
+def test_spec_diag_button_in_ui():
+    js = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "diag-spec" in js and "_addSpecDiagButton" in js
+    assert "사양 수집 경로 진단" in js

@@ -2111,6 +2111,57 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/servers/<int:server_id>/diag-spec", methods=["POST"])
+    @rate_limit("diag_spec", max_requests=10, window_seconds=60)
+    def diag_server_spec_endpoint(server_id):
+        """사양 수집 경로 진단(SSH → WinRM → WMI → SNMP)을 화면에서 실행.
+
+        같은 진단을 CLI(--diag-server)로도 할 수 있지만, NetDash가 서비스로 상주
+        하거나 콘솔을 못 쓰는 환경이 있다. 화면에서 못 하면 이 도구는 쓸모가 없다.
+        읽기만 한다 — DB나 장비 상태를 바꾸지 않는다.
+        """
+        try:
+            if _bad_id(server_id):
+                return jsonify({"error": "not found"}), 404
+            sv = db.get_server(db_path, server_id)
+            if not sv:
+                return jsonify({"error": "not found"}), 404
+            try:
+                ip = validate_ipv4(sv.get("ip"), config.collector.get("allowed_ip_ranges"))
+            except ValueError as e:
+                return jsonify({"error": "IP 거부: %s" % e}), 400
+
+            data = request.get_json(silent=True) or {}
+            user = _sv_text(data.get("username"), 128) or ""
+            pw = data.get("password") if isinstance(data.get("password"), str) else ""
+            if user or pw:
+                try:
+                    user = validate_credential(user) if user else user
+                    pw = validate_credential(pw) if pw else pw
+                except ValueError as e:
+                    return jsonify({"error": str(e)}), 400
+            # 계정을 안 줬으면 이 서버에 저장된 계정을 쓴다(수집과 같은 규칙).
+            if not (user and pw):
+                blob = db.get_server_credential(db_path, server_id)
+                if blob:
+                    dec = credentials.decrypt_credential(blob)
+                    if dec and "|" in dec:
+                        user, pw = dec.split("|", 1)
+
+            from scripts.diag_server_spec import diagnose_lines
+            from core import server_collector as _sc
+            rc, lines = diagnose_lines(
+                ip, user=user, password=pw,
+                community=_sc.snmp_community(db_path))
+            log_event("info", "server_spec_diagnosed", server_id=server_id, rc=rc)
+            return jsonify({"ok": True, "collected": rc == 0,
+                            "used_credential": bool(user and pw),
+                            "lines": lines})
+        except Exception as e:
+            log_event("error", "diag_spec_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/servers/<int:server_id>/diagnose", methods=["POST"])
     @rate_limit("diagnose_server", max_requests=20, window_seconds=60)
     def diagnose_server_endpoint(server_id):

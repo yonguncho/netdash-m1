@@ -2127,8 +2127,47 @@ function diagnoseServer(id) {
         (d.ssh_port && !d.has_cred
           ? "\n※ SSH가 열려 있습니다. 계정을 저장하면 OS·CPU·메모리·디스크까지 수집됩니다.\n"
           : "");
+      _addSpecDiagButton(out, id);
     })
     .catch(function (e) { if (out) out.textContent = "진단 오류: " + e; });
+}
+
+// 사양(CPU·메모리·디스크)이 왜 안 잡히는지 네 경로를 순서대로 두들겨 본다.
+// 같은 진단을 CLI(--diag-server)로도 할 수 있지만, 콘솔을 못 쓰는 환경이 있어
+// 화면에서도 돌 수 있어야 한다.
+function _addSpecDiagButton(out, id) {
+  if (!out || document.getElementById("btn-diag-spec")) return;
+  var b = document.createElement("button");
+  b.id = "btn-diag-spec";
+  b.className = "btn btn--secondary";
+  b.style.marginTop = "10px";
+  b.textContent = "🔎 사양 수집 경로 진단 (SSH·WinRM·WMI·SNMP)";
+  b.addEventListener("click", function () {
+    b.disabled = true;
+    var pre = document.getElementById("diag-spec-out") || document.createElement("pre");
+    pre.id = "diag-spec-out";
+    pre.style.cssText = "margin-top:10px;white-space:pre-wrap;font-size:12px;" +
+      "background:#0b1220;color:#e2e8f0;padding:10px;border-radius:6px;max-height:46vh;overflow:auto";
+    pre.textContent = "네 경로를 순서대로 확인 중입니다... 최대 1분 걸릴 수 있습니다.";
+    out.parentNode.appendChild(pre);
+    fetch("/api/servers/" + id + "/diag-spec", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({}),
+    }).then(function (r) { return r.json().then(function (x) { return {ok: r.ok, b: x}; }); })
+      .then(function (res) {
+        b.disabled = false;
+        if (!res.ok || !res.b.ok) {
+          pre.textContent = "진단 실패: " + ((res.b && res.b.error) || "");
+          return;
+        }
+        pre.textContent = (res.b.lines || []).join("\n") +
+          (res.b.used_credential ? "" :
+            "\n\n※ 저장된 계정이 없어 계정이 필요한 경로는 건너뛰었습니다." +
+            "\n   서버에 계정을 저장한 뒤 다시 실행하면 SSH·WinRM·WMI까지 확인합니다.");
+      })
+      .catch(function (e) { b.disabled = false; pre.textContent = "진단 오류: " + e; });
+  });
+  out.parentNode.appendChild(b);
 }
 
 function deleteSwitch(id) {
