@@ -1,9 +1,27 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.7.4 (커밋 2ee0e54, 릴리스 발행 완료)
+**현재 버전**: v6.7.6 (커밋 66512ca, 릴리스 발행 완료)
 **상태**: 백로그 비었음 — 다음 지시 대기
 
-## 방금 완료한 것 (v6.7.4)
+## 방금 완료한 것 (v6.7.5 / v6.7.6) — 보안 감사
+
+claude-security 플러그인(Anthropic 공식) 설치 완료. **스캔은 사용자가 직접 실행해야
+한다** — 스킬에 `disable-model-invocation: true`, 워크플로에 "do not improvise a
+scan by hand" 명시. `/reload-plugins` → `/claude-security` (NetDash_dev 에서).
+플러그인이 `python3`를 호출하는데 이 PC엔 `python`만 있어, 작업 범위 안인
+`C:\AI_WORKPLACE\...\Python310\python3.exe` 를 만들어 두었다.
+
+대신 5축 병렬 감사를 직접 돌려 반영:
+- **SNMP 응답 위조(HIGH)** — 출처·request-id·커뮤니티 미검증. 실제 UDP 소켓으로
+  재현 확인 후 connect() 고정 + rid/커뮤니티 대조로 차단.
+- **장비 주소 변경 시 저장 계정 잔류(HIGH)** — IP만 바꿔 계정 탈취 가능 → 지운다.
+- **DNS 리바인딩(HIGH)** — Host 허용목록(IP·localhost만, `app.allowed_hosts`).
+  실기동으로 IP/localhost/LAN IP/[::1] 200 확인 — 잠기지 않는다.
+- MED 8건(잘린 패킷 IndexError, walk 시간 상한, 0.0.0.0, SMTP 주소, 로그 마스킹,
+  세션 계정 잔류, 저장 XSS 2건, xlsx 엔티티 폭탄).
+- **현행 유지 결정**: config 백업 평문 저장 — 관리자 전용·폐쇄망(사용자 판단).
+
+## v6.7.4에서 한 것
 
 ### 서버 MAC·연결스위치·포트 수집률
 - `core/db.py` `find_location_by_mac()` — MAC → 스위치/포트(표기 정규화, 물리 포트 우선).
