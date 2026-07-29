@@ -100,6 +100,26 @@ def _infer_dt(name):
     return ""
 
 
+# Excel이 수식으로 해석하는 접두 문자 — 셀 값 앞에 오면 무력화한다.
+# exporter._s 와 같은 정책이다. 이쪽은 별도 경로라 방어가 빠져 있었고,
+# 장비 이름(엑셀 임포트·수동 입력·장비 hostname에서 온다)이 그대로 셀에 들어가
+# 받은 사람이 열면 실행됐다(예: =cmd|'/c calc'!A1).
+_FORMULA_PREFIX = ("=", "+", "-", "@")
+
+
+def _cellv(v):
+    """셀 값 문자열화 + 수식 접두 무력화(앞에 ' 를 붙이면 Excel이 텍스트로 본다)."""
+    if v is None:
+        return ""
+    s = str(v)
+    for _ch in (chr(9), chr(13), chr(10)):      # tab, CR, LF
+        s = s.replace(_ch, " ")
+    s = s.strip()
+    if s[:1] in _FORMULA_PREFIX:
+        s = "'" + s
+    return s
+
+
 def build_rack_xlsx(devices):
     """서버실 랙 배치를 첨부 엑셀 형식으로 생성.
 
@@ -188,7 +208,7 @@ def build_rack_xlsx(devices):
             c0 = 1 + ci * BLOCK_COLS  # U라벨 컬럼
             c1 = c0 + 1               # 장비명 컬럼
             ws.merge_cells(start_row=row0, start_column=c0, end_row=row0, end_column=c1)
-            cell = ws.cell(row=row0, column=c0, value=rk)
+            cell = ws.cell(row=row0, column=c0, value=_cellv(rk))
             cell.fill = hdr_fill
             cell.font = hdr_font
             cell.alignment = center
@@ -227,7 +247,8 @@ def build_rack_xlsx(devices):
                     dc = ws.cell(row=top_r, column=c1)
                     dc.border = border
                     dc.alignment = center
-                dc.value = (dev.get("name") or "") + (" (%dU)" % h if h > 1 else "")
+                dc.value = _cellv((dev.get("name") or "")
+                                  + (" (%dU)" % h if h > 1 else ""))
                 dc.font = dev_font
                 dt = dev.get("device_type") or _infer_dt(dev.get("name"))
                 fill = _KIND_FILL.get(dt)

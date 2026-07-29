@@ -389,6 +389,27 @@ def validate_credential(value, max_length=256):
     return value
 
 
+def _xlsx_has_xml_entities(zf):
+    """xlsx 안의 XML에 DOCTYPE/ENTITY 선언이 있는가(엔티티 폭탄 방어).
+
+    크기 검사로는 못 막는다 — 엔티티 전개는 파싱 시점에 메모리에서 일어나므로,
+    모든 크기 상한을 통과하는 2KB 파일이 프로세스를 터뜨린다
+    (openpyxl.DEFUSEDXML=False, stdlib ElementTree가 내부 엔티티를 전개).
+    정상 xlsx에는 둘 다 없으므로 선언 자체를 거절한다.
+    """
+    for info in zf.infolist():
+        if not info.filename.lower().endswith((".xml", ".rels")):
+            continue
+        try:
+            with zf.open(info, "r") as fh:
+                head = fh.read(64 * 1024).lower()
+        except Exception:
+            return True          # 못 읽으면 안전한 쪽으로 거절
+        if b"<!doctype" in head or b"<!entity" in head:
+            return True
+    return False
+
+
 def validate_smtp_host(host):
     """SMTP 서버 주소 검증 → 정규화된 문자열. 위험하면 ValueError.
 
@@ -1563,15 +1584,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 # 프로세스를 터뜨릴 수 있다(openpyxl.DEFUSEDXML=False, stdlib
                 # ElementTree는 내부 엔티티를 전개한다). 정상 xlsx에는 DOCTYPE도
                 # ENTITY도 없으므로 선언 자체를 거절한다.
-                for info in zf.infolist():
-                    if not info.filename.lower().endswith((".xml", ".rels")):
-                        continue
-                    with zf.open(info, "r") as fh:
-                        head = fh.read(64 * 1024).lower()
-                    if b"<!doctype" in head or b"<!entity" in head:
-                        return None, (jsonify(
-                            {"error": "허용되지 않는 XML 선언(DOCTYPE/ENTITY)이 포함돼 "
-                                      "있습니다. Excel에서 다시 저장해 올려주세요."}), 400)
+                if _xlsx_has_xml_entities(zf):
+                    return None, (jsonify(
+                        {"error": "허용되지 않는 XML 선언(DOCTYPE/ENTITY)이 포함돼 "
+                                  "있습니다. Excel에서 다시 저장해 올려주세요."}), 400)
         except _zip.BadZipFile:
             return None, (jsonify({"error": "올바른 .xlsx 파일이 아닙니다. Excel에서 열어 "
                                    "'다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 다시 저장해 올려주세요. "
@@ -1714,6 +1730,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     if total_uncompressed / (1024 * 1024) > max_uncompressed_size_mb:
                         log_event("warning", "upload_uncompressed_too_large")
                         return jsonify({"error": f"Total uncompressed size exceeds {max_uncompressed_size_mb}MB"}), 413
+                    # 위 검사들은 '압축 해제 크기'만 본다 — 엔티티 전개는 파싱할 때
+                    # 메모리에서 일어나므로, 크기 검사를 전부 통과하는 작은 파일이
+                    # 프로세스를 터뜨린다. 이 경로는 _read_xlsx_safe를 안 거치므로
+                    # (다른 임포트 라우트와 달리) 여기서 따로 막아야 한다.
+                    if _xlsx_has_xml_entities(zf):
+                        log_event("warning", "upload_xml_entity_declaration")
+                        return jsonify({"error": "허용되지 않는 XML 선언(DOCTYPE/ENTITY)이 "
+                                                 "포함돼 있습니다."}), 400
             except zipfile.BadZipFile:
                 log_event("warning", "upload_invalid_zip")
                 return jsonify({"error": "Invalid ZIP/Excel file"}), 400
@@ -2874,8 +2898,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify({"error": "Internal server error"}), 500
 
     def _cred_owner():
-        """세션 자격증명 소유자 키 — 접속한 원격 주소(브라우저 PC) 기준."""
-        return request.remote_addr or "local"
+        """세션 자격증명 소유자 키 — 접속한 원격 주소(브라우저 PC) 기준.
+
+        _client_ip()를 쓴다(raw remote_addr가 아니라). 리버스 프록시 뒤에서는
+        remote_addr가 전부 프록시 IP로 같아져, 서로 다른 사용자의 세션 계정이
+        한 칸을 공유하게 된다. _client_ip는 **신뢰하도록 설정한 프록시**의
+        X-Forwarded-For만 반영하므로 헤더 위조로 남의 칸을 집을 수 없다.
+        """
+        return _client_ip() or "local"
 
     def _session_cred(kind):
         """(username, password) 또는 None — 그 장비 종류의 세션 계정.
@@ -2972,6 +3002,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             data = request.get_json(silent=True) or {}
             username = data.get("username", "")
             password = data.get("password", "")
+            # 제어문자(개행 포함)를 거른다 — 안 거르면 비밀번호에 넣은 개행이
+            # 원격 CLI 세션에서 **한 줄 더**로 실행된다(netmiko/paramiko 모두
+            # 개행을 그대로 흘린다). 다른 수집 라우트는 이미 검증하고 있었다.
+            try:
+                username = validate_credential(username) if username else username
+                password = validate_credential(password) if password else password
+            except ValueError as _e:
+                return jsonify({"error": str(_e)}), 400
             if not (username and password):
                 blob = db.get_switch_credential(db_path, switch_id)
                 if blob:
@@ -3114,6 +3152,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": "switch_id required"}), 400
             username = data.get("username", "")
             password = data.get("password", "")
+            # 제어문자(개행 포함)를 거른다 — 안 거르면 비밀번호에 넣은 개행이
+            # 원격 CLI 세션에서 **한 줄 더**로 실행된다(netmiko/paramiko 모두
+            # 개행을 그대로 흘린다). 다른 수집 라우트는 이미 검증하고 있었다.
+            try:
+                username = validate_credential(username) if username else username
+                password = validate_credential(password) if password else password
+            except ValueError as _e:
+                return jsonify({"error": str(_e)}), 400
             if not (username and password):
                 blob = db.get_switch_credential(db_path, switch_id)
                 if blob:
@@ -3139,6 +3185,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             subnet = (data.get("subnet") or "").strip()
             username = data.get("username", "")
             password = data.get("password", "")
+            # 제어문자(개행 포함)를 거른다 — 안 거르면 비밀번호에 넣은 개행이
+            # 원격 CLI 세션에서 **한 줄 더**로 실행된다(netmiko/paramiko 모두
+            # 개행을 그대로 흘린다). 다른 수집 라우트는 이미 검증하고 있었다.
+            try:
+                username = validate_credential(username) if username else username
+                password = validate_credential(password) if password else password
+            except ValueError as _e:
+                return jsonify({"error": str(_e)}), 400
             if not switch_id or not subnet:
                 return jsonify({"error": "switch_id and subnet required"}), 400
             # 대역 검증: 유효 CIDR + 크기 제한(/22 이하, ping 폭증 방지)
@@ -3935,6 +3989,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         token = data.get("token", "")
         username = data.get("username", "")
         password = data.get("password", "")
+        # 제어문자(개행 포함)를 거른다 — 안 거르면 비밀번호에 넣은 개행이
+        # 원격 CLI 세션에서 **한 줄 더**로 실행된다(netmiko/paramiko 모두
+        # 개행을 그대로 흘린다). 다른 수집 라우트는 이미 검증하고 있었다.
+        try:
+            username = validate_credential(username) if username else username
+            password = validate_credential(password) if password else password
+        except ValueError as _e:
+            return jsonify({"error": str(_e)}), 400
         provided = bool(token or username or password)  # 요청에 cred 직접 입력 여부
         # M11: 요청에 자격증명이 없으면 저장된(암호화) 자격증명을 복호화해 사용.
         if not (token or username or password):
