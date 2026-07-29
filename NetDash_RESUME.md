@@ -1,9 +1,22 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.7.8 (커밋 c26472d, 릴리스 발행 완료)
+**현재 버전**: v6.7.9 (커밋 a0b3f7c, 릴리스 발행 완료)
 **상태**: 백로그 비었음 — 다음 지시 대기
 
-## 방금 완료한 것 (v6.7.7 / v6.7.8)
+## 방금 완료한 것 (v6.7.9)
+
+### 전송 보안을 설정으로 (core/secpolicy.py 신규)
+claude-security 스캔의 HIGH 2건(SSH AutoAddPolicy, 방화벽 verify_ssl=False)을
+**기본값을 바꾸지 않고** 설정으로 뺐다 — 그냥 켜면 자체서명 인증서·known_hosts
+부재로 수집이 전부 멈춘다.
+- `collector.ssh_host_key_policy`: auto(기본) / **tofu(권장)** / strict
+  tofu = 처음 본 키는 받아 적고 이후 변경 시 거부. 첫 수집을 막지 않으면서
+  중간자 교체를 잡는다.
+- `collector.verify_firewall_tls`: false(기본)
+- AutoAddPolicy가 8곳에 흩어져 있던 것을 단일 지점으로. "직접 쓰면 실패"하는
+  테스트로 고정 — 이번 주 두 번 당한 '경로가 둘인데 한쪽만' 재발 방지.
+
+## v6.7.7 / v6.7.8
 
 ### v6.7.8 — claude-security 스캔 반영
 플러그인 스캔(medium, 연구원 31명 → 후보 46 → 검증 통과 10건) 중 재현 확인 5건 반영.
