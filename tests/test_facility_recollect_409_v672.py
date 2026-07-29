@@ -172,20 +172,30 @@ def test_busy_reason_empty_when_idle():
     assert facility.busy_reason() == ""
 
 
-def test_409_payload_is_actionable():
+# v6.9.0 추가 개선: 애초에 '재수집' 버튼이 대역 전체를 다시 스캔하는 것 자체가
+# 409의 근본 원인이었다(사용자 요청 — 재수집 버튼을 누른 설비 하나만 재확인해야
+# 한다). facility_recollect를 단일 설비 재확인(recollect_single_host)으로
+# 바꾸면서, 대역 전체 스캔과 경합할 일이 없어져 busy/409/재시도 UX 자체가
+# 필요 없어졌다. 아래 두 테스트는 그 재설계를 검증한다(예전 assertion은
+# git 이력에 남아 있다).
+def test_recollect_route_no_longer_competes_with_band_scan():
+    """단일 설비 재확인은 대역 전체 스캔(_status.running)과 경합하지 않는다."""
     src = (ROOT / "app.py").read_text(encoding="utf-8")
-    i = src.index("facility_mod.busy_reason()")
-    block = src[i - 300:i + 500]
-    assert '"busy": True' in block, "화면이 '바쁨'을 구분할 수 없다"
-    assert "수집 중지" in block, "다음에 뭘 하면 되는지 알려주지 않는다"
+    i = src.index("def facility_recollect():")
+    block = src[i:i + 2200]
+    assert "recollect_single_host" in block, "단일 설비 재확인 경로를 쓰지 않는다"
+    assert "start_collect_band" not in block, \
+        "대역 전체 스캔을 다시 트리거하면 busy/409 문제가 재발한다"
+    assert "busy_reason" not in block
 
 
-def test_frontend_offers_stop_and_retry():
+def test_frontend_no_longer_needs_stop_and_retry():
+    """대역 전체와 경합하지 않으니 '중지 후 재시도' UX가 필요 없다."""
     js = (ROOT / "web" / "static" / "wall.js").read_text(encoding="utf-8")
-    assert "b.busy && allowTakeover" in js, "409를 그냥 alert로 끝낸다"
-    assert "/api/facility/stop" in js
-    assert "startRecollect(btn, ip, subnet, false)" in js, \
-        "재시도가 또 가로채면 무한 루프가 된다"
+    i = js.index("function startRecollect(")
+    block = js[i:i + 900]
+    assert "/api/facility/stop" not in block
+    assert "confirm(" not in block, "더 이상 물어볼 필요가 없는 동작이다"
 
 
 def test_status_exposes_elapsed():

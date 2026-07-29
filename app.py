@@ -3345,14 +3345,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "facility_collect_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
-    def _facility_start_subnet(subnet):
-        """대역을 그 대역의 기억된 게이트웨이 스위치·저장 계정으로 재수집 시작.
-        반환: (ok, http_status, payload). 관제 재수집·전체 스캔 공용."""
-        band_map = facility_mod.get_band_map(db_path)
-        sid = band_map.get(subnet)
-        if not sid:
-            return False, 400, {"error": "이 대역의 게이트웨이 스위치가 기억되지 않았습니다. "
-                                          "설비 현황에서 한 번 '대역 수집'을 실행하세요."}
+    def _facility_gateway_credential(sid):
+        """게이트웨이 스위치의 계정 — 저장 계정 우선, 없으면 PC 프로필 공통 계정.
+        반환: (username, password) | (None, None)."""
         blob = db.get_switch_credential(db_path, sid)
         username = password = ""
         if blob:
@@ -3363,38 +3358,45 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             cred = pcprofile.get_credential(db_path)
             if cred:
                 username, password = cred
-        if not (username and password):
-            return False, 400, {"error": "게이트웨이 스위치의 저장된 계정이 없습니다."}
-        src = pcprofile.get_source_ip(db_path)
-        started = facility_mod.start_collect_band(db_path, sid, subnet, username, password, src)
-        if not started:
-            # 무엇이 막고 있는지 알려준다. 예전에는 '이미 수집 중입니다'만 떠서
-            # 사용자는 무엇이 왜 막는지 모른 채 버튼이 고장난 것으로 받아들였다.
-            why = facility_mod.busy_reason()
-            return False, 409, {
-                "error": ("다른 수집이 진행 중입니다 — %s. 끝나면 다시 시도하거나 "
-                          "'수집 중지'로 멈춘 뒤 실행하세요." % why) if why
-                         else "이미 수집 중입니다",
-                "busy": True, "status": facility_mod.get_status()}
-        return True, 202, {"ok": True, "subnet": subnet}
+        return (username, password) if (username and password) else (None, None)
 
     @app.route("/api/facility/recollect", methods=["POST"])
     @rate_limit("facility_recollect", max_requests=20, window_seconds=60)
     def facility_recollect():
-        """관제/설비에서 특정 설비(IP)의 대역을 연결 게이트웨이에서 재수집."""
+        """관제에서 '연결 실패' 설비 하나의 재수집 — **그 설비만** 재확인한다.
+
+        예전에는 그 설비가 속한 대역 전체를 처음부터 다시 스캔했다(대역이
+        /23이면 15분+). 확인하고 싶은 건 그 설비 하나뿐이므로, 게이트웨이
+        스위치에 붙어 그 IP 하나만 ping·ARP 조회한다(수 초 내 완료, 동기 응답).
+        대역 전체를 다시 훑고 싶으면 설비 현황의 '대역 수집'을 쓴다.
+        """
         try:
             data = request.get_json(silent=True) or {}
             ip = (data.get("ip") or "").strip()
+            if not ip:
+                return jsonify({"error": "IP가 필요합니다"}), 400
             subnet = (data.get("subnet") or "").strip()
-            if not subnet and ip:
+            if not subnet:
                 for h in db.get_facility_hosts(db_path):
                     if h.get("ip") == ip:
                         subnet = h.get("subnet") or ""
                         break
             if not subnet:
                 return jsonify({"error": "대역을 찾을 수 없습니다(IP 미등록)"}), 400
-            ok, status, payload = _facility_start_subnet(subnet)
-            return jsonify(payload), status
+            band_map = facility_mod.get_band_map(db_path)
+            sid = band_map.get(subnet)
+            if not sid:
+                return jsonify({"error": "이 대역의 게이트웨이 스위치가 기억되지 않았습니다. "
+                                         "설비 현황에서 한 번 '대역 수집'을 실행하세요."}), 400
+            username, password = _facility_gateway_credential(sid)
+            if not username:
+                return jsonify({"error": "게이트웨이 스위치의 저장된 계정이 없습니다."}), 400
+            src = pcprofile.get_source_ip(db_path)
+            ok, msg = facility_mod.recollect_single_host(
+                db_path, subnet, ip, username, password, src)
+            log_event("info", "facility_single_recollected", ip=ip, subnet=subnet, ok=ok)
+            return jsonify({"ok": ok, "ip": ip, "subnet": subnet, "message": msg}), \
+                (200 if ok else 502)
         except Exception as e:
             log_event("error", "facility_recollect_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
