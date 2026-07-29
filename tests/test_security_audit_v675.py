@@ -194,3 +194,97 @@ def test_creds_delete_button_quotes_are_encoded():
     """encodeURIComponent는 작은따옴표를 인코딩하지 않는다 — 속성이 깨진다."""
     i = APPJS.index("creds-del")
     assert 'replace(/\'/g, "%27")' in APPJS[i:i + 400]
+
+
+# ── DNS 리바인딩: Host 헤더 허용목록 ────────────────────────────
+# CSRF(Origin)·WebSocket 동일출처 검사가 모두 request.host와 비교하는데, 그 값이
+# 공격자가 보낸 것이다. 조작된 페이지가 자기 도메인을 127.0.0.1로 리바인딩하면
+# Origin==Host라 검사를 통과하고 remote_addr도 루프백이라 토큰 면제까지 받는다.
+@pytest.fixture
+def cli_app(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    a = appmod.create_app(demo_mode=True)
+    a.testing = True
+    return a
+
+
+def test_rebound_hostname_is_rejected(cli_app):
+    with cli_app.test_client() as c:
+        r = c.get("/api/state", headers={"Host": "evil.example.com"})
+        assert r.status_code == 400, r.status_code
+        assert "allowed_hosts" in r.get_data(as_text=True)
+
+
+def test_ip_and_localhost_hosts_are_allowed(cli_app):
+    """IP 리터럴은 DNS 조회가 없어 리바인딩 자체가 불가능하다 — 막으면 안 된다."""
+    with cli_app.test_client() as c:
+        for h in ("127.0.0.1:8082", "localhost:8082", "10.20.30.40:8082",
+                  "192.168.1.5", "[::1]:8082"):
+            r = c.get("/api/state", headers={"Host": h})
+            assert r.status_code != 400, (h, r.get_data(as_text=True)[:120])
+
+
+def test_configured_hostname_is_allowed(tmp_path, monkeypatch):
+    """이름으로 접속해야 하는 환경을 잠그면 안 된다."""
+    monkeypatch.chdir(tmp_path)
+    a = appmod.create_app(demo_mode=True)
+    a.testing = True
+    # create_app이 잡은 config는 싱글턴이라, 만든 뒤 고쳐도 그대로 반영된다
+    monkeypatch.setitem(appmod.get_config(demo_mode=True).app,
+                        "allowed_hosts", ["netdash.corp.local"])
+    with a.test_client() as c:
+        r = c.get("/api/state", headers={"Host": "NetDash.Corp.Local:8082"})
+        assert r.status_code != 400, r.get_data(as_text=True)[:150]
+
+
+def test_health_stays_reachable(cli_app):
+    """감시용 헬스체크까지 막으면 운영이 곤란해진다."""
+    with cli_app.test_client() as c:
+        assert c.get("/api/health",
+                     headers={"Host": "whatever.example"}).status_code == 200
+
+
+def test_host_check_runs_before_token_exemption():
+    """루프백 토큰 면제보다 먼저 걸러야 의미가 있다."""
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert src.index("def reject_rebound_host") < src.index("def validate_api_token")
+
+
+# ── xlsx XML 엔티티 폭탄 ────────────────────────────────────────
+def _xlsx_with(sheet_xml):
+    import io as _io
+    import zipfile
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    return buf.getvalue()
+
+
+def test_entity_bomb_is_rejected(cli_app):
+    """압축 해제 크기는 정상인데 파싱 때 메모리에서 폭발한다 — 크기 검사로는 못 막는다."""
+    bomb = ('<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">'
+            '<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">'
+            '<!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">'
+            ']><worksheet>&lol3;</worksheet>')
+    data = _xlsx_with(bomb)
+    assert len(data) < 2000, "전제: 파일 자체는 작다(크기 검사를 통과한다)"
+    import io as _io
+    with cli_app.test_client() as c:
+        r = c.post("/api/servers/import",
+                   data={"file": (_io.BytesIO(data), "bomb.xlsx")},
+                   content_type="multipart/form-data")
+        assert r.status_code == 400, r.status_code
+        assert "DOCTYPE" in r.get_data(as_text=True)
+
+
+def test_normal_xlsx_still_accepted(cli_app):
+    """과잉 차단 방지 — DOCTYPE 없는 정상 시트는 통과해야 한다."""
+    import io as _io
+    data = _xlsx_with('<?xml version="1.0"?><worksheet><sheetData/></worksheet>')
+    with cli_app.test_client() as c:
+        r = c.post("/api/servers/import",
+                   data={"file": (_io.BytesIO(data), "ok.xlsx")},
+                   content_type="multipart/form-data")
+        # 시트 구조가 없어 파싱 단계에서 걸리는 건 정상 — DOCTYPE 거절만 아니면 된다
+        assert "DOCTYPE" not in r.get_data(as_text=True)

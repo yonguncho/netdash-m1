@@ -4,10 +4,12 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# 로그에서 값을 통째로 가릴 키 이름
+# 로그에서 값을 통째로 가릴 키 이름.
+# 'key'처럼 흔한 이름은 넣지 않는다 — config_missing_key 같은 진단 로그의
+# 값까지 가려서, 무엇이 빠졌는지 알 수 없게 된다(과잉 마스킹).
 _SENSITIVE_KEYS = frozenset((
     "password", "passwd", "pw", "token", "secret", "authorization",
-    "credential", "cred", "cred_blob", "key", "api_key", "api_token",
+    "credential", "cred", "cred_blob", "api_key", "api_token",
     "community", "snmp_community", "enable_secret", "secretkey",
 ))
 

@@ -11,6 +11,9 @@ app:
   host: "127.0.0.1"
   port: 8082
   demo_mode: false  # Set DEMO_MODE=true environment variable to enable demo mode
+  # 이름으로 접속할 때만 필요. IP·localhost는 항상 허용된다.
+  # (Host 헤더 허용목록 — DNS 리바인딩 방어. 예: ["netdash.corp.local"])
+  allowed_hosts: []
 
 collector:
   max_concurrent: 3

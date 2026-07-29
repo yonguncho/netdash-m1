@@ -895,6 +895,49 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     (val <= 0 or val > _MAX_PATH_ID):
                 return jsonify({"error": "not found"}), 404
 
+    def _host_allowed(raw_host):
+        """Host 헤더가 이 서버를 가리키는 이름인가.
+
+        DNS 리바인딩 방어. CSRF(Origin) 검사와 WebSocket 동일출처 검사가 모두
+        `request.host`와 비교하는데, 그 값 자체가 공격자가 보낸 것이다. 조작된
+        페이지가 자기 도메인을 127.0.0.1로 리바인딩하면 Origin이 Host와 같아져
+        검사를 통과하고, remote_addr도 루프백이라 토큰 면제까지 받는다
+        → 토큰 없이 API·웹셸(저장된 계정으로 SSH)까지 열린다.
+
+        **IP 리터럴은 리바인딩할 수 없다**(DNS 조회가 없다). 그래서 IP와
+        localhost만 허용하고, 이름으로 접속해야 하면 config의 app.allowed_hosts에
+        적어 두게 한다.
+        """
+        h = (raw_host or "").strip().lower()
+        if not h:
+            return False
+        if h.startswith("["):                       # [::1]:8082
+            h = h[1:h.index("]")] if "]" in h else h[1:]
+        elif h.count(":") == 1:                     # host:port
+            h = h.split(":", 1)[0]
+        if h in ("localhost", "127.0.0.1", "::1"):
+            return True
+        try:
+            ipaddress.ip_address(h)                 # IP 리터럴 → 리바인딩 불가
+            return True
+        except ValueError:
+            pass
+        allow = config.app.get("allowed_hosts") or []
+        if isinstance(allow, str):
+            allow = [allow]
+        return h in {str(a).strip().lower() for a in allow}
+
+    @app.before_request
+    def reject_rebound_host():
+        if request.path in ("/health", "/api/health"):
+            return          # 감시용 헬스체크는 막지 않는다
+        if not _host_allowed(request.host):
+            log_event("warning", "host_header_rejected", host=str(request.host)[:80])
+            return jsonify({
+                "error": "이 주소로는 접근할 수 없습니다. IP 또는 localhost로 "
+                         "접속하거나, 사용하는 호스트명을 config.yaml의 "
+                         "app.allowed_hosts 에 추가하세요."}), 400
+
     # API Token validation for production mode (CWE-306 fix: enforce authentication on all API routes)
     @app.before_request
     def validate_api_token():
@@ -1514,6 +1557,21 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                         return None, (jsonify({"error": "압축비가 비정상적으로 높습니다(zip bomb 의심)."}), 413)
                 if total / (1024 * 1024) > 80:
                     return None, (jsonify({"error": "압축 해제 크기가 너무 큽니다."}), 413)
+                # XML 엔티티 폭탄(billion laughs) 방어.
+                # 위 검사들은 '압축 해제 크기'만 본다 — 엔티티 전개는 파싱할 때
+                # 메모리에서 일어나므로, 크기 검사를 전부 통과하는 10KB짜리 파일이
+                # 프로세스를 터뜨릴 수 있다(openpyxl.DEFUSEDXML=False, stdlib
+                # ElementTree는 내부 엔티티를 전개한다). 정상 xlsx에는 DOCTYPE도
+                # ENTITY도 없으므로 선언 자체를 거절한다.
+                for info in zf.infolist():
+                    if not info.filename.lower().endswith((".xml", ".rels")):
+                        continue
+                    with zf.open(info, "r") as fh:
+                        head = fh.read(64 * 1024).lower()
+                    if b"<!doctype" in head or b"<!entity" in head:
+                        return None, (jsonify(
+                            {"error": "허용되지 않는 XML 선언(DOCTYPE/ENTITY)이 포함돼 "
+                                      "있습니다. Excel에서 다시 저장해 올려주세요."}), 400)
         except _zip.BadZipFile:
             return None, (jsonify({"error": "올바른 .xlsx 파일이 아닙니다. Excel에서 열어 "
                                    "'다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 다시 저장해 올려주세요. "
