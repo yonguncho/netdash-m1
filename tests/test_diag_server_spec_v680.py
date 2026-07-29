@@ -134,3 +134,45 @@ def test_diagnosis_is_read_only():
     src = (ROOT / "scripts" / "diag_server_spec.py").read_text(encoding="utf-8")
     for bad in ("update_server", "save_server", "set_setting", "collect_server"):
         assert bad not in src, bad
+
+
+def test_output_survives_korean_console(monkeypatch):
+    """한국어 콘솔은 cp949다 - 인코딩 안 되는 문자는 '?'로 깨진다.
+
+    사용자가 이 출력을 그대로 복사해 붙이도록 안내하므로 깨지면 읽기 나빠진다.
+    실제로 exe 출력에서 em-dash가 '?'로 나오는 것을 확인하고 넣은 방어다.
+    출력 문장에는 **다른 모듈의 오류 메시지가 그대로 실려 오므로**, 이 파일만
+    깨끗이 쓰는 것으로는 부족하다 → 출력 직전에 거른다.
+    (관련: netdash_cp949_console 메모)
+    """
+    out = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: out.append(a[0]))
+    # core 모듈이 실제로 쓰는 em-dash 섞인 문구
+    diag._p("SNMP 응답 없음 — 서버에 snmpd가 떠 있지 않습니다")
+    diag._p("따옴표 ‘작은’ “큰” 그리고 줄임표…")
+    assert out, "출력이 없다"
+    for line in out:
+        line.encode("cp949")        # 깨지면 여기서 UnicodeEncodeError
+    assert "—" not in "".join(out) and "…" not in "".join(out)
+
+
+def test_sanitizer_keeps_meaning():
+    """과잉 치환으로 문장이 뭉개지면 진단 가치가 떨어진다."""
+    out = []
+    import builtins
+    real = builtins.print
+    builtins.print = lambda *a, **k: out.append(a[0])
+    try:
+        diag._p("포트 5985 열림 — Enable-PSRemoting -Force 실행")
+    finally:
+        builtins.print = real
+    assert "Enable-PSRemoting -Force" in out[0]
+    assert "5985" in out[0]
+
+
+def _cp949_ok(ch):
+    try:
+        ch.encode("cp949")
+        return True
+    except UnicodeEncodeError:
+        return False
