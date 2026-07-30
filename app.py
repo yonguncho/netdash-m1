@@ -1921,25 +1921,43 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     def facility_list():
         """설비 현황 + 수집 진행 상태 조회.
 
-        현재 연결 위치를 모르는 설비(switch_name 없음 — 온라인/오프라인 무관)는,
-        과거 스냅샷의 MAC 위치를 배치 조회해 '과거 연결' 정보(hist_*)로 주입한다.
-        (MAC 수집 시점엔 어느 스위치 테이블에 있었으므로 과거 이력으로 특정 가능)
+        직접 연결이 확실하지 않은 설비(switch_name 없음, 또는 있어도 direct=0 —
+        업링크 트렁크로만 관측된 경우)는 두 단계로 보강한다.
+          ① 과거 스냅샷의 MAC 위치(hist_*) — 예전엔 switch_name이 '완전히 비어
+             있을 때'만 시도했다. 그런데 트렁크 경유로만 관측된 경우(direct=0
+             인데 switch_name은 채워짐)엔 이 보강이 아예 시도되지 않았다 —
+             장비가 실제로 붙어 있던 액세스 스위치의 과거 이력이 있어도 못 봤다.
+          ② 포트 Description(desc_*) — 엔지니어가 접속 포트에 "10.92.140.88"처럼
+             장비 IP를 직접 적어 둔 경우. 이건 스위치 설정의 일부라 장비가
+             오프라인이 되어 MAC이 에이징으로 지워져도 남아 있다 — 과거 MAC
+             이력조차 없을 때의 최후 단서.
+        어느 쪽도 switch_name/direct를 덮어쓰지 않는다 — 참고용 힌트로만 얹는다.
         (스캔 진행 중엔 3초 폴링 부하를 피해 생략 — 스캔이 곧 정확히 갱신)
         """
         try:
             hosts = db.get_facility_hosts(db_path)
             status = facility_mod.get_status()
             if not status.get("running"):
-                off = [h for h in hosts if not h.get("switch_name")]
-                if off:
-                    mac_last = db.get_mac_last_seen(db_path, [h.get("mac") for h in off])
-                    for h in off:
+                weak = [h for h in hosts if not h.get("switch_name") or not h.get("direct")]
+                if weak:
+                    mac_last = db.get_mac_last_seen(db_path, [h.get("mac") for h in weak])
+                    for h in weak:
                         _hx = re.sub(r"[^0-9a-f]", "", (h.get("mac") or "").lower())
                         hh = mac_last.get(_hx) if len(_hx) == 12 else None
                         if hh and hh.get("switch_name"):
                             h["hist_switch"] = hh.get("switch_name")
                             h["hist_port"] = hh.get("port")
                             h["hist_ts"] = hh.get("ts")
+                        # 과거 MAC 이력도 없으면 포트 설명에서 이 IP를 찾는다
+                        # (이력조차 없는 건 대개 첫 확인이거나 DB가 새로 시작된 경우).
+                        elif h.get("ip"):
+                            try:
+                                dm = db.find_port_by_description(db_path, h["ip"])
+                            except Exception:
+                                dm = None
+                            if dm:
+                                h["desc_switch"] = dm["switch_name"]
+                                h["desc_port"] = dm["port"]
             return jsonify({"hosts": hosts, "status": status})
         except Exception as e:
             log_event("error", "facility_list_error", error=collector._sanitize_error_msg(str(e)))

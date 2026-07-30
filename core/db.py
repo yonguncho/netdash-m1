@@ -1287,6 +1287,40 @@ def get_port_descriptions(db_path):
     return descs
 
 
+def find_port_by_description(db_path, needle):
+    """포트 Description에 needle(보통 설비 IP)이 적힌 포트를 찾는다.
+
+    엔지니어가 접속 포트에 "10.92.140.88"처럼 장비 식별자를 직접 적어두는
+    경우가 흔하다. MAC 테이블은 장비가 오프라인이 되면 에이징으로 지워지지만
+    이 설명은 스위치 설정(config)의 일부라 장비 상태와 무관하게 남는다 —
+    라이브 MAC보다 오히려 더 오래가는 '마지막으로 확인된 연결 포트' 단서다.
+
+    같은 문자열이 여러 포트에 적혀 있으면(오탐 방지) 아무것도 반환하지 않는다.
+    Returns: {"switch_id","switch_name","port","description"} | None
+    """
+    if not needle:
+        return None
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """SELECT p.switch_id, s.name AS switch_name, p.name AS port,
+                          p.description
+                   FROM ports p JOIN switches s ON s.id = p.switch_id
+                   WHERE p.snapshot_id IN (
+                       SELECT MAX(snapshot_id) FROM ports GROUP BY switch_id)
+                     AND p.description LIKE ('%' || ? || '%')""",
+                (needle,))
+            rows = cur.fetchall()
+        except Exception:
+            return None
+    if len(rows) != 1:
+        return None
+    r = rows[0]
+    return {"switch_id": r["switch_id"], "switch_name": r["switch_name"],
+            "port": r["port"], "description": r["description"]}
+
+
 def save_port_channels(db_path, snapshot_id, switch_id, port_channels):
     """포트채널 멤버 저장(스냅샷 단위). port_channels=[{port_channel, members:[...]}]."""
     if not port_channels:

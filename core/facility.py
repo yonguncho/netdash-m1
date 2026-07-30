@@ -167,8 +167,22 @@ def _choose_attachment(matches, port_counts, pc_map=None):
             direct = best_cnt * 2 <= _cnt(physical[1][0], physical[1][2])
         chosen = best
     elif pchan:
-        chosen, disp_port = pchan[0]           # 물리 직결 없지만 포트채널이 멤버로 해석됨
-        direct = True
+        # 포트채널이 물리 멤버로 풀렸다고 무조건 '직접'은 아니다. 백본↔액세스
+        # 스위치 간 업링크 트렁크(예: 백본의 Po124가 TPS 스위치로 올라가는 길목)도
+        # pc_map에 물리 멤버가 있어 여기로 들어온다 — 그 뒤에 있는 장비 전부의 MAC이
+        # 이 Po 하나로 몰려 학습되므로, 물리 포트와 똑같이 MAC 개수로 걸러야 한다.
+        # (실제 사례: TPS 스위치 1/0/25에 물린 장비가 오프라인이 되어 그 스위치의
+        #  MAC 항목은 에이징으로 지워졌는데, 백본은 Po124의 오래된 관측치를 아직
+        #  갖고 있어 '백본에 직접 연결'로 잘못 표시됐다)
+        pchan.sort(key=lambda pc: _cnt(pc[0][0], pc[0][2]))
+        best_orig, best_disp = pchan[0]
+        pc_cnt = _cnt(best_orig[0], best_orig[2])
+        if pc_cnt <= _EDGE_MAC_MAX:
+            chosen, disp_port, direct = best_orig, best_disp, True
+        else:
+            # 트렁크로 판단 — 물리 멤버로 풀어 보여주면 '거기 꽂혀 있다'는 오해를
+            # 준다. 원래 포트채널 이름 그대로 두고 경유로 남긴다.
+            chosen, disp_port, direct = best_orig, best_orig[2], False
     else:
         chosen = logical[0] if logical else matches[0]
         disp_port = chosen[2]

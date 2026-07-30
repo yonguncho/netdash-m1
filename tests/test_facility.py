@@ -161,13 +161,49 @@ def test_choose_attachment_single_physical_is_direct_even_if_busy():
 
 
 def test_choose_attachment_resolves_port_channel_members():
-    """포트채널(Po)만 보여도 pc_map으로 물리 멤버 해석 → 직접 + 멤버포트 표시."""
+    """포트채널(Po)이 소수 MAC만 학습 중이면(장비 자체의 LACP 본딩) 직접 + 멤버포트 표시.
+
+    MAC 개수를 명시한다 — port_counts가 비어 있으면(=미상) v6.11.0부터 안전한
+    쪽(직접 아님)으로 처리한다(아래 test_choose_attachment_busy_port_channel_not_direct).
+    """
+    from core import facility
+    matches = [(1, "BACKBONE", "Po10")]
+    port_counts = {(1, "po10"): 2}   # 장비 자신의 LACP 본딩 — MAC 소수
+    pc_map = {(1, "po10"): ["Eth1/1", "Eth1/2"]}
+    sid, sname, port, direct, via = facility._choose_attachment(matches, port_counts, pc_map)
+    assert sname == "BACKBONE" and direct is True
+    assert "Eth1/1" in port and "Eth1/2" in port and "Po10" in port
+
+
+def test_choose_attachment_busy_port_channel_not_direct():
+    """백본↔액세스 스위치 간 업링크 트렁크는 물리 멤버로 풀려도 '직접'이 아니다.
+
+    실제 사례: 설비가 TPS 스위치 access 포트(1/0/25)에 물려 있었는데, 설비가
+    오프라인이 되며 TPS의 MAC 항목은 에이징으로 지워지고, 백본에 남은 오래된
+    관측치(그 TPS로 가는 업링크 Po124)만 매칭됐다. Po124엔 그 TPS 뒤 수십~수백
+    대의 MAC이 몰려 있으므로(트렁크), 물리 포트였다면 당연히 '경유'로 판정됐을
+    상황이 포트채널이라는 이유만으로 '직접 연결: 백본'으로 잘못 표시됐다.
+    """
+    from core import facility
+    matches = [(1, "SKBA_F1_N9508_FA_BB1", "Po124")]
+    port_counts = {(1, "po124"): 180}   # TPS 뒤 서브넷 전체 MAC이 이 업링크로 몰림
+    pc_map = {(1, "po124"): ["Eth1/24"]}
+    sid, sname, port, direct, via = facility._choose_attachment(matches, port_counts, pc_map)
+    assert direct is False, "MAC이 많은 업링크 Po를 직접 연결로 보면 안 된다"
+    assert port == "Po124", "트렁크는 멤버로 풀지 않고 Po 이름 그대로 보여준다(오인 방지)"
+
+
+def test_choose_attachment_missing_count_defaults_to_not_direct():
+    """MAC 개수를 모르면(port_counts에 항목 없음) 안전한 쪽(직접 아님)으로 본다.
+
+    물리 포트는 이미 이렇게 동작한다(개수 모르면 정렬에서 뒤로 밀림) — 포트채널도
+    같은 원칙을 적용해 일관되게 한다.
+    """
     from core import facility
     matches = [(1, "BACKBONE", "Po10")]
     pc_map = {(1, "po10"): ["Eth1/1", "Eth1/2"]}
     sid, sname, port, direct, via = facility._choose_attachment(matches, {}, pc_map)
-    assert sname == "BACKBONE" and direct is True
-    assert "Eth1/1" in port and "Eth1/2" in port and "Po10" in port
+    assert direct is False
 
 
 def test_choose_attachment_unresolved_po_not_direct():
@@ -814,3 +850,161 @@ def test_facility_ui_present():
     # 설비 표에도 상태 배지 컬럼을 추가했다(4개 현황 화면 표기 통일)
     assert "<th>포트 설명</th>" in html and ">상태</th>" in html and "<th>비고</th>" in html
     assert "온라인" not in js   # 상태 배지 텍스트 제거
+
+
+def test_rematch_backbone_uplink_trunk_shown_as_via_not_direct(temp_db):
+    """실제 사례 재현: 오프라인 설비가 TPS 접속 포트에서는 에이징으로 사라지고,
+    백본에는 그 TPS로 가는 업링크 Po의 오래된 관측치만 남은 경우.
+
+    고치기 전엔 이 Po가 물리 멤버로 풀린다는 이유만으로 '백본에 직접 연결'로
+    잘못 표시됐다. 실제로는 그 TPS 뒤 서브넷 전체가 이 Po로 몰리는 트렁크였다.
+    """
+    from core import facility
+    bb = db.save_switch(temp_db, "SKBA_F1_N9508_FA_BB1", "10.0.0.1", "cisco_nxos")
+    tps = db.save_switch(temp_db, "TPS-10.92.140.13", "10.92.140.13", "cisco_ios")
+
+    # TPS는 정상 수집됐지만, 오프라인 설비의 MAC은 에이징으로 이미 지워졌다
+    # (그 스위치의 이번 스냅샷엔 이 MAC이 없다 — 다른 MAC들만 있어 '수집 성공'은 맞다).
+    tps_snap = db.save_snapshot(temp_db, tps)
+    db.save_mac_entries(temp_db, tps_snap, tps,
+                        [{"vlan": 140, "mac": "00:11:22:33:44:55", "port": "Gi1/0/1"}])
+
+    # 백본은 그 TPS로 가는 업링크(Po124)에서 대량의 MAC을 본다 — 그중 하나가
+    # 문제의 오프라인 설비(오래된 관측치, 지금은 실제로 응답 없음).
+    bb_snap = db.save_snapshot(temp_db, bb)
+    bb_macs = [{"vlan": 140, "mac": "aa:bb:cc:00:00:%02x" % i, "port": "Po124"}
+              for i in range(180)]
+    bb_macs.append({"vlan": 140, "mac": "aa:bb:cc:88:00:88", "port": "Po124"})
+    db.save_mac_entries(temp_db, bb_snap, bb, bb_macs)
+    db.save_port_channels(temp_db, bb_snap, bb,
+                          [{"port_channel": "Po124", "members": ["Eth1/24"]}])
+
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.92.140.0/24", "ip": "10.92.140.88", "mac": "AA:BB:CC:88:00:88",
+         "online": 0, "direct": 1, "switch_name": "SKBA_F1_N9508_FA_BB1", "port": "Po124"}])
+
+    facility.rematch(temp_db)
+    h = db.get_facility_hosts(temp_db)[0]
+    assert h["direct"] == 0, "트렁크를 직접 연결로 보여주면 안 된다"
+    assert h["switch_name"] == "SKBA_F1_N9508_FA_BB1"
+    assert h["port"] == "Po124", "멤버로 풀지 않고 Po 이름 그대로 남긴다"
+
+
+# ── 실제 사례: 직접 연결 미확인이어도 과거 이력·포트 설명은 보여줘야 한다 ──
+# 사용자 보고: "TPS 스위치는 정상 수집됐는데 그 설비 연결 정보가 없다.
+# 그리고 TPS의 1/0/24 포트 description에 그 설비 IP가 그대로 적혀 있기까지
+# 하다. 그럼 이전에 수집된 정보 이력도 못 읽는다는 거잖아?"
+#
+# 확인해보니 맞았다 — /api/facility 의 과거 이력 보강은 switch_name이
+# **완전히 빈** 설비에만 적용됐다. 트렁크 경유로만 관측돼 switch_name은
+# 채워지고 direct=0인 설비(방금 고친 케이스)는 이 조건에 안 걸려 이력 조회
+# 자체가 시도되지 않았다.
+
+def test_find_port_by_description_matches_unique_ip(temp_db):
+    sw = db.save_switch(temp_db, "TPS-140", "10.92.140.13", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sw)
+    with db.get_db(temp_db) as conn:
+        conn.execute(
+            "INSERT INTO ports (snapshot_id, switch_id, name, description) "
+            "VALUES (?, ?, ?, ?)", (snap, sw, "GigabitEthernet1/0/24", "10.92.140.88"))
+    m = db.find_port_by_description(temp_db, "10.92.140.88")
+    assert m["switch_name"] == "TPS-140" and m["port"] == "GigabitEthernet1/0/24"
+
+
+def test_find_port_by_description_ambiguous_returns_none(temp_db):
+    """같은 문구가 두 포트에 적혀 있으면(오탐 방지) 아무것도 반환하지 않는다."""
+    sw = db.save_switch(temp_db, "TPS-140", "10.92.140.13", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sw)
+    with db.get_db(temp_db) as conn:
+        conn.execute(
+            "INSERT INTO ports (snapshot_id, switch_id, name, description) "
+            "VALUES (?, ?, ?, ?)", (snap, sw, "Gi1/0/24", "10.92.140.88"))
+        conn.execute(
+            "INSERT INTO ports (snapshot_id, switch_id, name, description) "
+            "VALUES (?, ?, ?, ?)", (snap, sw, "Gi1/0/25", "old-10.92.140.88-note"))
+    assert db.find_port_by_description(temp_db, "10.92.140.88") is None
+
+
+def test_find_port_by_description_no_match_returns_none(temp_db):
+    sw = db.save_switch(temp_db, "TPS-140", "10.92.140.13", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sw)
+    with db.get_db(temp_db) as conn:
+        conn.execute(
+            "INSERT INTO ports (snapshot_id, switch_id, name, description) "
+            "VALUES (?, ?, ?, ?)", (snap, sw, "Gi1/0/1", "AP-3F-회의실"))
+    assert db.find_port_by_description(temp_db, "10.92.140.88") is None
+
+
+def test_facility_endpoint_enriches_trunk_only_hosts_with_history(client):
+    """direct=0인데 switch_name이 채워진 설비도 과거 이력 보강을 받아야 한다.
+
+    예전엔 switch_name이 '완전히 빈' 설비만 이력을 조회해서, 트렁크 경유로만
+    관측된(=switch_name은 있지만 direct=0) 이 사례에서는 시도조차 안 됐다.
+    """
+    p = Path.cwd() / "netdash.db"
+    edge = db.save_switch(p, "EDGE-SW", "10.92.140.13", "cisco_ios")
+    snap = db.save_snapshot(p, edge)
+    # 과거 스냅샷엔 이 MAC이 액세스 포트에 있었다(이제는 에이징으로 지워짐 —
+    # get_mac_to_switchport의 '최신' 조회에는 안 잡히지만 last_seen 이력엔 남는다)
+    db.save_mac_entries(p, snap, edge,
+                        [{"vlan": 140, "mac": "aa:bb:cc:88:00:88", "port": "Gi1/0/25"}])
+    db.save_facility_hosts(p, [
+        {"subnet": "10.92.140.0/24", "ip": "10.92.140.88", "mac": "AA:BB:CC:88:00:88",
+         "online": 0, "direct": 0, "switch_name": "BACKBONE", "port": "Po124"}])
+    r = client.get("/api/facility")
+    hosts = r.get_json()["hosts"]
+    h = [x for x in hosts if x["ip"] == "10.92.140.88"][0]
+    assert h.get("hist_switch") == "EDGE-SW" and h.get("hist_port") == "Gi1/0/25"
+    # 트렁크로 판단된 switch_name/direct는 덮어쓰지 않는다 — 참고용 힌트만 얹는다
+    assert h["switch_name"] == "BACKBONE" and h["direct"] == 0
+
+
+def test_facility_endpoint_falls_back_to_description_when_no_history(client):
+    """과거 MAC 이력조차 없으면(첫 확인 등) 포트 설명에서 IP를 찾는다."""
+    p = Path.cwd() / "netdash.db"
+    edge = db.save_switch(p, "EDGE-SW", "10.92.140.13", "cisco_ios")
+    snap = db.save_snapshot(p, edge)
+    with db.get_db(p) as conn:
+        conn.execute(
+            "INSERT INTO ports (snapshot_id, switch_id, name, description) "
+            "VALUES (?, ?, ?, ?)", (snap, edge, "Gi1/0/24", "10.92.140.88"))
+    db.save_facility_hosts(p, [
+        {"subnet": "10.92.140.0/24", "ip": "10.92.140.88", "mac": "",
+         "online": 0, "direct": 0, "switch_name": "", "port": ""}])
+    r = client.get("/api/facility")
+    hosts = r.get_json()["hosts"]
+    h = [x for x in hosts if x["ip"] == "10.92.140.88"][0]
+    assert h.get("desc_switch") == "EDGE-SW" and h.get("desc_port") == "Gi1/0/24"
+
+
+def test_facility_endpoint_history_takes_priority_over_description(client):
+    """MAC 이력이 있으면 그걸 우선한다 — 설명은 이력이 없을 때의 최후 수단이다."""
+    p = Path.cwd() / "netdash.db"
+    edge = db.save_switch(p, "EDGE-SW", "10.92.140.13", "cisco_ios")
+    other = db.save_switch(p, "OTHER-SW", "10.92.140.14", "cisco_ios")
+    snap = db.save_snapshot(p, edge)
+    db.save_mac_entries(p, snap, edge,
+                        [{"vlan": 140, "mac": "aa:bb:cc:88:00:88", "port": "Gi1/0/25"}])
+    snap2 = db.save_snapshot(p, other)
+    with db.get_db(p) as conn:
+        conn.execute(
+            "INSERT INTO ports (snapshot_id, switch_id, name, description) "
+            "VALUES (?, ?, ?, ?)", (snap2, other, "Gi1/0/1", "10.92.140.88"))
+    db.save_facility_hosts(p, [
+        {"subnet": "10.92.140.0/24", "ip": "10.92.140.88", "mac": "AA:BB:CC:88:00:88",
+         "online": 0, "direct": 0, "switch_name": "", "port": ""}])
+    r = client.get("/api/facility")
+    h = [x for x in r.get_json()["hosts"] if x["ip"] == "10.92.140.88"][0]
+    assert h.get("hist_switch") == "EDGE-SW"
+    assert not h.get("desc_switch"), "이력이 있는데도 설명 기반 힌트를 얹으면 안 된다"
+
+
+def test_facility_endpoint_does_not_enrich_confirmed_direct_hosts(client):
+    """이미 direct=1로 확실한 설비는 힌트를 얹을 필요가 없다(불필요한 조회 방지)."""
+    p = Path.cwd() / "netdash.db"
+    db.save_facility_hosts(p, [
+        {"subnet": "10.1.0.0/24", "ip": "10.1.0.5", "mac": "aa:bb:cc:00:00:01",
+         "online": 1, "direct": 1, "switch_name": "ACCESS-SW", "port": "Gi1/0/1"}])
+    r = client.get("/api/facility")
+    h = [x for x in r.get_json()["hosts"] if x["ip"] == "10.1.0.5"][0]
+    assert not h.get("hist_switch") and not h.get("desc_switch")

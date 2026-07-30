@@ -2491,7 +2491,8 @@ function _facMatchesSearch(h, q) {
   if (!q) return true;
   var ql = q.toLowerCase();
   var hay = [(h.ip || ""), (h.subnet || ""), (h.switch_name || ""), (h.port || ""),
-             (h.port_desc || ""), (h.via || ""), (h.hist_switch || ""), (h.hist_port || "")]
+             (h.port_desc || ""), (h.via || ""), (h.hist_switch || ""), (h.hist_port || ""),
+             (h.desc_switch || ""), (h.desc_port || "")]
     .join(" ").toLowerCase();
   if (hay.indexOf(ql) >= 0) return true;
   var qhex = ql.replace(/[^0-9a-f]/g, "");
@@ -2569,14 +2570,25 @@ function _renderFacilityRows() {
     } else {
       // 직접 연결 미확인 — 연결 스위치 셀은 간결히, 사유·과거연결은 '비고'로
       swCell = "<span style='color:#b45309'>직접 연결 미확인</span>" +
-        (h.hist_switch ? " <span class='status-badge status-badge--new'>과거 연결</span>" : "");
+        (h.hist_switch ? " <span class='status-badge status-badge--new'>과거 연결</span>" :
+         h.desc_switch ? " <span class='status-badge status-badge--new'>설명 일치</span>" : "");
       portCell = "<span style='color:#94a3b8'>—</span>";
       descCell = "<span style='color:#94a3b8'>—</span>";
+      if (h.switch_name) {
+        // direct=0인데 switch_name이 있으면 트렁크(업링크) 경유로만 관측된
+        // 것이다 — 그 스위치가 '틀렸다'가 아니라 '거기까지만 확인된다'는 뜻.
+        remarks.push("현재는 " + h.switch_name + " " + (h.port || "") +
+          " 경유로만 관측(트렁크 — 실제 접속 지점 아님)");
+      }
       if (h.via) remarks.push("업링크(Po/Vl) 경유로만 관측: " + h.via);
       remarks.push("연결된 액세스 스위치 미수집이거나 최신 MAC 테이블에 없음(노후)");
       if (h.hist_switch) {
         remarks.push("과거 연결: " + h.hist_switch + (h.hist_port ? " " + h.hist_port : "") +
           (h.hist_ts ? " (" + String(h.hist_ts).slice(0, 16) + ")" : ""));
+      }
+      if (h.desc_switch) {
+        remarks.push("포트 설명에 이 IP 기재됨: " + h.desc_switch +
+          (h.desc_port ? " " + h.desc_port : "") + " (스위치 설정 라벨 — 참고용)");
       }
     }
     remarkCell = remarks.length
