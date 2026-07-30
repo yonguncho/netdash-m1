@@ -1978,6 +1978,12 @@ function renderSwitchTable(switches) {
       alertBadge(sw.alert) +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +
+      // 상세보기 — 현황판 카드에만 있던 걸 여기에도 둔다(같은 detail-switch 액션 재사용).
+      // 미수집 장비도 막지 않는다: 패널이 "수집된 정보 없음"을 보여주는 편이,
+      // 버튼이 아예 없어서 "왜 여긴 상세보기가 없지"가 되는 것보다 낫다.
+      "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+      "title='포트·MAC·ARP·설정 등 수집된 상세 정보 보기' " +
+      "data-action='detail-switch' data-payload='" + payloadAttr((sw)) + "'>상세보기</button> " +
       "<button class='btn btn--primary' style='font-size:12px;padding:4px 10px' " +
       "title='계정을 입력해 이 스위치를 재수집' data-action='collect-switch' data-payload='" + payloadAttr((sw)) + "'>수집</button> " +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
