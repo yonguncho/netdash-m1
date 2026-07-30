@@ -781,6 +781,138 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
             "unscanned": len(unscanned)}
 
 
+def gateway_credential(db_path, switch_id):
+    """게이트웨이 스위치의 계정 — 저장 계정 우선, 없으면 PC 프로필 공통 계정.
+
+    app.py가 예전엔 이 로직을 자기 안에 따로 갖고 있었다(관제 개별 재수집 전용).
+    같은 계산이 두 곳에 있으면 한쪽만 고쳐져 어긋난다 — 이 모듈 하나로 모은다.
+    반환: (username, password) | (None, None)."""
+    from . import credentials, pcprofile
+    blob = db.get_switch_credential(db_path, switch_id)
+    username = password = ""
+    if blob:
+        dec = credentials.decrypt_credential(blob)
+        if dec and "|" in dec:
+            username, password = dec.split("|", 1)
+    if not (username and password):
+        cred = pcprofile.get_credential(db_path)
+        if cred:
+            username, password = cred
+    return (username, password) if (username and password) else (None, None)
+
+
+def _gateway_connect(sw, username, password, source_ip=None, timeout=20):
+    """게이트웨이 스위치에 SSH 연결 + enable + 페이징 해제. 반환: (conn, vendor, parser)."""
+    from netmiko import ConnectHandler
+    from . import netbind, parsers
+
+    vendor = _collector._norm_vendor(sw.get("vendor"))
+    try:
+        parser = parsers.get_parser(vendor)
+    except ValueError:
+        vendor = "cisco_ios"
+        parser = parsers.get_parser("cisco_ios")
+    device = {
+        "device_type": vendor, "ip": sw["ip"], "username": username,
+        "password": password, "secret": password, "conn_timeout": timeout,
+        "fast_cli": False,
+    }
+    if source_ip:
+        device["sock"] = netbind.bind_socket(sw["ip"], 22, source_ip, timeout)
+    conn = ConnectHandler(**device)
+    try:
+        if hasattr(conn, "check_enable_mode") and not conn.check_enable_mode():
+            conn.enable()
+    except Exception:
+        pass
+    try:
+        conn.send_command("terminal length 0", read_timeout=10)
+    except Exception:
+        pass
+    return conn, vendor, parser
+
+
+def _probe_ips(conn, vendor, parser, switch_id, net, ips):
+    """이미 연결된 세션으로 **지정한 IP들만** ping 후 ARP를 한 번 읽는다.
+
+    대역 전체를 스윕하지 않는다 — 확인하려는 IP만큼만 ping을 보낸다.
+    반환: {ip: arp_entry} (응답 없는 IP는 키 자체가 없다).
+    """
+    vrf_capable = vendor in ("cisco_ios", "cisco_nxos", "arista_eos")
+    vrf = _find_vrf_for_subnet(conn, net) if vrf_capable else None
+    arp_base_cmd = getattr(parser, "COMMANDS", {}).get("arp", "show ip arp")
+    arp_cmd = ("%s vrf %s" % (arp_base_cmd, vrf)) if vrf else arp_base_cmd
+    ping_tpl = _ping_tpl(vendor, vrf)
+    for ip in ips:
+        try:
+            conn.send_command(ping_tpl % ip, read_timeout=8)
+        except Exception:
+            pass   # ping 실패는 곧 '오프라인'으로 해석되므로 여기서 죽지 않는다
+    out = conn.send_command(arp_cmd, read_timeout=30)
+    want = set(ips)
+    found = {}
+    for a in parser._parse_arps(out or "", switch_id):
+        if a.get("ip") in want:
+            found[a["ip"]] = a
+    return found
+
+
+def _apply_host_results(db_path, subnet, ip_results):
+    """probe 결과를 facility_hosts에 반영. ip_results: {ip: arp_entry|None}.
+
+    같은 대역의, 결과에 없는(=대상 아니었던) 행은 그대로 둔다. 위치를 새로
+    못 찾은 IP는 이전 연결 위치를 보존한다(마지막 위치 참고용으로 남긴다).
+    반환: [(ip, now_online, was_online), ...] — 이벤트 기록·집계용.
+    """
+    hosts = db.get_facility_hosts(db_path)
+    rows, changed = [], []
+    seen_ips = set()
+    mac_map = port_counts = pc_map = port_descs = None   # 필요할 때만 조회(성능)
+
+    for h in hosts:
+        if h.get("subnet") != subnet or h.get("ip") not in ip_results:
+            rows.append(h)
+            continue
+        seen_ips.add(h["ip"])
+        found = ip_results[h["ip"]]
+        now_online = bool(found)
+        was_online = bool(h.get("online"))
+        updated = dict(h)
+        updated["mac"] = (found or {}).get("mac") or h.get("mac")
+        updated["online"] = 1 if now_online else 0
+        mac = (updated["mac"] or "").lower()
+        if mac:
+            if mac_map is None:
+                mac_map = db.get_mac_to_switchport(db_path)
+                port_counts = db.get_port_mac_counts(db_path)
+                pc_map = db.get_port_channel_members(db_path)
+            sid, sname, port, direct, via = _choose_attachment(
+                mac_map.get(mac, []), port_counts, pc_map)
+            if sname:   # 새로 찾았을 때만 덮는다 — 못 찾았으면 이전 위치 보존
+                if port_descs is None:
+                    port_descs = db.get_port_descriptions(db_path)
+                updated["switch_id"] = sid
+                updated["switch_name"] = sname
+                updated["port"] = port
+                updated["direct"] = 1 if direct else 0
+                updated["via"] = "; ".join(via) if via else None
+                updated["port_desc"] = port_descs.get((sid, (port or "").lower()))
+        rows.append(updated)
+        changed.append((h["ip"], now_online, was_online))
+
+    # 요청받은 IP인데 facility_hosts에 행이 아예 없던 경우(드묾) — 새로 만든다.
+    for ip, found in ip_results.items():
+        if ip in seen_ips:
+            continue
+        rows.append({"subnet": subnet, "ip": ip,
+                     "mac": (found or {}).get("mac") or "",
+                     "online": 1 if found else 0})
+        changed.append((ip, bool(found), False))
+
+    db.replace_facility_subnet(db_path, subnet, rows)
+    return changed
+
+
 def recollect_single_host(db_path, subnet, ip, username, password, source_ip=None):
     """설비 하나만 재확인 — 그 설비가 속한 대역 전체를 다시 스캔하지 않는다.
 
@@ -795,9 +927,6 @@ def recollect_single_host(db_path, subnet, ip, username, password, source_ip=Non
 
     반환: (ok: bool, message: str).
     """
-    from netmiko import ConnectHandler
-    from . import netbind, parsers
-
     band_map = get_band_map(db_path)
     switch_id = band_map.get(subnet)
     if not switch_id:
@@ -812,50 +941,10 @@ def recollect_single_host(db_path, subnet, ip, username, password, source_ip=Non
     except (ipaddress.AddressValueError, ValueError):
         return False, "IP/대역 형식이 올바르지 않습니다"
 
-    vendor = _collector._norm_vendor(sw.get("vendor"))
-    try:
-        parser = parsers.get_parser(vendor)
-    except ValueError:
-        vendor = "cisco_ios"
-        parser = parsers.get_parser("cisco_ios")
-    arp_base_cmd = getattr(parser, "COMMANDS", {}).get("arp", "show ip arp")
-    vrf_capable = vendor in ("cisco_ios", "cisco_nxos", "arista_eos")
-
-    device = {
-        "device_type": vendor, "ip": sw["ip"], "username": username,
-        "password": password, "secret": password, "conn_timeout": 20,
-        "fast_cli": False,
-    }
     conn = None
-    found = None
     try:
-        conn_device = dict(device)
-        if source_ip:
-            conn_device["sock"] = netbind.bind_socket(sw["ip"], 22, source_ip, 20)
-        conn = ConnectHandler(**conn_device)
-        try:
-            if hasattr(conn, "check_enable_mode") and not conn.check_enable_mode():
-                conn.enable()
-        except Exception:
-            pass
-        try:
-            conn.send_command("terminal length 0", read_timeout=10)
-        except Exception:
-            pass
-
-        vrf = _find_vrf_for_subnet(conn, net) if vrf_capable else None
-        arp_cmd = ("%s vrf %s" % (arp_base_cmd, vrf)) if vrf else arp_base_cmd
-        ping_tpl = _ping_tpl(vendor, vrf)
-        try:
-            conn.send_command(ping_tpl % ip, read_timeout=8)
-        except Exception:
-            pass   # ping 실패는 곧 '오프라인'으로 해석되므로 여기서 죽지 않는다
-
-        out = conn.send_command(arp_cmd, read_timeout=30)
-        for a in parser._parse_arps(out or "", switch_id):
-            if a.get("ip") == ip:
-                found = a
-                break
+        conn, vendor, parser = _gateway_connect(sw, username, password, source_ip)
+        found_map = _probe_ips(conn, vendor, parser, switch_id, net, [ip])
     except Exception as e:
         err = _collector._sanitize_error_msg(str(e))
         utils.log_event("warning", "facility_single_recollect_error", ip=ip,
@@ -868,48 +957,13 @@ def recollect_single_host(db_path, subnet, ip, username, password, source_ip=Non
             except Exception:
                 pass
 
-    hosts = db.get_facility_hosts(db_path)
-    target = None
-    rows = []
-    for h in hosts:
-        if h.get("subnet") != subnet:
-            continue
-        rows.append(h)
-        if h.get("ip") == ip:
-            target = h
-    if target is None:
-        target = {"subnet": subnet, "ip": ip}
-        rows.append(target)
-
-    mac = ((found or {}).get("mac") or target.get("mac") or "").lower()
-    sid = sname = port = None
-    direct = via = None
-    if mac:
-        matches = db.get_mac_to_switchport(db_path).get(mac, [])
-        port_counts = db.get_port_mac_counts(db_path)
-        pc_map = db.get_port_channel_members(db_path)
-        sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map)
-
-    now_online = bool(found)
-    was_online = bool(target.get("online"))
-    updated = dict(target)
-    updated["mac"] = (found or {}).get("mac") or target.get("mac")
-    updated["online"] = 1 if now_online else 0
-    if sname:   # 위치를 새로 찾았을 때만 덮는다 — 못 찾았으면 이전 위치 정보를 보존
-        port_descs = db.get_port_descriptions(db_path)
-        updated["switch_id"] = sid
-        updated["switch_name"] = sname
-        updated["port"] = port
-        updated["direct"] = 1 if direct else 0
-        updated["via"] = "; ".join(via) if via else None
-        updated["port_desc"] = port_descs.get((sid, (port or "").lower()))
-
-    rows = [updated if r is target else {k: r.get(k) for k in _KEEP_COLS + ("online",)}
-            for r in rows]
     try:
-        db.replace_facility_subnet(db_path, subnet, rows)
+        changed = _apply_host_results(db_path, subnet, {ip: found_map.get(ip)})
     except Exception as e:
         return False, "결과 저장 실패: %s" % _collector._sanitize_error_msg(str(e))
+    _, now_online, was_online = changed[0]
+    updated = next((h for h in db.get_facility_hosts(db_path)
+                   if h.get("subnet") == subnet and h.get("ip") == ip), {})
 
     if now_online and not was_online:
         db.save_device_event(db_path, "device_online", "info", subnet=subnet, ip=ip,
@@ -925,6 +979,92 @@ def recollect_single_host(db_path, subnet, ip, username, password, source_ip=Non
     return True, ("온라인 확인됨" + (" (%s %s)" % (updated["switch_name"], updated.get("port") or "")
                                    if updated.get("switch_name") else "")
                   if now_online else "오프라인 — 응답 없음")
+
+
+def recollect_offline_facility(db_path, source_ip=None, switch_filter=None):
+    """관제의 '설비 연결 실패' 카테고리 전체를 대역별로 묶어 일괄 재확인.
+
+    개별 재수집(recollect_single_host)과 원리는 같지만, 여러 설비를 한 번에
+    처리할 때 설비마다 새로 접속하면 대역이 여러 개일 때 시간이 그만큼 배로
+    든다. 대역(=게이트웨이 스위치) 하나당 세션을 한 번만 열어 재사용하고,
+    그 대역에서 오프라인인 IP들만 ping한다(대역 전체 스윕이 아니다).
+
+    switch_filter를 주면 그 연결 스위치의 오프라인 설비만 대상으로 한다
+    (관제 화면의 스위치별 칩 필터와 대응).
+
+    반환: {"checked", "online", "still_offline", "no_gateway": [subnet,...],
+           "no_cred": [subnet,...], "errors": {subnet: msg}}
+    """
+    hosts = [h for h in db.get_facility_hosts(db_path) if not h.get("online")]
+    if switch_filter:
+        hosts = [h for h in hosts if (h.get("switch_name") or "미확인") == switch_filter]
+    result = {"checked": 0, "online": 0, "still_offline": 0,
+              "no_gateway": [], "no_cred": [], "errors": {}}
+    if not hosts:
+        return result
+
+    by_subnet = {}
+    for h in hosts:
+        by_subnet.setdefault(h.get("subnet"), []).append(h["ip"])
+    band_map = get_band_map(db_path)
+
+    for subnet, ips in by_subnet.items():
+        switch_id = band_map.get(subnet)
+        sw = db.get_switch(db_path, switch_id) if switch_id else None
+        if not switch_id or not sw:
+            result["no_gateway"].append(subnet)
+            continue
+        username, password = gateway_credential(db_path, switch_id)
+        if not username:
+            result["no_cred"].append(subnet)
+            continue
+        try:
+            net = ipaddress.IPv4Network(subnet, strict=False)
+        except (ipaddress.AddressValueError, ValueError):
+            result["errors"][subnet] = "잘못된 대역 형식"
+            continue
+
+        conn = None
+        try:
+            conn, vendor, parser = _gateway_connect(sw, username, password, source_ip)
+            found_map = _probe_ips(conn, vendor, parser, switch_id, net, ips)
+        except Exception as e:
+            err = _collector._sanitize_error_msg(str(e))
+            result["errors"][subnet] = err
+            utils.log_event("warning", "facility_bulk_recollect_error",
+                            subnet=subnet, error=err)
+            continue
+        finally:
+            if conn:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+
+        try:
+            changed = _apply_host_results(
+                db_path, subnet, {ip: found_map.get(ip) for ip in ips})
+        except Exception as e:
+            result["errors"][subnet] = "결과 저장 실패: %s" % _collector._sanitize_error_msg(str(e))
+            continue
+
+        for ip, now_online, was_online in changed:
+            result["checked"] += 1
+            if now_online:
+                result["online"] += 1
+                if not was_online:
+                    row = next((h for h in db.get_facility_hosts(db_path)
+                               if h.get("subnet") == subnet and h.get("ip") == ip), {})
+                    db.save_device_event(db_path, "device_online", "info", subnet=subnet,
+                                         ip=ip, mac=row.get("mac"),
+                                         message="설비 복구(일괄 재확인): " + ip)
+            else:
+                result["still_offline"] += 1
+
+    utils.log_event("info", "facility_bulk_recollect", checked=result["checked"],
+                    online=result["online"], still_offline=result["still_offline"],
+                    no_gateway=len(result["no_gateway"]), no_cred=len(result["no_cred"]))
+    return result
 
 
 _KEEP_COLS = ("subnet", "ip", "mac", "switch_id", "switch_name", "port", "direct", "via", "port_desc")

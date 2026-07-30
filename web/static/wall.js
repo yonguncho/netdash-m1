@@ -83,9 +83,20 @@ function renderProblems() {
     var moreHtml = (c.total != null && c.total > c.items.length)
       ? "<div class='wall-cat__more'>외 " + (c.total - c.items.length) + "건 — 설비 현황에서 전체 확인</div>"
       : "";
+    // 이 세 카테고리는 개별 재수집 말고 '전체 한 번에'도 필요하다(사용자 요청).
+    // 설비는 칩 필터가 걸려 있으면 그 스위치 몫만 일괄 재수집한다.
+    var bulkHtml = "";
+    if (count > 0 && (c.key === "unreach" || c.key === "failed")) {
+      bulkHtml = "<button class='wall-cat__bulk' data-bulk-cat='" + c.key + "'>⟳ 전체 재수집 (" +
+        count + ")</button>";
+    } else if (isFac && items.length > 0) {
+      bulkHtml = "<button class='wall-cat__bulk' data-bulk-cat='facility'" +
+        (wallFacFilter ? " data-bulk-switch='" + esc(wallFacFilter) + "'" : "") +
+        ">⟳ 전체 재수집 (" + items.length + (wallFacFilter ? "" : "/" + count) + ")</button>";
+    }
     return "<div class='wall-cat wall-cat--" + esc(c.severity || "warn") + "'>" +
       "<div class='wall-cat__title'>" + esc(c.title) +
-      " <span class='wall-cat__count'>" + count + "</span></div>" +
+      " <span class='wall-cat__count'>" + count + "</span>" + bulkHtml + "</div>" +
       summaryHtml + filterBar +
       "<div class='wall-cat__grid'>" +
       items.map(function (p) {
@@ -149,6 +160,8 @@ function clock() {
     if (e.target.closest(".wall-filter-clear")) {
       wallFacFilter = null; renderProblems(); return;
     }
+    var bulk = e.target.closest(".wall-cat__bulk");
+    if (bulk) { startBulk(bulk); return; }
     var btn = e.target.closest(".pcard__recollect");
     if (!btn) return;
     var ip = btn.getAttribute("data-ip"), subnet = btn.getAttribute("data-subnet");
@@ -156,6 +169,47 @@ function clock() {
   });
 
   function reset(btn) { btn.disabled = false; btn.textContent = "재수집"; }
+
+  // 카테고리 전체를 한 번에 재수집한다(사용자 요청) — 개별 재수집 버튼과 원리는
+  // 같되, 스위치 카테고리는 비동기 큐잉(백그라운드 여러 대 동시 수집), 설비는
+  // 대역별로 세션을 재사용하는 동기 일괄 확인이다. 계정을 새로 묻지 않는다 —
+  // 이미 저장된 계정이 없는 장비는 건너뛰고 그 사실을 그대로 알려준다.
+  function startBulk(btn) {
+    var cat = btn.getAttribute("data-bulk-cat");
+    var label = btn.textContent;
+    btn.disabled = true; btn.textContent = "처리 중…";
+    var req = (cat === "facility")
+      ? fetch("/api/facility/recollect-offline", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({switch: btn.getAttribute("data-bulk-switch") || undefined}),
+        })
+      : fetch("/api/wall/recollect-switches", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({category: cat}),
+        });
+    req.then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
+      .then(function (res) {
+        var b = res.b || {};
+        if (!res.ok || !b.ok) { alert(b.error || "일괄 재수집 실패"); return; }
+        var msg;
+        if (cat === "facility") {
+          msg = "확인 " + b.checked + "대 · 온라인 " + b.online +
+            " · 여전히 끊김 " + b.still_offline;
+          if (b.no_gateway && b.no_gateway.length)
+            msg += "\n게이트웨이 미기억 대역 " + b.no_gateway.length + "건(설비 현황에서 '대역 수집' 먼저 필요)";
+          if (b.no_cred && b.no_cred.length)
+            msg += "\n계정 없는 대역 " + b.no_cred.length + "건(스위치에 계정 저장 필요)";
+        } else {
+          msg = "큐잉 " + b.queued + "대(백그라운드로 수집)";
+          if (b.skipped_no_cred) msg += "\n계정 없음 " + b.skipped_no_cred + "대(스위치에 계정 저장 필요)";
+          if (b.skipped_busy) msg += "\n이미 수집 중 " + b.skipped_busy + "대";
+        }
+        alert(msg);
+        if (typeof refresh === "function") refresh();
+      })
+      .catch(function (e) { alert("일괄 재수집 오류: " + e); })
+      .then(function () { btn.disabled = false; btn.textContent = label; });
+  }
 
   // 이 설비 하나만 게이트웨이 스위치에서 다시 확인한다(대역 전체 재스캔이 아니다
   // — 예전엔 대역이 /23이면 15분+ 걸렸다). 몇 초 안에 끝나는 동기 요청이라

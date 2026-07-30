@@ -3345,21 +3345,6 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "facility_collect_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
-    def _facility_gateway_credential(sid):
-        """게이트웨이 스위치의 계정 — 저장 계정 우선, 없으면 PC 프로필 공통 계정.
-        반환: (username, password) | (None, None)."""
-        blob = db.get_switch_credential(db_path, sid)
-        username = password = ""
-        if blob:
-            dec = credentials.decrypt_credential(blob)
-            if dec and "|" in dec:
-                username, password = dec.split("|", 1)
-        if not (username and password):
-            cred = pcprofile.get_credential(db_path)
-            if cred:
-                username, password = cred
-        return (username, password) if (username and password) else (None, None)
-
     @app.route("/api/facility/recollect", methods=["POST"])
     @rate_limit("facility_recollect", max_requests=20, window_seconds=60)
     def facility_recollect():
@@ -3388,7 +3373,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             if not sid:
                 return jsonify({"error": "이 대역의 게이트웨이 스위치가 기억되지 않았습니다. "
                                          "설비 현황에서 한 번 '대역 수집'을 실행하세요."}), 400
-            username, password = _facility_gateway_credential(sid)
+            username, password = facility_mod.gateway_credential(db_path, sid)
             if not username:
                 return jsonify({"error": "게이트웨이 스위치의 저장된 계정이 없습니다."}), 400
             src = pcprofile.get_source_ip(db_path)
@@ -3399,6 +3384,87 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 (200 if ok else 502)
         except Exception as e:
             log_event("error", "facility_recollect_error", error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/facility/recollect-offline", methods=["POST"])
+    @rate_limit("facility_recollect_offline", max_requests=6, window_seconds=60)
+    def facility_recollect_offline():
+        """관제의 '설비 연결 실패' 카테고리 전체를 한 번에 재확인.
+
+        개별 재수집과 원리는 같되(대역 전체 스윕이 아니라 대상 IP만 ping),
+        여러 설비를 한 번에 처리할 때는 대역(게이트웨이 스위치)별로 세션을
+        하나만 열어 재사용한다 — 설비마다 새로 접속하면 대역이 여럿일 때
+        시간이 그만큼 배로 든다. body에 switch를 주면 그 연결 스위치의
+        오프라인 설비만 대상으로 한다(관제 화면의 스위치별 칩 필터와 대응).
+        """
+        try:
+            data = request.get_json(silent=True) or {}
+            switch_filter = _sv_text(data.get("switch"), 120) or None
+            src = pcprofile.get_source_ip(db_path)
+            result = facility_mod.recollect_offline_facility(
+                db_path, source_ip=src, switch_filter=switch_filter)
+            log_event("info", "wall_bulk_facility_recollect", checked=result["checked"],
+                      online=result["online"], still_offline=result["still_offline"],
+                      no_gateway=len(result["no_gateway"]), no_cred=len(result["no_cred"]))
+            return jsonify(dict(result, ok=True)), 200
+        except Exception as e:
+            log_event("error", "facility_recollect_offline_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/wall/recollect-switches", methods=["POST"])
+    @rate_limit("wall_recollect_switches", max_requests=10, window_seconds=60)
+    def wall_recollect_switches():
+        """관제의 '도달 불가'/'수집 실패' 카테고리 스위치를 일괄 재수집.
+
+        공통 계정을 새로 묻지 않는다 — 관제는 계정 입력 팝업이 없는 화면이라,
+        각 스위치에 저장된 계정을 그대로 쓴다. 저장 계정이 없는 스위치는
+        건너뛰고 그 사실을 화면에 알린다(조용히 빠뜨리지 않는다).
+        """
+        try:
+            data = request.get_json(silent=True) or {}
+            category = (data.get("category") or "").strip()
+            if category not in ("unreach", "failed"):
+                return jsonify({"error": "category는 'unreach' 또는 'failed' 여야 합니다"}), 400
+            switches = db.get_switches(db_path)
+            if category == "failed":
+                targets = [s for s in switches if s.get("status") == "failed"]
+            else:
+                try:
+                    from core import reachability
+                    reach = reachability.get_state()
+                except Exception:
+                    reach = {}
+                targets = [s for s in switches if reach.get(s["id"]) is False]
+            targets = targets[:500]
+            queued, skipped_no_cred, skipped_busy = [], [], []
+            for sw in targets:
+                sid = sw["id"]
+                username, password = facility_mod.gateway_credential(db_path, sid)
+                if not username:
+                    skipped_no_cred.append(sid)
+                    continue
+                es_blob = db.get_setting(db_path, "enable_secret_%d" % sid, "")
+                enable_secret = credentials.decrypt_text(es_blob) if es_blob else None
+                result = collector.collect_switch(db_path, sid, username, password,
+                                                  enable_secret=enable_secret)
+                if result.get("status") == "queued":
+                    queued.append(sid)
+                else:
+                    skipped_busy.append(sid)
+            if queued:
+                with _sw_bulk_lock:
+                    merged = sorted(set(_sw_bulk.get("ids") or []) | set(queued))
+                    _sw_bulk.update(ids=merged, total=len(merged), started=True)
+            log_event("info", "wall_bulk_switch_recollect", category=category,
+                      queued=len(queued), no_cred=len(skipped_no_cred),
+                      busy=len(skipped_busy))
+            return jsonify({"ok": True, "category": category, "total": len(targets),
+                            "queued": len(queued), "skipped_no_cred": len(skipped_no_cred),
+                            "skipped_busy": len(skipped_busy)}), 202
+        except Exception as e:
+            log_event("error", "wall_recollect_switches_error",
+                      error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
     @app.route("/api/facility/stop", methods=["POST"])
