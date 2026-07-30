@@ -3095,6 +3095,20 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/facility/explain", methods=["GET"])
+    @rate_limit("facility_explain", max_requests=60, window_seconds=60)
+    def facility_explain():
+        """설비 1건의 '연결 스위치' 판정 근거(관측 위치·MAC 수·포트채널·CDP 이웃)."""
+        ip = (request.args.get("ip") or "").strip()
+        if not ip:
+            return jsonify({"ok": False, "error": "ip 파라미터가 필요합니다"}), 400
+        try:
+            return jsonify(facility_mod.explain_attachment(db_path, ip))
+        except Exception as e:
+            log_event("error", "facility_explain_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
     @app.route("/api/facility/rematch", methods=["POST"])
     @rate_limit("facility_rematch", max_requests=30, window_seconds=60)
     def facility_rematch():

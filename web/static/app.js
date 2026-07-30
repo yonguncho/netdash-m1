@@ -121,6 +121,7 @@ document.addEventListener("click", function (e) {
     case "terminal-fw": openTerminal(nid, "firewall"); break;
     case "delete-fw": deleteFirewall(nid); break;
     case "diagnose-server": diagnoseServer(nid); break;
+    case "explain-facility": explainFacility(id); break;   // id는 IP 문자열(정수 아님)
     case "hw-detail":
       e.preventDefault();
       showHwDetail(nid, btn.getAttribute("data-hw"));
@@ -2600,6 +2601,12 @@ function _renderFacilityRows() {
     remarkCell = remarks.length
       ? "<span style='font-size:12px;color:#64748b'>" + escHtml(remarks.join(" · ")) + "</span>"
       : "<span style='color:#cbd5e1'>-</span>";
+    // 판정 근거 — "왜 이 스위치로 나오냐"를 장비에 직접 들어가 대조하지 않고
+    // 화면에서 확인할 수 있게. 판정에 쓰인 입력(MAC 관측 위치·포트별 MAC 수·
+    // 포트채널 멤버·CDP 이웃)을 그대로 보여준다.
+    remarkCell += " <button class='btn btn--ghost' style='font-size:11px;padding:2px 6px' " +
+      "title='이 판정에 쓰인 관측 데이터 보기' data-action='explain-facility' " +
+      "data-id='" + escHtml(h.ip) + "'>근거</button>";
     // 오프라인(연결 실패)은 행 배경(빨강) + 상태 배지로 신호.
     // 예전엔 배경색만 있어 다른 현황 화면(상태 배지)과 표기가 달랐다.
     var trStyle = h.online ? "" : " style='background:#fef2f2'";
@@ -2608,6 +2615,75 @@ function _renderFacilityRows() {
       portCell + "</td><td>" + descCell + "</td><td>" + reachBadge(!!h.online) + "</td><td>" +
       remarkCell + "</td></tr>";
   }).join("");
+}
+
+// 설비 1건의 연결 스위치 판정 근거 — 진단 팝업(modal-diagnose) 재사용.
+// textContent로만 넣는다(HTML 아님) — 스위치 이름·포트 설명에 <>가 섞여도 안전.
+function explainFacility(ip) {
+  var out = document.getElementById("diag-result");
+  openModal("modal-diagnose");
+  if (out) out.textContent = "판정 근거 조회 중...";
+  fetch("/api/facility/explain?ip=" + encodeURIComponent(ip))
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!out) return;
+      if (!res.ok) { out.textContent = "조회 실패: " + (res.error || ""); return; }
+      var L = [];
+      L.push("설비 " + res.ip + "  MAC " + (res.mac || "-"));
+      var s = res.stored || {};
+      L.push("");
+      L.push("── 화면에 저장된 값 ──");
+      L.push("연결 스위치: " + (s.switch_name || "(없음)") + "  포트: " + (s.port || "-"));
+      L.push("직접 연결: " + (s.direct ? "예" : "아니오") +
+             "   상태: " + (s.online ? "온라인" : "오프라인") +
+             "   갱신: " + (s.updated || "-"));
+      L.push("");
+      L.push("── 이 MAC이 관측된 위치(최신 스냅샷) ──");
+      var obs = res.observations || [];
+      if (!obs.length) {
+        L.push("(없음 — 최신 MAC 테이블 어디에도 없음)");
+      }
+      obs.forEach(function (o) {
+        L.push("• " + o.switch_name + "  " + o.port +
+               "   MAC수: " + (o.mac_count === null || o.mac_count === undefined ? "미상" : o.mac_count) +
+               "   " + (o.physical ? "물리포트" : "논리포트") +
+               (o.is_uplink ? "   [업링크 — 너머에 등록 스위치 있음]" : ""));
+        if (o.members && o.members.length) L.push("    포트채널 멤버: " + o.members.join(", "));
+        if (o.port_desc) L.push("    포트 설명: " + o.port_desc);
+        (o.neighbors || []).forEach(function (n) {
+          L.push("    이웃(CDP/LLDP) " + (n.local_port || "") + " → " +
+                 (n.remote_name || "?") + " " + (n.remote_ip || "") + " " + (n.remote_port || ""));
+        });
+      });
+      var d = res.decision || {};
+      L.push("");
+      L.push("── 지금 다시 계산한 판정 ──");
+      L.push("연결 스위치: " + (d.switch_name || "(없음)") + "  포트: " + (d.port || "-") +
+             "  직접 연결: " + (d.direct ? "예" : "아니오"));
+      if (d.via && d.via.length) L.push("그 밖에 관측된 경로: " + d.via.join("; "));
+      L.push("사유: " + (d.why || "-"));
+      var h = res.hints || {};
+      if (h.history || h.port_description) {
+        L.push("");
+        L.push("── 참고 단서 ──");
+        if (h.history) {
+          L.push("과거 연결 이력: " + (h.history.switch_name || "") + " " +
+                 (h.history.port || ""));
+        }
+        if (h.port_description) {
+          L.push("포트 설명에 이 IP가 적힌 곳: " + (h.port_description.switch_name || "") +
+                 " " + (h.port_description.port || "") +
+                 "  (\"" + (h.port_description.description || "") + "\")");
+          L.push("  ※ 설정 라벨이라 실제 배선과 다를 수 있습니다 — 참고용");
+        }
+      }
+      if (s.switch_name && d.switch_name !== s.switch_name) {
+        L.push("");
+        L.push("※ 저장된 값과 다시 계산한 값이 다릅니다 — 설비 현황의 '새로고침'을 누르면 반영됩니다.");
+      }
+      out.textContent = L.join("\n");
+    })
+    .catch(function (e) { if (out) out.textContent = "조회 오류: " + e; });
 }
 
 // "직접 연결만" 토글 + 대역 필터 + 통합 검색 + "새로고침(재매칭)" 버튼

@@ -849,7 +849,12 @@ def test_facility_ui_present():
     # 마지막 컬럼은 '비고'(직접 연결 미확인 사유·과거 연결) — 포트 설명 뒤에 신설
     # 설비 표에도 상태 배지 컬럼을 추가했다(4개 현황 화면 표기 통일)
     assert "<th>포트 설명</th>" in html and ">상태</th>" in html and "<th>비고</th>" in html
-    assert "온라인" not in js   # 상태 배지 텍스트 제거
+    # 상태 배지 텍스트를 행에 직접 쓰지 않는다(reachBadge가 담당). v6.13.0에서
+    # 판정근거 팝업(explainFacility)이 "온라인/오프라인"을 쓰게 되어, 파일 전체가
+    # 아니라 행 렌더 함수 안으로 검사 범위를 좁힌다 — 원래 의도가 그것이었다.
+    rows_fn = js[js.index("function _renderFacilityRows"):]
+    rows_fn = rows_fn[:rows_fn.index("\nfunction ")]
+    assert "온라인" not in rows_fn
 
 
 def test_rematch_backbone_uplink_trunk_shown_as_via_not_direct(temp_db):

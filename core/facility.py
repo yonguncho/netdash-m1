@@ -122,27 +122,127 @@ def _is_physical_port(port):
     return not p.startswith(_LOGICAL_PREFIXES)
 
 
-def _choose_attachment(matches, port_counts, pc_map=None):
+def _norm_dev_id(name):
+    """CDP device-id를 비교용으로 정규화 — FQDN 꼬리·시리얼 괄호 제거 후 소문자.
+
+    'SKBA_F1_C9300(FDO1234X0AB).example.com' → 'skba_f1_c9300'
+    """
+    n = (name or "").strip()
+    n = re.sub(r"\(.*?\)", "", n)      # Cisco가 device-id에 붙이는 (시리얼)
+    n = n.split(".")[0]                # FQDN 꼬리
+    return n.strip().lower()
+
+
+def uplink_ports(db_path):
+    """{(switch_id, port소문자)} — '그 너머에 등록된 다른 스위치가 있는' 포트.
+
+    MAC 개수만으로 액세스/트렁크를 가르면 오판이 남는다. 업링크라도 그 뒤 장비가
+    대부분 조용하거나 꺼져 있으면 학습된 MAC이 몇 개뿐이라 액세스 포트처럼 보인다.
+    (실제 사례: 백본 Po124가 TPS 스위치로 가는 업링크인데 설비 하나가 '백본에 직접
+    연결'로 표시됨.) 스위치가 그 포트 너머에 있다는 건 개수와 무관한 확정 근거이므로
+    여기서 따로 모아 _choose_attachment가 직접연결 후보에서 제외하게 한다.
+
+    근거 두 가지 — 둘 다 '등록된 스위치'로 확인될 때만 인정한다(IP전화·AP를
+    업링크로 오인하지 않기 위해):
+      ① CDP/LLDP 이웃의 remote_ip/remote_name이 등록 스위치와 일치
+      ② 그 포트에서 학습된 MAC이 등록 스위치가 소유한 MAC(관리/인터페이스)과 일치
+    포트채널은 멤버↔Po 양방향으로 전파한다(한쪽만 알면 다른 쪽도 업링크).
+    """
+    up = set()
+    try:
+        switches = db.get_switches(db_path)
+    except Exception:
+        return up
+    if not switches:
+        return up
+
+    by_ip, by_name = {}, {}
+    for s in switches:
+        if s.get("ip"):
+            by_ip[str(s["ip"]).strip()] = s["id"]
+        for key in (s.get("name"), s.get("hostname")):
+            k = _norm_dev_id(key)
+            if k:
+                by_name[k] = s["id"]
+
+    # ① CDP/LLDP 이웃
+    try:
+        for n in db.get_all_neighbors(db_path):
+            rip = (n.get("remote_ip") or "").strip()
+            peer = by_ip.get(rip) or by_name.get(_norm_dev_id(n.get("remote_name")))
+            if peer and peer != n.get("switch_id") and n.get("local_port"):
+                up.add((n["switch_id"], str(n["local_port"]).strip().lower()))
+    except Exception:
+        pass
+
+    # ② 등록 스위치가 소유한 MAC이 학습된 포트
+    try:
+        from . import topology
+        dev_macs = topology._device_macs(db_path, switches)
+        owner = {}
+        for sid, macs in dev_macs.items():
+            for m in macs:
+                owner[(m or "").lower()] = sid
+        if owner:
+            for mac, locs in db.get_mac_to_switchport(db_path).items():
+                peer = owner.get((mac or "").lower())
+                if not peer:
+                    continue
+                for sid, _sname, port in locs:
+                    if sid != peer and port:
+                        up.add((sid, str(port).strip().lower()))
+    except Exception:
+        pass
+
+    # 포트채널 ↔ 물리 멤버 전파
+    try:
+        pc_map = db.get_port_channel_members(db_path)
+    except Exception:
+        pc_map = {}
+    for (sid, po), members in (pc_map or {}).items():
+        mem = {(sid, str(m).strip().lower()) for m in (members or []) if m}
+        if (sid, po) in up:
+            up |= mem
+        elif mem & up:
+            up.add((sid, po))
+    return up
+
+
+def _choose_attachment(matches, port_counts, pc_map=None, uplinks=None):
     """여러 스위치 MAC 테이블 매치 중 설비가 '직접' 붙은 스위치/포트를 선택.
 
     matches: [(switch_id, switch_name, port), ...]
     port_counts: {(switch_id, port소문자): 해당 포트 MAC 수}
     pc_map: {(switch_id, po소문자): [member_port, ...]}  # NX-OS 포트채널 → 물리 멤버
+    uplinks: {(switch_id, port소문자)}  # 너머에 등록 스위치가 있는 포트(uplink_ports())
     반환: (switch_id, switch_name, port, direct(bool), via(list[str]))
       - 물리 액세스 포트(소수 MAC) → 직접
       - 포트채널(Po)이 멤버로 해석되면 실제 물리 멤버포트로 표시하고 직접으로 승격
         (TPS가 백본에 Po로 직결된 경우: Po10 → "Eth1/1, Eth1/2 (Po10)")
+      - 단, 그 포트 너머에 등록된 스위치가 있으면(uplinks) MAC 수와 무관하게 직접 아님
       - 해석 불가 논리포트뿐이면 미확인
     """
     if not matches:
         return None, None, None, False, []
     pc_map = pc_map or {}
+    uplinks = uplinks or set()
 
     def _cnt(sid, port):
         return port_counts.get((sid, (port or "").lower()), 9999)
 
+    def _is_uplink(sid, port):
+        """이 포트 너머에 등록된 다른 스위치가 있는가(개수 휴리스틱보다 우선)."""
+        return (sid, (port or "").strip().lower()) in uplinks
+
+    # 스위치가 너머에 있는 포트를 먼저 걷어낸다. 전부 업링크면(=설비가 붙은 액세스
+    # 스위치를 아직 수집 못 했거나 MAC이 에이징된 경우) 원래 목록으로 되돌아가되
+    # 직접연결로는 승격하지 않는다.
+    edge = [m for m in matches if not _is_uplink(m[0], m[2])]
+    all_uplink = not edge
+    scan = matches if all_uplink else edge
+
     physical, pchan, logical = [], [], []
-    for orig in matches:                       # orig = (sid, name, port)
+    for orig in scan:                          # orig = (sid, name, port)
         sid, name, port = orig
         if _is_physical_port(port):
             physical.append(orig)
@@ -187,6 +287,13 @@ def _choose_attachment(matches, port_counts, pc_map=None):
         chosen = logical[0] if logical else matches[0]
         disp_port = chosen[2]
         direct = False
+
+    # 최종 안전장치 — 고른 포트 자체가 업링크면 어떤 분기를 거쳐 왔든 직접연결이 아니다.
+    # (MAC 개수가 적어도 마찬가지: 업링크 뒤 장비가 대부분 꺼져 있으면 개수는 얼마든
+    #  작아질 수 있다.) 멤버로 풀어 보여주면 '거기 꽂혀 있다'는 오해를 주므로 원래
+    # 포트 이름 그대로 되돌린다.
+    if _is_uplink(chosen[0], chosen[2]):
+        direct, disp_port = False, chosen[2]
 
     via = ["%s:%s" % (m[1], m[2]) for m in matches if m is not chosen]
     return chosen[0], chosen[1], disp_port, direct, via
@@ -725,15 +832,17 @@ def collect_band(db_path, switch_id, subnet, username, password, source_ip=None)
     port_counts = db.get_port_mac_counts(db_path)     # {(sid, port_lower): MAC수}
     pc_map = db.get_port_channel_members(db_path)     # {(sid, po_lower): [members]}
     port_descs = db.get_port_descriptions(db_path)    # {(sid, port_lower): Description}
+    uplinks = uplink_ports(db_path)                   # {(sid, port_lower)} 스위치가 너머에 있는 포트
 
     # IP별 1행: 같은 MAC이 여러 스위치/포트에 보일 때 "직접 연결된 스위치"를 가려낸다.
+    #  - 너머에 등록 스위치가 있는 포트(CDP/LLDP·스위치 MAC)는 업링크 → 직접 연결 아님
     #  - Po(포트채널)·Vl(VLAN/SVI) 등 논리 인터페이스는 업링크 경유 → 직접 연결 아님
     #  - 물리 포트 중 MAC 수가 가장 적은 포트 = 액세스(엣지) 포트 → 직접 연결
     by_ip = {}
     for a in arp:
         mac = (a.get("mac") or "").lower()
         matches = mac_map.get(mac, [])
-        sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map)
+        sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map, uplinks)
         by_ip[a["ip"]] = {"subnet": subnet, "ip": a["ip"], "mac": a["mac"],
                           "switch_id": sid, "switch_name": sname, "port": port,
                           "online": 1, "direct": 1 if direct else 0,
@@ -1409,6 +1518,99 @@ def export_txt(db_path):
     return ("﻿" + "\r\n".join(lines)).encode("utf-8")
 
 
+def explain_attachment(db_path, ip):
+    """설비 하나의 '연결 스위치' 판정 근거를 사람이 읽을 수 있게 풀어서 반환.
+
+    같은 장비를 두고 "왜 백본으로 나오냐"를 여러 번 확인하게 되는데, 판정에 쓰인
+    입력(MAC 관측 위치·포트별 MAC 수·포트채널 멤버·CDP 이웃)이 화면에 없어서
+    매번 장비에 직접 들어가 대조해야 했다. 그 입력을 그대로 보여준다.
+
+    반환: {"ok": bool, "ip", "mac", "stored": {...}, "observations": [...],
+           "decision": {...}, "hints": {...}}  (ok=False면 "error")
+    """
+    target = None
+    for h in db.get_facility_hosts(db_path):
+        if str(h.get("ip")) == str(ip):
+            target = h
+            break
+    if not target:
+        return {"ok": False, "error": "설비 목록에 없는 IP입니다: %s" % ip}
+
+    mac = (target.get("mac") or "").lower()
+    mac_map = db.get_mac_to_switchport(db_path)
+    port_counts = db.get_port_mac_counts(db_path)
+    pc_map = db.get_port_channel_members(db_path)
+    port_descs = db.get_port_descriptions(db_path)
+    uplinks = uplink_ports(db_path)
+    matches = mac_map.get(mac, [])
+
+    # 이웃 정보는 "왜 업링크로 봤는가"의 근거라 포트별로 붙여 준다.
+    nbr_by_port = {}
+    try:
+        for n in db.get_all_neighbors(db_path):
+            key = (n.get("switch_id"), str(n.get("local_port") or "").strip().lower())
+            nbr_by_port.setdefault(key, []).append(n)
+    except Exception:
+        pass
+
+    obs = []
+    for sid, sname, port in matches:
+        pl = str(port or "").strip().lower()
+        members = pc_map.get((sid, pl)) or []
+        nbrs = list(nbr_by_port.get((sid, pl), []))
+        for m in members:                       # Po면 멤버 포트의 이웃도 근거
+            nbrs.extend(nbr_by_port.get((sid, str(m).strip().lower()), []))
+        cnt = port_counts.get((sid, pl))
+        obs.append({
+            "switch_id": sid, "switch_name": sname, "port": port,
+            "mac_count": cnt,                   # None = 해당 포트 집계 없음(미상)
+            "physical": _is_physical_port(port),
+            "members": members,
+            "is_uplink": (sid, pl) in uplinks,
+            "port_desc": port_descs.get((sid, pl)),
+            "neighbors": [{"remote_name": n.get("remote_name"),
+                           "remote_ip": n.get("remote_ip"),
+                           "remote_port": n.get("remote_port"),
+                           "local_port": n.get("local_port")} for n in nbrs],
+        })
+
+    sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map, uplinks)
+    if not matches:
+        why = "최신 MAC 테이블 어디에서도 이 MAC이 보이지 않습니다(설비 오프라인 후 에이징이거나 연결 스위치 미수집)."
+    elif direct:
+        why = "액세스 포트로 판단했습니다 — 이 포트 너머에 등록된 스위치가 없고, 학습된 MAC도 소수입니다."
+    else:
+        upn = [o for o in obs if o["is_uplink"]]
+        if upn:
+            why = ("관측된 포트가 모두 업링크(트렁크)입니다 — 그 너머에 등록된 스위치가 있어 "
+                   "설비가 실제로 꽂힌 지점이 아닙니다. 설비가 물린 액세스 스위치를 수집하면 정확해집니다.")
+        else:
+            why = "액세스 포트로 확정할 근거가 부족합니다(포트에 MAC이 많거나 논리 인터페이스로만 관측)."
+
+    hints = {}
+    try:
+        hist = db.find_location_by_mac(db_path, mac) if mac else None
+        if hist:
+            hints["history"] = hist
+    except Exception:
+        pass
+    try:
+        d = db.find_port_by_description(db_path, str(ip))
+        if d:
+            hints["port_description"] = d
+    except Exception:
+        pass
+
+    return {"ok": True, "ip": str(ip), "mac": target.get("mac"),
+            "stored": {"switch_name": target.get("switch_name"), "port": target.get("port"),
+                       "direct": target.get("direct"), "online": target.get("online"),
+                       "updated": target.get("updated")},
+            "observations": obs,
+            "decision": {"switch_name": sname, "port": port, "direct": bool(direct),
+                         "via": via, "why": why},
+            "hints": hints}
+
+
 def rematch(db_path):
     """기존 설비(facility_hosts)의 MAC을 '최신' MAC 스냅샷 기준으로 재대조.
 
@@ -1423,11 +1625,12 @@ def rematch(db_path):
     port_counts = db.get_port_mac_counts(db_path)
     pc_map = db.get_port_channel_members(db_path)
     port_descs = db.get_port_descriptions(db_path)
+    uplinks = uplink_ports(db_path)
     updated = []
     for h in hosts:
         mac = (h.get("mac") or "").lower()
         matches = mac_map.get(mac, [])
-        sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map)
+        sid, sname, port, direct, via = _choose_attachment(matches, port_counts, pc_map, uplinks)
         updated.append({
             "subnet": h.get("subnet"), "ip": h.get("ip"), "mac": h.get("mac"),
             "switch_id": sid, "switch_name": sname, "port": port,
