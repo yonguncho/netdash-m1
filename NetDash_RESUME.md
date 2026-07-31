@@ -98,9 +98,39 @@ exe 기동 후 `/api/facility/explain` 400·200 응답 및 app.js 배포 확인.
 
 ## 열린 후속 항목 (미착수, 지시 없으면 손대지 않음)
 
+실장비 확인이 필요한 것:
 - FortiGate `get sys ha status` 실제 응답 필드 확인(구조는 있음, 실장비 응답 필요)
 - SNMP 실장비 검증 — 폐쇄망 리눅스 서버에서 커뮤니티 설정 후 사양 수집 확인
 - v6.7.7 WinRM 종단 검증 — 이 PC에 WinRM이 꺼져 있어 원격 수집 성공까지 미확인
+- EXOS `show iparp` 변형(Port 컬럼 없는 버전) 파싱 — 실장비 응답 필요
+
+우선순위 낮은 견고성 항목(v6.4.0 전수 검토에서 나왔고 아직 유효):
+- `save_neighbors`/`save_vlan_names` 등 **DELETE+INSERT 루프가 비원자적** —
+  예외를 `except`로 삼키고 넘어가서 부분 상태가 그대로 커밋된다
+  (`core/db.py:1229` 확인. 설비 경로는 v6.4.0에서 트랜잭션화 완료, 나머지는 남음)
+- `reachability._state`/`_fw_state`가 삭제된 장비 id를 영구 보유(누수) —
+  `core/reachability.py:22` 확인, 프루닝 없음. 또 `_sweep`이 대상 수만큼 스레드를
+  만든다(500대면 매 주기 500개)
+- upsert들의 SELECT→INSERT 사이가 트랜잭션 밖 — 인스턴스 락이 정상이면 쓰기
+  프로세스가 하나라 평소엔 안전(이중 주 서버일 때만 실현)
+- 스캔 시작 직후의 '중지' 클릭이 삼켜짐(워커가 플래그를 초기화하는 경합)
+- 승격 시 `init_collector()` 재호출로 구 워커 3개가 옛 큐에 영구 블록
+
+## 알아둘 것 (메모리에 없는 것만)
+
+- 릴리스 저장소 `yonguncho/netdash-m1` 은 **public**.
+- 커밋 메시지에 따옴표가 있으면 PowerShell `git commit -m @'...'@` 가 깨진다
+  → bash heredoc `git commit -F -` 를 쓴다.
+- PowerShell here-string `@"..."@` 은 `$_` 를 치환한다 → 검증 스크립트는 파일로
+  쓰고 실행한다.
+- 백로그 전체 표: `NetDash_dev/docs/REVIEW_BACKLOG.md`
+- **`state/pipeline_status.json` 은 낡았다**(v3.71.0 / 2026-07-11에서 멈춤).
+  현재 버전 확인에 쓰지 말 것 — `git log --oneline -3` 또는 `gh release list` 를 쓴다.
+  (지우지 않고 둔 이유: 내가 만든 파일이 아니고 다른 파이프라인이 읽을 수 있다)
+
+나머지 반복 교훈(em-dash·escHtml·EncodedCommand·onTick·서브에이전트 오탐·
+릴리스 링크 형식·판정 로직 수정 후 새로고침)은 세션 메모리에 있다:
+`C:\Users\yongu\.claude\projects\C--AI-WORKPLACE-AI-WORKPLACE-NetDash\memory\`
 
 ## 미커밋 파일
 없음 (`build/` 산출물, `.verify_tz.js`, 실패한 `CLAUDE-SECURITY-*` 스캔 폴더 제외)
@@ -108,10 +138,14 @@ exe 기동 후 `/api/facility/explain` 400·200 응답 및 app.js 배포 확인.
 ## 경로·재개 절차
 
 ```
-C:\AI_WORKPLACE\NetDash_dev\                          ← 개발본 (git repo, 메인 작업)
-C:\AI_WORKPLACE\NetDash\                              ← 배포본 (exe only, git 없음)
-C:\AI_WORKPLACE\AI_WORKPLACE_NetDash\NetDash_RESUME.md ← 이 파일(SSOT, 매 단계 갱신)
+C:\AI_WORKPLACE\NetDash_dev\NetDash_RESUME.md          ← 이 파일(SSOT, 매 단계 갱신)
+C:\AI_WORKPLACE\NetDash_dev\                           ← 개발본 (git repo, 메인 작업)
+C:\AI_WORKPLACE\NetDash\                               ← 배포본 (exe only, git 없음)
+C:\AI_WORKPLACE\AI_WORKPLACE_NetDash\NetDash_RESUME.md ← 포인터만. 내용 없음
 ```
+SSOT를 git 저장소 안에 두는 이유: 커밋과 함께 갱신 이력이 남고, 코드와 스냅샷이
+같은 시점으로 묶인다. 예전엔 저장소 밖 사본이 SSOT였는데 v6.7.0에서 갱신이 끊긴
+채 방치돼(6개 릴리스 동안) 재개 시 잘못된 상태를 읽을 뻔했다.
 
 재개 순서: ① 이 파일 읽기 → ② `git -C C:\AI_WORKPLACE\NetDash_dev log --oneline -3` +
 `status --short` → ③ "다음 단계"부터 즉시 이어서 작업(재대기 금지)
