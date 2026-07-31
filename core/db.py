@@ -1716,9 +1716,77 @@ def get_port_channel_members(db_path):
     return mapping
 
 
+def registered_device_ips(db_path):
+    """스위치·방화벽·서버로 이미 등록된 IP 집합.
+
+    대역을 스캔하면 그 안에 있는 스위치·방화벽·서버 자신도 ping/ARP에 응답하므로
+    '설비'로 같이 잡힌다. 이들은 각자 전용 현황 화면이 있어 중복이고, 게다가
+    스위치는 업링크(Po) 너머에 있으니 설비 기준으로는 '직접 연결 미확인'으로
+    판정돼 연결 실패 목록을 오염시킨다(설비 판정 자체는 옳은데 대상이 설비가 아님).
+    """
+    ips = set()
+    with get_db(db_path) as conn:
+        cur = conn.cursor()
+        for sql in ("SELECT ip FROM switches",
+                    "SELECT host FROM firewalls",
+                    "SELECT ip FROM servers"):
+            try:
+                for r in cur.execute(sql).fetchall():
+                    v = str(r[0] or "").strip()
+                    if v:
+                        ips.add(v)
+            except Exception:
+                continue          # 구버전 DB에 테이블이 없을 수 있다
+    return ips
+
+
+def _drop_registered_devices(db_path, hosts):
+    """설비로 저장하면 안 되는 등록 장비를 걸러낸다. 반환: (남길 목록, 제외 수).
+
+    쓰기 함수가 둘(save_facility_hosts / replace_facility_subnet)이라 양쪽 다
+    이걸 거치게 한다 — 화면에서 거르면 세 곳(설비·관제·엑셀)을 챙겨야 하고
+    언젠가 한 곳을 빠뜨린다.
+    """
+    rows = list(hosts or [])
+    if not rows:
+        return rows, 0
+    try:
+        known = registered_device_ips(db_path)
+    except Exception:
+        return rows, 0
+    if not known:
+        return rows, 0
+    kept = [h for h in rows if str(h.get("ip") or "").strip() not in known]
+    return kept, len(rows) - len(kept)
+
+
+def purge_registered_devices_from_facility(db_path):
+    """이미 저장돼 있던 등록 장비 행을 설비 현황에서 제거. 반환: 삭제 건수.
+
+    저장 시점 필터만 두면 예전에 수집된 행이 그대로 남는다(로직만 고치고
+    저장값은 안 고치는 실수를 반복하지 않기 위해 재매칭에서 함께 호출한다).
+    """
+    known = registered_device_ips(db_path)
+    if not known:
+        return 0
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            try:
+                marks = ",".join("?" * len(known))
+                cur.execute("DELETE FROM facility_hosts WHERE ip IN (%s)" % marks,
+                            tuple(known))
+                return cur.rowcount or 0
+            except Exception:
+                return 0
+
+
 def save_facility_hosts(db_path, hosts):
     """설비 현황 저장(subnet+ip 기준 upsert).
     hosts=[{subnet,ip,mac,switch_id,switch_name,port,online,direct,via,port_desc}]."""
+    hosts, _skipped = _drop_registered_devices(db_path, hosts)
+    if _skipped:
+        log_event("info", "facility_skipped_registered_devices", count=_skipped)
     with _db_lock:
         with get_db(db_path) as conn:
             cur = conn.cursor()
@@ -1771,6 +1839,9 @@ def replace_facility_subnet(db_path, subnet, hosts):
 
     실패하면 예외를 그대로 올린다 — 호출부가 '이전 상태 유지'를 선택할 수 있도록.
     """
+    hosts, _skipped = _drop_registered_devices(db_path, hosts)
+    if _skipped:
+        log_event("info", "facility_skipped_registered_devices", count=_skipped)
     with _db_lock:
         with get_db(db_path) as conn:
             cur = conn.cursor()

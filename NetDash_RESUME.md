@@ -10,7 +10,24 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.14.0) — 과거 이력·포트 설명 경로에도 업링크 판정 적용
+## 작업 중 (v6.15.0) — 등록 장비를 설비 현황에서 제외
+
+사용자 신고: 10.92.140.0/22를 수집하면 그 안의 TPS 스위치 10.92.140.13 자신이
+'설비'로 잡히고, BB MAC 테이블에서 그 MAC이 Po124(업링크)에 보이니
+'직접 연결 미확인 / BB Po 경유로만 관측'으로 뜬다. 상태는 '연결됨'.
+
+- **판정은 옳고 대상이 틀렸다** — 스위치는 스위치 현황에 따로 있다. 업링크 너머에
+  있는 게 맞으므로 설비 기준 판정은 정확했지만, 애초에 설비가 아니다.
+- 요청대로 스위치·방화벽·서버로 등록된 IP는 설비 현황에서 제외.
+- **저장 경계에서 막았다** — 화면에서 거르면 설비·관제·엑셀 세 곳을 챙겨야 하고
+  언젠가 한 곳을 빠뜨린다(이번 세션에서 4번 겪은 패턴).
+  `db.registered_device_ips()` + `_drop_registered_devices()`를 쓰기 함수 둘
+  (`save_facility_hosts` / `replace_facility_subnet`) 양쪽에 적용.
+- 옛 스캔으로 이미 저장된 행은 `purge_registered_devices_from_facility()`가
+  `rematch()`에서 정리 — 재수집을 강요하지 않는다.
+- 조용히 사라지면 오해하므로 새로고침 응답에 `excluded` 개수를 실어 화면에 표시.
+
+## v6.14.0 — 과거 이력·포트 설명 경로에도 업링크 판정 적용
 
 사용자 4차 신고: 10.92.140.88의 TPS 포트가 **DOWN**인데도 백본
 `SKBA_F1_N9508_FA_BB_1 1/24`로 표시된다. 추가로 "TPS 인터페이스 description에

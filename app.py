@@ -3155,8 +3155,11 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
     def facility_rematch():
         """설비 현황 새로고침: ping 없이 최신 MAC 스냅샷 기준으로 재대조."""
         try:
+            # 개수를 화면에 알려주려고 여기서 먼저 부른다(rematch 안에도 있어
+            # 다른 호출 경로까지 덮지만, 그쪽은 0건이 되므로 중복 삭제는 없다).
+            excluded = db.purge_registered_devices_from_facility(db_path)
             n = facility_mod.rematch(db_path)
-            return jsonify({"ok": True, "updated": n})
+            return jsonify({"ok": True, "updated": n, "excluded": excluded})
         except Exception as e:
             log_event("error", "facility_rematch_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500

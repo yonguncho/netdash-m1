@@ -2728,7 +2728,12 @@ function explainFacility(ip) {
     fetch("/api/facility/rematch", { method: "POST" })
       .then(function (r) { return r.json(); })
       .then(function (res) {
-        if (prog) prog.textContent = res.ok ? ("재매칭 완료 (" + res.updated + "건 갱신)") : (res.error || "재매칭 실패");
+        if (prog) {
+          prog.textContent = res.ok
+            ? ("재매칭 완료 (" + res.updated + "건 갱신" +
+               (res.excluded ? ", 등록 장비 " + res.excluded + "건 제외 — 스위치/방화벽/서버 현황에 있음" : "") + ")")
+            : (res.error || "재매칭 실패");
+        }
         loadFacility();
       })
       .catch(function (e) { console.error(e); if (prog) prog.textContent = "재매칭 오류"; })

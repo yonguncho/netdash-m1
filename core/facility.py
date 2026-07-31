@@ -1618,6 +1618,11 @@ def rematch(db_path):
     TPS 스위치를 다시 일반 수집한 뒤 설비 현황 '새로고침'에 사용.
     반환: 갱신된 설비 개수.
     """
+    # 대역 안에 있던 스위치·방화벽·서버가 예전 스캔에서 '설비'로 저장돼 있으면
+    # 여기서 걷어낸다(저장 시점 필터는 새 스캔에만 걸리므로 옛 행이 남는다).
+    removed = db.purge_registered_devices_from_facility(db_path)
+    if removed:
+        utils.log_event("info", "facility_purged_registered_devices", count=removed)
     hosts = db.get_facility_hosts(db_path)
     if not hosts:
         return 0
