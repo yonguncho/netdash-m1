@@ -916,8 +916,14 @@ def test_find_port_by_description_matches_unique_ip(temp_db):
     assert m["switch_name"] == "TPS-140" and m["port"] == "GigabitEthernet1/0/24"
 
 
-def test_find_port_by_description_ambiguous_returns_none(temp_db):
-    """같은 문구가 두 포트에 적혀 있으면(오탐 방지) 아무것도 반환하지 않는다."""
+def test_find_port_by_description_ambiguous_does_not_guess_a_port(temp_db):
+    """같은 문구가 두 포트에 적혀 있으면 포트를 단정하지 않는다.
+
+    v6.14.0에서 '통째로 None' → '스위치는 알려주되 port=None'으로 바꿨다.
+    옛 포트 라벨을 지우지 않고 새 포트에도 적는 일이 흔한데(실제 신고 사례),
+    통째로 버리면 링크 DOWN 장비의 유일한 단서가 사라진다. 포트를 찍어주지
+    않으므로 오탐 위험은 그대로 없다.
+    """
     sw = db.save_switch(temp_db, "TPS-140", "10.92.140.13", "cisco_ios")
     snap = db.save_snapshot(temp_db, sw)
     with db.get_db(temp_db) as conn:
@@ -927,7 +933,10 @@ def test_find_port_by_description_ambiguous_returns_none(temp_db):
         conn.execute(
             "INSERT INTO ports (snapshot_id, switch_id, name, description) "
             "VALUES (?, ?, ?, ?)", (snap, sw, "Gi1/0/25", "old-10.92.140.88-note"))
-    assert db.find_port_by_description(temp_db, "10.92.140.88") is None
+    m = db.find_port_by_description(temp_db, "10.92.140.88")
+    assert m["switch_name"] == "TPS-140"
+    assert m["port"] is None, "어느 포트인지 모르면 찍어주면 안 된다"
+    assert set(m["ambiguous_ports"]) == {"Gi1/0/24", "Gi1/0/25"}
 
 
 def test_find_port_by_description_no_match_returns_none(temp_db):

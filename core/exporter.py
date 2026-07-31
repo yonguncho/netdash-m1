@@ -214,8 +214,14 @@ FACILITY_COLS = ["대역", "IP", "MAC", "연결 스위치", "포트", "포트 �
 def facility_rows(db_path):
     """설비 현황 — 화면과 동일(연결 미확인 사유·과거 연결은 '비고')."""
     hosts = db.get_facility_hosts(db_path)
-    unknown = [h for h in hosts if not h.get("switch_name")]
-    mac_last = db.get_mac_last_seen(db_path, [h.get("mac") for h in unknown]) if unknown else {}
+    # 직접 연결이 확정되지 않은 건 전부 보강 대상. 예전엔 switch_name이 완전히
+    # 빈 것만 봤는데, 업링크 경유로만 관측된 건(이름은 있고 direct=0)이 빠졌다.
+    weak = [h for h in hosts if not (h.get("direct", 1) and h.get("switch_name"))]
+    mac_last = db.get_mac_last_seen(db_path, [h.get("mac") for h in weak]) if weak else {}
+    try:
+        desc_map = db.find_ports_by_description(db_path, [h.get("ip") for h in weak]) if weak else {}
+    except Exception:
+        desc_map = {}
     import re as _re
     rows = []
     for h in hosts:
@@ -231,9 +237,20 @@ def facility_rows(db_path):
             _hx = _re.sub(r"[^0-9a-f]", "", (h.get("mac") or "").lower())
             hist = mac_last.get(_hx) if len(_hx) == 12 else None
             if hist and hist.get("switch_name"):
-                remarks.append("과거 연결: %s %s (%s)" % (
-                    hist.get("switch_name"), hist.get("port") or "",
+                # 업링크에서만 보였던 이력을 '과거 연결'로 쓰면 그 스위치에 꽂혀
+                # 있었다고 읽힌다 — 지나간 길목일 뿐이다(화면과 같은 구분).
+                label = ("과거에도 업링크에서만 관측(접속 지점 아님)"
+                         if hist.get("via_uplink") else "과거 연결")
+                remarks.append("%s: %s %s (%s)" % (
+                    label, hist.get("switch_name"), hist.get("port") or "",
                     (hist.get("ts") or "")[:16]))
+            # 포트 설명 단서 — 링크 DOWN이면 MAC이 어디에도 없어 이게 유일하다.
+            dm = desc_map.get(str(h.get("ip") or ""))
+            if dm:
+                where = dm["switch_name"] + (
+                    " " + dm["port"] if dm.get("port")
+                    else " " + ", ".join(dm.get("ambiguous_ports") or []) + " (포트 여럿)")
+                remarks.append("포트 설명에 이 IP 기재: %s (설정 라벨 — 참고용)" % where)
         elif not online:
             remarks.append("연결이 끊기기 전 마지막으로 관측된 위치")
         rows.append({

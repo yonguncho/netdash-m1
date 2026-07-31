@@ -1059,31 +1059,83 @@ _MAC_LAST_TTL = 45.0          # 초 — 이 시간 내 재호출은 캐시 재�
 _MAC_STRIP = {ord(c): None for c in ":-. \t"}
 
 
-def _build_mac_last_map(db_path):
-    """{정규화MAC: {switch_name, port, ts}} 전체 맵(과거 스냅샷 포함).
+# 업링크 포트 집합 캐시 — 계산이 비싸다(이웃 + MAC맵 + 스위치별 config 파싱).
+# 수집이 끝나야 값이 바뀌므로 짧은 TTL로 충분하다. 이게 없으면
+# find_location_by_mac(서버·설비마다 호출)이 매번 전체 토폴로지를 다시 계산한다.
+_uplink_cache = {}            # {str(db_path): {"built": float, "set": frozenset}}
+_uplink_cache_lock = threading.Lock()
+_UPLINK_TTL = 60.0
+
+
+def invalidate_uplink_cache(db_path=None):
+    """수집·삭제로 토폴로지가 바뀌었을 때 다음 조회에서 다시 계산하게 한다."""
+    with _uplink_cache_lock:
+        if db_path is None:
+            _uplink_cache.clear()
+        else:
+            _uplink_cache.pop(str(db_path), None)
+
+
+def uplinks_for(db_path):
+    """업링크 포트 집합 {(switch_id, port소문자)} — TTL 캐시.
+
+    순환 import를 피해 호출 시점에 facility를 가져온다(facility가 db를
+    import하므로 모듈 최상단에서는 반대 방향을 걸 수 없다).
+    """
+    import time as _t
+    key = str(db_path)
+    now = _t.monotonic()
+    with _uplink_cache_lock:
+        ent = _uplink_cache.get(key)
+        if ent and (now - ent["built"]) <= _UPLINK_TTL:
+            return ent["set"]
+    try:
+        from . import facility
+        val = frozenset(facility.uplink_ports(db_path))
+    except Exception:
+        val = frozenset()
+    with _uplink_cache_lock:
+        _uplink_cache[key] = {"built": now, "set": val}
+    return val
+
+
+def _build_mac_last_map(db_path, uplinks=None):
+    """{정규화MAC: {switch_name, port, ts, via_uplink}} 전체 맵(과거 스냅샷 포함).
 
     SQL 집계(GROUP BY mac + 자기조인)는 SQLite에서 오히려 느려(측정 2.8s vs 0.2s)
     전체 행을 한 번 읽고 파이썬에서 최신 스냅샷을 고른다. 정렬 대신 단순 비교라 O(n).
     호출은 캐시·백그라운드 갱신 뒤에 있어 사용자 요청을 막지 않는다.
+
+    **액세스 관측을 업링크 관측보다 항상 우선**한다(그 다음에 최신). 단순히 최신
+    스냅샷만 고르면, 설비가 죽어 액세스 스위치에서 MAC이 사라진 뒤 백본이 더 나중에
+    수집되기만 하면 백본의 업링크 관측이 이겨서 "백본에 연결됨"으로 표시된다.
+    (실제 사례: 10.92.140.88이 TPS 1/0/25에 물려 있는데 링크 DOWN → TPS MAC 소멸,
+     백본 Eth1/24(Po124 멤버)의 옛 관측만 남아 백본으로 표시)
+    업링크 관측밖에 없으면 위치를 버리지 않고 `via_uplink=True`로 표시해 넘긴다 —
+    "어디에도 없음"보다 "여기까지만 확인됨"이 추적에 쓸모 있다.
     """
+    if uplinks is None:
+        uplinks = uplinks_for(db_path)
     out, best = {}, {}
     with get_db(db_path) as conn:
         conn.row_factory = None          # 튜플 접근이 Row보다 빠름
         cur = conn.cursor()
         try:
             cur.execute(
-                "SELECT m.mac, m.port, s.name, snap.collected_at, m.snapshot_id "
+                "SELECT m.mac, m.port, s.name, snap.collected_at, m.snapshot_id, m.switch_id "
                 "FROM mac_entries m JOIN switches s ON m.switch_id = s.id "
                 "JOIN snapshots snap ON m.snapshot_id = snap.id")
-            for mac, port, sw, ts, sid in cur.fetchall():
+            for mac, port, sw, ts, sid, swid in cur.fetchall():
                 if not mac:
                     continue
                 h = mac.lower().translate(_MAC_STRIP)
                 if len(h) != 12:
                     continue
-                if h not in best or (sid or 0) > best[h]:
-                    best[h] = sid or 0
-                    out[h] = {"switch_name": sw, "port": port, "ts": ts}
+                up = (swid, (port or "").strip().lower()) in uplinks
+                rank = (0 if up else 1, sid or 0)   # 액세스 우선 → 그 안에서 최신
+                if h not in best or rank > best[h]:
+                    best[h] = rank
+                    out[h] = {"switch_name": sw, "port": port, "ts": ts, "via_uplink": up}
         except Exception:
             pass
     return out
@@ -1108,12 +1160,15 @@ def invalidate_mac_last_cache(db_path=None):
     """MAC 스냅샷이 바뀌면(수집·삭제·세대정리) 캐시 무효화 → 다음 호출에서 재구성.
 
     db_path를 주면 그 DB만, 없으면 전체 무효화.
+    최근위치 맵은 업링크 집합을 재료로 쓰므로 업링크 캐시도 함께 버린다 —
+    호출처마다 따로 챙기게 하면 언젠가 한 곳을 빠뜨린다.
     """
     with _mac_cache_lock:
         if db_path is None:
             _mac_last_cache.clear()
         else:
             _mac_last_cache.pop(str(db_path), None)
+    invalidate_uplink_cache(db_path)
 
 
 def get_mac_last_seen(db_path, want_macs=None):
@@ -1240,6 +1295,8 @@ def save_neighbors(db_path, switch_id, neighbors):
                          n.get("remote_port"), n.get("remote_ip"), n.get("platform")))
             except Exception as e:
                 log_event("warning", "save_neighbors_skipped", error=str(e))
+    # 이웃이 바뀌면 업링크 판정이 바뀐다 — 캐시를 버려 다음 조회에서 다시 계산.
+    invalidate_uplink_cache(db_path)
 
 
 def get_all_neighbors(db_path):
@@ -1287,19 +1344,24 @@ def get_port_descriptions(db_path):
     return descs
 
 
-def find_port_by_description(db_path, needle):
-    """포트 Description에 needle(보통 설비 IP)이 적힌 포트를 찾는다.
+def find_ports_by_description(db_path, needles):
+    """여러 needle(보통 설비 IP)을 포트 Description에서 한 번에 찾는다.
 
     엔지니어가 접속 포트에 "10.92.140.88"처럼 장비 식별자를 직접 적어두는
     경우가 흔하다. MAC 테이블은 장비가 오프라인이 되면 에이징으로 지워지지만
     이 설명은 스위치 설정(config)의 일부라 장비 상태와 무관하게 남는다 —
     라이브 MAC보다 오히려 더 오래가는 '마지막으로 확인된 연결 포트' 단서다.
+    링크가 DOWN이라 MAC을 새로 학습할 수 없는 장비에는 사실상 유일한 단서다.
 
-    같은 문자열이 여러 포트에 적혀 있으면(오탐 방지) 아무것도 반환하지 않는다.
-    Returns: {"switch_id","switch_name","port","description"} | None
+    관제는 10초마다 폴링하므로 설비마다 쿼리를 날리면 안 된다 → 포트 설명을
+    한 번만 읽고 파이썬에서 대조한다.
+
+    Returns: {needle: {"switch_id","switch_name","port","description"
+                       [,"ambiguous_ports"]}}  (못 찾은 needle은 키 없음)
     """
-    if not needle:
-        return None
+    wanted = [str(n) for n in (needles or []) if n]
+    if not wanted:
+        return {}
     with get_db(db_path) as conn:
         cur = conn.cursor()
         try:
@@ -1309,16 +1371,44 @@ def find_port_by_description(db_path, needle):
                    FROM ports p JOIN switches s ON s.id = p.switch_id
                    WHERE p.snapshot_id IN (
                        SELECT MAX(snapshot_id) FROM ports GROUP BY switch_id)
-                     AND p.description LIKE ('%' || ? || '%')""",
-                (needle,))
+                     AND p.description IS NOT NULL AND p.description <> ''""")
             rows = cur.fetchall()
         except Exception:
-            return None
-    if len(rows) != 1:
+            return {}
+    if not rows:
+        return {}
+    import re as _re
+    out = {}
+    for needle in set(wanted):
+        # 부분 문자열로 그냥 찾으면 '10.92.140.8'이 '10.92.140.88'에도 걸린다.
+        # 숫자·점이 이어지지 않는 경계에서 끝나는 것만 진짜 일치로 본다.
+        pat = _re.compile(r"(?<![0-9.])" + _re.escape(needle) + r"(?![0-9.])")
+        hit = [r for r in rows if pat.search(r["description"] or "")]
+        if not hit:
+            continue
+        if len(hit) == 1:
+            r = hit[0]
+            out[needle] = {"switch_id": r["switch_id"], "switch_name": r["switch_name"],
+                           "port": r["port"], "description": r["description"]}
+            continue
+        # 여러 포트에 적혀 있어도 **같은 스위치 안**이면 스위치는 확정이다.
+        # 예전엔 통째로 버려서, 라벨이 두 포트에 남아 있으면 단서가 통째로 사라졌다
+        # (옛 포트 라벨을 지우지 않고 새 포트에도 적는 일이 흔하다).
+        sids = {r["switch_id"] for r in hit}
+        if len(sids) != 1:
+            continue
+        r = hit[0]
+        out[needle] = {"switch_id": r["switch_id"], "switch_name": r["switch_name"],
+                       "port": None, "description": r["description"],
+                       "ambiguous_ports": [x["port"] for x in hit]}
+    return out
+
+
+def find_port_by_description(db_path, needle):
+    """단건 조회 — 판정 규칙이 갈라지지 않게 배치 구현을 그대로 쓴다."""
+    if not needle:
         return None
-    r = rows[0]
-    return {"switch_id": r["switch_id"], "switch_name": r["switch_name"],
-            "port": r["port"], "description": r["description"]}
+    return find_ports_by_description(db_path, [needle]).get(str(needle))
 
 
 def save_port_channels(db_path, snapshot_id, switch_id, port_channels):
@@ -1337,6 +1427,8 @@ def save_port_channels(db_path, snapshot_id, switch_id, port_channels):
                          ",".join(pc.get("members") or [])))
                 except Exception as e:
                     log_event("warning", "save_port_channel_skipped", error=str(e))
+    # 포트채널 멤버가 바뀌면 업링크 전파(Po↔멤버) 결과도 달라진다.
+    invalidate_uplink_cache(db_path)
 
 
 def save_device_event(db_path, kind, severity="info", subnet=None, ip=None,
@@ -3031,16 +3123,24 @@ def find_location_by_mac(db_path, mac):
             rows = cur.fetchall()
             if not rows:
                 return {}
-            # 물리 포트 우선 — 포트채널 집합보다 실제 케이블이 꽂힌 멤버포트가 쓸모 있다.
-            loc = None
-            for r in rows:
-                p = (r["port"] or "").lower()
-                if not p.startswith(("po", "port-channel", "vl", "vlan")):
-                    loc = r
-                    break
-            loc = loc or rows[0]
+            # 우선순위: ① 업링크가 아닌 포트(그 너머에 등록 스위치가 없음)
+            #           ② 물리 포트(Po 집합보다 실제 케이블이 꽂힌 멤버포트가 쓸모 있다)
+            # 업링크 검사를 빼면, 설비가 죽어 액세스 스위치에서 MAC이 사라진 뒤
+            # 백본 업링크의 물리 멤버포트(Eth1/24 등)가 '물리 포트'라는 이유로 뽑혀
+            # "백본에 연결됨"이 된다. 물리인지보다 업링크인지가 먼저다.
+            uplinks = uplinks_for(db_path)
+
+            def _rank(r):
+                p = (r["port"] or "").strip().lower()
+                up = (r["switch_id"], p) in uplinks
+                phys = not p.startswith(("po", "port-channel", "vl", "vlan"))
+                return (0 if up else 1, 1 if phys else 0)
+
+            loc = max(rows, key=_rank)   # rows는 이미 최신순 — max는 첫 최대값을 유지
             return {"switch_name": loc["switch_name"], "switch_id": loc["switch_id"],
-                    "port": loc["port"]}
+                    "port": loc["port"],
+                    "via_uplink": (loc["switch_id"],
+                                   (loc["port"] or "").strip().lower()) in uplinks}
         except Exception:
             return {}
 

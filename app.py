@@ -1944,13 +1944,19 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     for h in weak:
                         _hx = re.sub(r"[^0-9a-f]", "", (h.get("mac") or "").lower())
                         hh = mac_last.get(_hx) if len(_hx) == 12 else None
+                        hist_useful = False
                         if hh and hh.get("switch_name"):
                             h["hist_switch"] = hh.get("switch_name")
                             h["hist_port"] = hh.get("port")
                             h["hist_ts"] = hh.get("ts")
-                        # 과거 MAC 이력도 없으면 포트 설명에서 이 IP를 찾는다
-                        # (이력조차 없는 건 대개 첫 확인이거나 DB가 새로 시작된 경우).
-                        elif h.get("ip"):
+                            # 업링크에서만 보였던 이력은 '거기 꽂혀 있었다'가 아니라
+                            # '그 길목을 지나갔다'는 뜻 — 화면이 구분해 쓰도록 표시하고,
+                            # 실제 접속 지점 단서(포트 설명)를 계속 찾는다.
+                            h["hist_via_uplink"] = bool(hh.get("via_uplink"))
+                            hist_useful = not hh.get("via_uplink")
+                        # 쓸 만한 이력이 없으면 포트 설명에서 이 IP를 찾는다. 설명은
+                        # 스위치 설정의 일부라 장비가 죽어 MAC이 에이징으로 지워져도 남는다.
+                        if not hist_useful and h.get("ip"):
                             try:
                                 dm = db.find_port_by_description(db_path, h["ip"])
                             except Exception:
@@ -2403,18 +2409,34 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # 오프라인 설비 MAC의 '마지막 관측 위치'를 1회 배치 조회(호스트별 N쿼리 방지 — 성능).
             _mac_last = (db.get_mac_last_seen(db_path, [h.get("mac") for h in fac_off])
                          if fac_off else {})
+            # 포트 설명 단서도 같은 이유로 1회 배치 조회(설비마다 쿼리 금지 — 10초 폴링).
+            try:
+                _desc_map = (db.find_ports_by_description(db_path, [h.get("ip") for h in fac_off])
+                             if fac_off else {})
+            except Exception:
+                _desc_map = {}
 
             def _hist_by_mac(mac):
                 import re as _re
                 h = _re.sub(r"[^0-9a-f]", "", (mac or "").lower())
                 return _mac_last.get(h) if len(h) == 12 else None
 
+            def _desc_by_ip(ip):
+                return _desc_map.get(str(ip)) if ip else None
+
             def _fac_switch_of(h):
-                """설비의 연결 스위치명(현재 없으면 과거 이력). 없으면 '미확인'."""
+                """설비의 연결 스위치명 — 현재 → 과거 이력(업링크 제외) → 포트 설명.
+
+                재수집 칩 필터의 그룹 키로 쓰인다. 업링크 이력으로 그룹을 만들면
+                백본 밑에 남의 설비가 잔뜩 묶여 '백본 담당'처럼 보이므로 뒤로 미룬다.
+                """
                 sn = h.get("switch_name")
+                hist = _hist_by_mac(h.get("mac")) or {}
+                if not sn and not hist.get("via_uplink"):
+                    sn = hist.get("switch_name")
                 if not sn:
-                    sn = (_hist_by_mac(h.get("mac")) or {}).get("switch_name")
-                return sn or "미확인"
+                    sn = (_desc_by_ip(h.get("ip")) or {}).get("switch_name")
+                return sn or hist.get("switch_name") or "미확인"
 
             # TPS 구역 전원다운 의심: 한 구역의 스위치가 2대 이상이고 전부 도달불가면 정전 의심
             zone_out = []
@@ -2466,11 +2488,30 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 # 과거 연결 이력: 현재 위치를 몰라도, 이 MAC이 과거 스냅샷에서 학습된
                 # '마지막 위치'가 있으면 그걸 보여준다(배치 맵 사용 — 성능).
                 hist = _hist_by_mac(h.get("mac"))
-                if hist and hist.get("switch_name"):
+                if hist and hist.get("switch_name") and not hist.get("via_uplink"):
                     when = (hist.get("ts") or "")[:16]
                     return "과거 확인: %s · %s%s (현재 끊김)" % (
                         hist["switch_name"], hist.get("port") or "포트?",
                         (" · " + when) if when else "")
+                # 포트 Description 단서 — MAC보다 오래간다. 장비가 DOWN이면 MAC은
+                # 어디에도 없지만 엔지니어가 접속 포트에 적어둔 IP 라벨은 config에
+                # 그대로 남아 있다. 관제에는 이 단서가 연결돼 있지 않아서, 설명에
+                # IP가 버젓이 적혀 있는데도 '위치 미확인'으로만 나왔다.
+                dm = _desc_by_ip(h.get("ip"))
+                if dm:
+                    where = dm["switch_name"] + (
+                        " · " + dm["port"] if dm.get("port")
+                        else " · " + ", ".join(dm.get("ambiguous_ports") or []) + " (포트 여럿)")
+                    return "포트 설명에 이 IP 기재: %s (설정 라벨 — 실제 배선과 다를 수 있음)" % where
+                if hist and hist.get("switch_name"):
+                    # 업링크에서만 보였던 이력 — '거기 꽂혀 있었다'가 아니라 '그 길목을
+                    # 지나갔다'. 그대로 쓰면 백본에 연결된 것으로 읽힌다. 더 나은 단서가
+                    # 없을 때만 마지막으로 보여준다.
+                    when = (hist.get("ts") or "")[:16]
+                    return ("과거에도 업링크에서만 관측: %s · %s%s "
+                            "(접속 지점 아님 — 연결 액세스 스위치를 수집 후 설비 '새로고침')" % (
+                                hist["switch_name"], hist.get("port") or "포트?",
+                                (" · " + when) if when else ""))
                 subnet = h.get("subnet") or "대역 미상"
                 gw = _gw_by_subnet.get(h.get("subnet"))
                 if gw:

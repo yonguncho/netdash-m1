@@ -2576,8 +2576,11 @@ function _renderFacilityRows() {
         : "<span style='color:#cbd5e1'>-</span>";
     } else {
       // 직접 연결 미확인 — 연결 스위치 셀은 간결히, 사유·과거연결은 '비고'로
+      // 업링크에서만 보였던 이력은 '과거 연결'이 아니다 — 배지를 붙이면 그 스위치에
+      // 꽂혀 있었다고 읽힌다. 그럴 땐 실제 단서인 포트 설명 쪽을 내세운다.
+      var histReal = h.hist_switch && !h.hist_via_uplink;
       swCell = "<span style='color:#b45309'>직접 연결 미확인</span>" +
-        (h.hist_switch ? " <span class='status-badge status-badge--new'>과거 연결</span>" :
+        (histReal ? " <span class='status-badge status-badge--new'>과거 연결</span>" :
          h.desc_switch ? " <span class='status-badge status-badge--new'>설명 일치</span>" : "");
       portCell = "<span style='color:#94a3b8'>—</span>";
       descCell = "<span style='color:#94a3b8'>—</span>";
@@ -2590,8 +2593,10 @@ function _renderFacilityRows() {
       if (h.via) remarks.push("업링크(Po/Vl) 경유로만 관측: " + h.via);
       remarks.push("연결된 액세스 스위치 미수집이거나 최신 MAC 테이블에 없음(노후)");
       if (h.hist_switch) {
-        remarks.push("과거 연결: " + h.hist_switch + (h.hist_port ? " " + h.hist_port : "") +
-          (h.hist_ts ? " (" + String(h.hist_ts).slice(0, 16) + ")" : ""));
+        var histTs = h.hist_ts ? " (" + String(h.hist_ts).slice(0, 16) + ")" : "";
+        remarks.push((histReal ? "과거 연결: " : "과거에도 업링크에서만 관측: ") +
+          h.hist_switch + (h.hist_port ? " " + h.hist_port : "") + histTs +
+          (histReal ? "" : " — 지나간 길목이지 접속 지점이 아님"));
       }
       if (h.desc_switch) {
         remarks.push("포트 설명에 이 IP 기재됨: " + h.desc_switch +
@@ -2671,9 +2676,10 @@ function explainFacility(ip) {
                  (h.history.port || ""));
         }
         if (h.port_description) {
-          L.push("포트 설명에 이 IP가 적힌 곳: " + (h.port_description.switch_name || "") +
-                 " " + (h.port_description.port || "") +
-                 "  (\"" + (h.port_description.description || "") + "\")");
+          var pd = h.port_description;
+          var pdPort = pd.port || ((pd.ambiguous_ports || []).join(", ") + " (포트 여럿 — 단정 불가)");
+          L.push("포트 설명에 이 IP가 적힌 곳: " + (pd.switch_name || "") + " " + pdPort +
+                 "  (\"" + (pd.description || "") + "\")");
           L.push("  ※ 설정 라벨이라 실제 배선과 다를 수 있습니다 — 참고용");
         }
       }
