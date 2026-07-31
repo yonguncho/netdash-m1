@@ -498,11 +498,13 @@
         <table class="data-table">
           <thead>
             <tr><th style="width:34px;text-align:center"><input type="checkbox" id="fw-check-all" title="전체 선택"></th>
-                <th>이름</th><th>벤더</th><th>IP</th><th>위치</th><th>상태</th><th>연결 상태</th>
+                <th>이름</th><th>벤더</th><th>IP</th><th>위치</th>
+                <th title="SNMP로 읽은 최고 센서 온도(ENTITY-SENSOR-MIB). 설정에서 SNMP 커뮤니티를 넣고 재수집하면 채워집니다">온도</th>
+                <th>상태</th><th>연결 상태</th>
                 <th title="수집 · 상세 · 수정 · 진단 · SSH 터미널 · 삭제">작업</th></tr>
           </thead>
           <tbody id="firewall-table-body">
-            <tr><td colspan="8" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
+            <tr><td colspan="9" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
           </tbody>
         </table>
       </div>
@@ -535,7 +537,7 @@
               <th>구분</th>
               <th title="수집된 실제 호스트네임. 미수집 장비는 등록 이름을 대신 표시합니다">호스트네임</th>
               <th>IP</th><th>벤더</th><th>모델</th><th>버전</th><th>시리얼</th>
-              <th>위치</th><th>상태</th><th title="포트 flapping(FLAP)·loop(LOOP) 감지 시 표시. 장비 전원·회선 장애는 '상태' 컬럼에 나옵니다">경보</th><th>마지막 수집</th><th title="상세보기 · 수집 · 수정 · 진단 · 터미널(💻) · 삭제">작업</th>
+              <th>위치</th><th title="SNMP로 읽은 최고 센서 온도(ENTITY-SENSOR-MIB). 설정에서 SNMP 커뮤니티를 넣고 재수집하면 채워집니다">온도</th><th>상태</th><th title="포트 flapping(FLAP)·loop(LOOP) 감지 시 표시. 장비 전원·회선 장애는 '상태' 컬럼에 나옵니다">경보</th><th>마지막 수집</th><th title="상세보기 · 수집 · 수정 · 진단 · 터미널(💻) · 삭제">작업</th>
             </tr>
           </thead>
           <tbody id="switch-table-body"></tbody>
@@ -921,6 +923,7 @@
       </div>
     </div>
     <div id="detail-summary" class="detail-summary"></div>
+    <div id="detail-env" style="display:none"></div>
     <div class="detail-panel__tabs">
       <button class="detail-tab active" data-dtab="ports">포트</button>
       <button class="detail-tab" data-dtab="macs">MAC 테이블</button>

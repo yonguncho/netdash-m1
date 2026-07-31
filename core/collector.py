@@ -407,6 +407,47 @@ def _parse_serial(vendor, text):
     return None
 
 
+def collect_env_snmp(db_path, kind, device_id, ip, budget=15.0):
+    """장비 환경 정보(온도·팬)를 SNMP로 읽어 저장. 반환: 저장한 dict 또는 None.
+
+    스위치·방화벽·서버가 같은 표준 MIB(ENTITY-SENSOR-MIB)을 쓰므로 구현은 하나다.
+    - 서버 사양 수집이 쓰던 SNMP 설정(사용 여부·커뮤니티)을 그대로 재사용한다.
+      온도 때문에 커뮤니티를 또 입력하게 만들 이유가 없다.
+    - 실패는 조용히 넘긴다: 이 MIB 미지원 장비가 흔하고, SSH 수집 결과까지
+      같이 버리면 손해가 더 크다. 원인은 로그로 남긴다.
+    """
+    if not ip:
+        return None
+    try:
+        from . import server_collector as _sc
+        if not _sc.snmp_enabled(db_path):
+            return None
+        community = _sc.snmp_community(db_path)
+        if not community:
+            return None
+        from . import snmp_env
+    except Exception:
+        return None
+    try:
+        env = snmp_env.collect_env(ip, community, budget=budget)
+    except snmp_env.SnmpClosed:
+        utils.log_event("info", "env_snmp_closed", kind=kind, device_id=device_id)
+        return None
+    except snmp_env.SnmpError:
+        utils.log_event("info", "env_snmp_no_reply", kind=kind, device_id=device_id)
+        return None
+    except Exception as e:
+        utils.log_event("warning", "env_snmp_failed", kind=kind, device_id=device_id,
+                        error=_sanitize_error_msg(str(e)))
+        return None
+    if not env.get("sensors"):
+        # 응답은 왔는데 센서 테이블이 비었다 = 이 장비는 이 MIB을 안 쓴다.
+        utils.log_event("info", "env_snmp_unsupported", kind=kind, device_id=device_id)
+        return None
+    db.save_device_env(db_path, kind, device_id, env, source="snmp")
+    return env
+
+
 def _commands_for(vendor):
     """벤더의 수집 명령 집합. config에 없으면 파서 모듈 COMMANDS로 폴백."""
     cmds = get_config().get_commands(vendor)
@@ -944,6 +985,10 @@ def _worker_loop_once():
             except Exception as e:
                 utils.log_event("warning", "log_analyze_skipped",
                                 error=_sanitize_error_msg(str(e)))
+
+        # 환경 정보(온도·팬) — SNMP ENTITY-SENSOR-MIB. SSH 수집과 별개 경로라
+        # 실패해도 수집 전체를 망치지 않는다(이 MIB을 지원하지 않는 장비가 흔하다).
+        collect_env_snmp(db_path, "switch", switch_id, switch.get("ip"))
 
         # 설정(running-config) 백업 + 변경 diff 알람
         cfg_out = outputs.get("config", "")
@@ -1570,6 +1615,8 @@ def collect_all_registered(db_path):
                     verify_ssl=secpolicy.firewall_tls_verify())
                 db.save_firewall_interfaces(db_path, fw["id"], r["interfaces"])
                 db.save_firewall_arp(db_path, fw["id"], r["arp"])
+                # 온도·팬 — 스위치와 같은 표준 MIB 경로를 그대로 쓴다.
+                collect_env_snmp(db_path, "firewall", fw["id"], fw.get("host"))
                 db.set_firewall_status(db_path, fw["id"], "done")
                 result["firewalls"] += 1
             except Exception as e:

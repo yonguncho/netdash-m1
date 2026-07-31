@@ -877,7 +877,7 @@ function loadDetailData(switchId) {
     .then(function(r) { return r.json(); })
     .then(function(detail) {
       var ports = detail.ports || [], macs = detail.macs || [], arps = detail.arps || [];
-      renderDetailSummary(ports, macs, arps);
+      renderDetailSummary(ports, macs, arps, detail.env);
       renderPortsTab(ports);
       renderMacsTab(macs);
       renderArpsTab(arps);
@@ -916,9 +916,10 @@ function renderSyslogTab(logs) {
   el.innerHTML = html;
 }
 
-function renderDetailSummary(ports, macs, arps) {
+function renderDetailSummary(ports, macs, arps, env) {
   var el = document.getElementById("detail-summary");
   if (!el) return;
+  renderDetailEnv(env);
   var up = ports.filter(function(p) { return p.status === "up"; }).length;
   var down = ports.length - up;
   var vlanSet = {};
@@ -935,6 +936,33 @@ function renderDetailSummary(ports, macs, arps) {
     stat(macs.length, "MAC") +
     stat(arps.length, "ARP") +
     stat(Object.keys(vlanSet).length, "VLAN");
+}
+
+// 환경 정보(온도·팬) 센서 목록 — 요약 줄 아래에 붙인다.
+// 값이 없는 게 흔하므로(SNMP 미설정 / 이 MIB 미지원) 그럴 땐 영역을 통째로 숨긴다.
+function renderDetailEnv(env) {
+  var box = document.getElementById("detail-env");
+  if (!box) return;
+  var sensors = (env && env.sensors) || [];
+  if (!sensors.length) { box.innerHTML = ""; box.style.display = "none"; return; }
+  box.style.display = "";
+  var rows = sensors.map(function (s) {
+    var unit = s.type === "celsius" ? "°C" : (s.type === "rpm" ? " RPM" : "");
+    var lvl = s.level || "";
+    var color = lvl === "critical" ? "#b91c1c" : lvl === "warning" ? "#b45309" : "#334155";
+    var val = (s.value === null || s.value === undefined) ? "-" : (s.value + unit);
+    var st = s.status === "ok" ? "" :
+      " <span class='status-badge' style='background:#fee2e2;color:#b91c1c'>" + escHtml(s.status) + "</span>";
+    return "<tr><td>" + escHtml(s.name) + "</td>" +
+      "<td style='color:" + color + ";font-weight:600'>" + escHtml(val) + "</td>" +
+      "<td>" + escHtml(s.type) + st + "</td></tr>";
+  }).join("");
+  box.innerHTML =
+    "<h4 style='margin:12px 0 6px'>환경 정보 (SNMP)</h4>" +
+    "<table class='data-table'><thead><tr><th>센서</th><th>값</th><th>종류</th></tr></thead>" +
+    "<tbody>" + rows + "</tbody></table>" +
+    (env.updated ? "<p style='font-size:11px;color:#64748b;margin-top:6px'>수집: " +
+      escHtml(env.updated) + "</p>" : "");
 }
 
 function renderPortsTab(ports) {
@@ -1931,6 +1959,23 @@ function _applySwSearch(list) {
   });
 }
 
+// 온도 셀 — SNMP(ENTITY-SENSOR-MIB)로 읽은 최고 센서 온도.
+// 값이 없는 게 정상인 경우가 많아(이 MIB 미지원 / SNMP 미설정) '-'에 사유를 달아둔다.
+function tempCell(d) {
+  var c = (d && d.temp_c !== undefined && d.temp_c !== null) ? d.temp_c : null;
+  if (c === null) {
+    return "<span class='cell-none' title='SNMP 환경 정보 없음 — 설정에서 SNMP 커뮤니티를 넣고 재수집하면 채워집니다. " +
+      "장비가 ENTITY-SENSOR-MIB을 지원하지 않으면 계속 비어 있습니다'>-</span>";
+  }
+  var lvl = d.temp_level || "normal";
+  var color = lvl === "critical" ? "#b91c1c" : lvl === "warning" ? "#b45309" : "#166534";
+  var mark = lvl === "critical" ? " ⚠" : "";
+  var tip = "최고 센서 온도" + (d.env_fan_count ? " · 팬 " + d.env_fan_count + "개" : "") +
+    (d.env_updated ? " · " + String(d.env_updated).slice(0, 16) : "");
+  return "<span style='color:" + color + ";font-weight:600' title='" + escHtml(tip) + "'>" +
+    escHtml(String(c)) + "°C" + mark + "</span>";
+}
+
 function renderSwitchTable(switches) {
   // 서버(구분=Server)는 스위치 현황에서 제외 — 서버 현황/서버실 현황에만 표시
   switches = _applySwSearch((switches || []).filter(function (s) {
@@ -1975,7 +2020,8 @@ function renderSwitchTable(switches) {
         : "<span class='cell-none' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.serial ? "<code style='font-size:11px'>" + escHtml(sw.serial) + "</code>"
         : "<span class='cell-none' title='재수집하면 show version/inventory에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
-      locCell + "</td><td>" + statusBadge(sw.status, sw.last_error) + "</td><td>" +
+      locCell + "</td><td>" + tempCell(sw) + "</td><td>" +
+      statusBadge(sw.status, sw.last_error) + "</td><td>" +
       alertBadge(sw.alert) +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
       "<td>" +
@@ -2918,6 +2964,7 @@ function renderFirewalls(firewalls) {
       "<td>" + escHtml(f.vendor) + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
+      "<td>" + tempCell(f) + "</td>" +      // 스위치와 같은 SNMP 경로 · 같은 셀 함수
       // 이중화(동일 VIP) 대기 장비는 개별 수집이 실패할 수밖에 없다 →
       // 짝이 정상이면 정상으로 표기하고 근거를 툴팁에 남긴다.
       "<td>" + (f.ha_via

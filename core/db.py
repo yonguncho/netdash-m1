@@ -296,6 +296,24 @@ CREATE TABLE IF NOT EXISTS facility_hosts (
 )
 """
 
+# 장비 환경 정보(온도·팬) — 스위치·방화벽·서버 공용.
+# kind로 구분해 한 테이블에 둔다: 세 종류가 같은 SNMP 경로(ENTITY-SENSOR-MIB)로
+# 같은 모양의 데이터를 내므로, 테이블을 셋으로 나누면 저장·조회·삭제가 3벌이 된다.
+CREATE_DEVICE_ENV_TABLE = """
+CREATE TABLE IF NOT EXISTS device_env (
+    kind TEXT NOT NULL,
+    device_id INTEGER NOT NULL,
+    max_temp_c REAL,
+    level TEXT,
+    temp_count INTEGER DEFAULT 0,
+    fan_count INTEGER DEFAULT 0,
+    sensors_json TEXT,
+    source TEXT,
+    updated TEXT,
+    PRIMARY KEY (kind, device_id)
+)
+"""
+
 # 서버(리눅스/윈도우) 현황 — 스위치와 별도 수명주기.
 # 수집: 무자격(포트스캔+역DNS+스위치 ARP/MAC 대조) + SSH 상세(자격증명 시).
 # is_vm=0(물리) + location이 랙 형식(A09U27)이면 서버실 현황에 포함.
@@ -607,6 +625,7 @@ def init_schema(db_path):
                 CREATE_VLAN_NAMES_TABLE,
                 CREATE_SWITCH_LOGS_TABLE,
                 CREATE_FACILITY_HOSTS_TABLE,
+                CREATE_DEVICE_ENV_TABLE,
                 CREATE_SERVERS_TABLE,
                 CREATE_PC_PROFILES_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
@@ -1882,6 +1901,84 @@ def get_facility_hosts(db_path):
             return []
 
 
+_ENV_KINDS = ("switch", "firewall", "server")
+
+
+def save_device_env(db_path, kind, device_id, env, source="snmp"):
+    """장비 환경 정보 저장(kind+device_id 교체). env는 snmp_env.summarize() 결과."""
+    if kind not in _ENV_KINDS:
+        raise ValueError("unknown device kind: %s" % kind)
+    import json as _json
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute(
+                    """INSERT OR REPLACE INTO device_env
+                       (kind, device_id, max_temp_c, level, temp_count, fan_count,
+                        sensors_json, source, updated)
+                       VALUES (?,?,?,?,?,?,?,?, datetime('now','localtime'))""",
+                    (kind, int(device_id), env.get("max_temp_c"), env.get("level"),
+                     env.get("temp_count") or 0, env.get("fan_count") or 0,
+                     _json.dumps(env.get("sensors") or [], ensure_ascii=False), source))
+            except Exception as e:
+                log_event("warning", "save_device_env_skipped", error=str(e))
+
+
+def get_device_env(db_path, kind, device_id):
+    """장비 하나의 환경 정보 → dict(sensors 포함). 없으면 None."""
+    import json as _json
+    with get_db(db_path) as conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT max_temp_c, level, temp_count, fan_count, sensors_json, "
+                "source, updated FROM device_env WHERE kind=? AND device_id=?",
+                (kind, int(device_id)))
+            row = cur.fetchone()
+        except Exception:
+            return None
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["sensors"] = _json.loads(out.pop("sensors_json") or "[]")
+    except (ValueError, TypeError):
+        out["sensors"] = []
+        out.pop("sensors_json", None)
+    return out
+
+
+def get_device_env_map(db_path, kind):
+    """{device_id: {max_temp_c, level, temp_count, fan_count, updated}} — 목록 표기용.
+
+    센서 상세(sensors_json)는 빼고 준다. 표 한 줄에 필요한 건 최고 온도와 등급뿐인데
+    장비마다 센서 수십 개를 실어 보내면 목록 응답이 통째로 무거워진다.
+    """
+    out = {}
+    with get_db(db_path) as conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT device_id, max_temp_c, level, temp_count, fan_count, "
+                        "source, updated FROM device_env WHERE kind=?", (kind,))
+            for r in cur.fetchall():
+                d = dict(r)
+                out[d.pop("device_id")] = d
+        except Exception:
+            return {}
+    return out
+
+
+def delete_device_env(db_path, kind, device_id):
+    """장비 삭제 시 환경 정보도 함께 정리(삭제된 id의 온도가 남지 않게)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute("DELETE FROM device_env WHERE kind=? AND device_id=?",
+                             (kind, int(device_id)))
+            except Exception:
+                pass
+
+
 def save_switch_logs(db_path, switch_id, recent_lines, events_json, log_alert):
     """show logging 분석 결과 저장(스위치별 교체). recent_lines/events_json은 문자열."""
     with _db_lock:
@@ -2682,6 +2779,13 @@ def _purge_switch_children(cur, switch_id):
             cur.execute("DELETE FROM %s WHERE switch_id=?" % tbl, (switch_id,))
         except Exception:
             pass
+    # device_env는 switch_id가 아니라 (kind, device_id)라 위 루프에 안 걸린다 —
+    # 빼먹으면 삭제된 스위치의 온도가 다음에 같은 id가 재사용될 때 되살아난다.
+    try:
+        cur.execute("DELETE FROM device_env WHERE kind='switch' AND device_id=?",
+                    (switch_id,))
+    except Exception:
+        pass
     # hosts·facility_hosts는 인벤토리(스캔 결과)이므로 보존하되 위치만 무효화한다.
     # facility_hosts를 행째로 지우면 스위치 1대를 지웠다고 그 스위치에 붙어 있던
     # 설비의 IP·MAC·대역·온라인 여부가 통째로 사라졌다(대역 재스캔 전까지 복구 불가).

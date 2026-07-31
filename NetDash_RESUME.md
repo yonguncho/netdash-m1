@@ -10,7 +10,41 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.15.0) — 등록 장비를 설비 현황에서 제외
+## 작업 중 (v6.16.0) — SNMP 환경 정보(온도·팬) 수집
+
+사용자 질문 2건: ① 방화벽·스위치·서버 현황에서 장비 온도도 볼 수 있나
+② SNMP 연동 수집 기능은 구현돼 있나.
+
+**답(확인 완료)**:
+- 온도는 전혀 수집 안 하고 있었다.
+- SNMP는 **절반** 있었다 — `core/snmp_collect.py`에 직접 구현한 v2c 클라이언트
+  (GET/GETBULK/walk, SET 없음), 커뮤니티 암호화 저장(`snmp_community_blob`)과
+  설정 UI까지. 단 **서버 사양 수집의 4번째 폴백으로만** 쓰이고 스위치·방화벽엔
+  연결 안 됨. v3 미지원. 실장비 검증은 여전히 열린 항목.
+
+두 질문이 같은 지점에서 만난다 — 온도의 벤더 중립 표준 경로가 SNMP의
+**ENTITY-SENSOR-MIB(RFC 3433)** 이다. CLI로 하면 벤더별 파서 8개가 필요한데
+이건 구현이 하나면 된다. SNMP 확장의 첫 실사용처로도 맞다.
+
+- `core/snmp_env.py` 신규 — 센서 테이블 walk + 정규화. **RFC 3433의 scale·
+  precision을 반영**(무시하면 밀리섭씨 45000이나 0.1도 단위 455가 그대로 온도가
+  된다). 온도/팬/유무만 남기고 전압·전류는 버린다(화면 잡음).
+- `db.device_env` 테이블 — (kind, device_id) 단일 테이블. 스위치·방화벽·서버가
+  같은 MIB로 같은 모양을 내므로 나누면 저장·조회·삭제가 3벌이 된다.
+  `_purge_switch_children`에 삭제 연결(switch_id 컬럼이 아니라 안 걸린다).
+- `collector.collect_env_snmp()` — 스위치·방화벽 수집 후 호출. 기존 SNMP 설정
+  (사용 여부·커뮤니티)을 그대로 재사용(온도 때문에 또 입력받지 않는다).
+  실패는 조용히 넘긴다(이 MIB 미지원 장비가 흔하고, SSH 결과까지 버리면 손해).
+- 화면: 스위치·방화벽 표에 온도 컬럼(`tempCell` 하나를 공유), 상세보기에 센서 목록.
+
+**검증 방식**: 실장비가 없으므로 walk 결과를 바꿔 끼우는 가짜 세션으로 테스트.
+BER·소켓은 snmp_collect가 이미 담당하므로 여기선 '센서 해석'만 검증한다.
+
+**남은 것**: 서버 온도는 이 경로로 리눅스(net-snmp+lm-sensors)만 가능.
+Windows는 `MSAcpi_ThermalZoneTemperature`가 서버 하드웨어에서 대부분 미지원 —
+iDRAC/iLO/IPMI가 필요하다. 실장비 SNMP 검증도 여전히 미완.
+
+## v6.15.0 — 등록 장비를 설비 현황에서 제외
 
 사용자 신고: 10.92.140.0/22를 수집하면 그 안의 TPS 스위치 10.92.140.13 자신이
 '설비'로 잡히고, BB MAC 테이블에서 그 MAC이 Po124(업링크)에 보이니

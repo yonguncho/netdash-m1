@@ -569,6 +569,26 @@ def fw_ha_role(name, hostname="", ha_info=None):
     return None
 
 
+def _attach_env(db_path, rows, kind):
+    """목록 행에 환경 정보(최고 온도·등급)를 얹는다. 실패해도 목록은 살린다.
+
+    센서 상세는 싣지 않는다 — 표 한 줄에 필요한 건 최고 온도와 등급뿐인데,
+    장비마다 센서 수십 개를 실으면 목록 응답이 통째로 무거워진다(상세는 상세보기에서).
+    """
+    try:
+        env_map = db.get_device_env_map(db_path, kind)
+    except Exception:
+        return rows
+    for r in rows or []:
+        e = env_map.get(r.get("id"))
+        if e:
+            r["temp_c"] = e.get("max_temp_c")
+            r["temp_level"] = e.get("level")
+            r["env_updated"] = e.get("updated")
+            r["env_fan_count"] = e.get("fan_count")
+    return rows
+
+
 def annotate_fw_ha(rows):
     """동일 호스트(VIP)를 공유하는 이중화 쌍을 묶어 **표시용 상태**를 만든다.
 
@@ -1368,6 +1388,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         log_event("info", "api_switches")
         try:
             switches = db.get_switches(db_path)
+            _attach_env(db_path, switches, "switch")
             return jsonify({"switches": switches})
         except Exception as e:
             # CWE-532 fix: Sanitize error messages to prevent credential/path exposure in logs
@@ -4136,6 +4157,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             except Exception:
                 pass
             annotate_fw_ha(fws)
+            _attach_env(db_path, fws, "firewall")
             return jsonify({"firewalls": fws})
         except Exception as e:
             log_event("error", "firewalls_list_error", error=collector._sanitize_error_msg(str(e)))
@@ -4621,6 +4643,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             if _info:
                 switch["tps_location"] = _info["label"]
 
+            env = db.get_device_env(db_path, "switch", switch_id)
             ports = db.get_ports_by_switch(db_path, switch_id)
             macs = db.get_mac_entries_by_switch(db_path, switch_id)
             arps = db.get_arp_entries_by_switch(db_path, switch_id)
@@ -4648,7 +4671,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "macs": macs,
                 "arps": arps,
                 "hosts": hosts,
-                "logs": logs
+                "logs": logs,
+                "env": env
             })
         except Exception as e:
             # CWE-532 fix: Sanitize error messages to prevent credential/path exposure in logs
