@@ -1389,6 +1389,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         try:
             switches = db.get_switches(db_path)
             _attach_env(db_path, switches, "switch")
+            # 드라이버 키(cisco_nxos)가 아니라 제조사(Cisco)를 함께 준다.
+            # 벤더 미인식 장비도 수집된 모델명으로 제조사를 알아낼 수 있다.
+            from core import manufacturer
+            manufacturer.annotate(switches)
             return jsonify({"switches": switches})
         except Exception as e:
             # CWE-532 fix: Sanitize error messages to prevent credential/path exposure in logs
@@ -4158,6 +4162,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 pass
             annotate_fw_ha(fws)
             _attach_env(db_path, fws, "firewall")
+            # 'fortigate'는 제품 계열이지 제조사가 아니다 → 제조사를 따로 준다.
+            from core import manufacturer
+            manufacturer.annotate(fws)
             return jsonify({"firewalls": fws})
         except Exception as e:
             log_event("error", "firewalls_list_error", error=collector._sanitize_error_msg(str(e)))

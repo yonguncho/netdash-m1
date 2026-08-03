@@ -2012,7 +2012,10 @@ function renderSwitchTable(switches) {
       "<td>" + kindLabel + "</td>" +
       "<td>" + hostnameCell(sw) + "</td>" +
       "<td><code>" + escHtml(sw.ip) + "</code></td><td>" +
-      escHtml(_vendorLabel(sw.vendor)) +
+      // 서버가 판별한 제조사를 우선한다. JS 표(_VENDOR_LABELS)는 예전 응답 호환용
+      // 폴백으로만 남긴다 — 판별 규칙이 둘로 갈라지면 표·엑셀 표기가 달라진다.
+      escHtml(sw.manufacturer || _vendorLabel(sw.vendor)) +
+      (sw.product ? "<div class='cell-sub'>" + escHtml(sw.product) + "</div>" : "") +
       _nbrSrcBadge(sw) + "</td><td>" +
       (sw.model ? escHtml(sw.model)
         : "<span class='cell-none' title='이 버전으로 한 번 재수집하면 show version/show switch에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
@@ -2961,7 +2964,11 @@ function renderFirewalls(firewalls) {
             "' title='이중화(HA) 역할 — 동일 VIP 쌍에서 판정'>" +
             (f.ha_role === "master" ? "Master" : "Backup") + "</span>"
           : "") + "</td>" +
-      "<td>" + escHtml(f.vendor) + "</td>" +
+      // 제조사와 제품을 나눈다 — 예전엔 'fortigate'(제품 계열)를 '벤더'로 보여줬다.
+      "<td>" + (f.manufacturer
+        ? escHtml(f.manufacturer)
+        : "<span class='cell-none' title='등록된 제품 정보로 제조사를 특정하지 못했습니다'>-</span>") + "</td>" +
+      "<td>" + escHtml(f.product || f.vendor || "-") + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
       "<td>" + tempCell(f) + "</td>" +      // 스위치와 같은 SNMP 경로 · 같은 셀 함수

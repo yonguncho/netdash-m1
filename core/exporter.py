@@ -8,7 +8,7 @@ import csv
 import io
 import json
 
-from . import db, serverroom, server_collector, tps_location, topology
+from . import db, serverroom, server_collector, tps_location, topology, manufacturer
 
 
 # CSV 수식 인젝션(CWE-1236) 방어용 선행 문자.
@@ -70,7 +70,7 @@ def _location_raw(sw):
 # ── 데이터셋별 컬럼·행 구성(화면 표와 동일한 순서) ─────────────
 # '이름'은 등록 시 사용자가 붙인 식별자다. 호스트네임은 수집에 성공해야 채워지므로
 # 미수집 스위치는 이름이 없으면 IP로만 식별된다 — 반드시 첫 컬럼으로 내보낸다.
-SWITCH_COLS = ["이름", "구분", "IP", "호스트네임", "벤더", "모델", "버전", "시리얼",
+SWITCH_COLS = ["이름", "구분", "IP", "호스트네임", "벤더", "제품", "모델", "버전", "시리얼",
                "위치", "위치(원문)", "상태", "경보", "마지막 수집", "비고"]
 
 
@@ -87,7 +87,12 @@ def switches_rows(db_path):
         rows.append({
             "이름": sw.get("name"),
             "구분": kind, "IP": sw.get("ip"), "호스트네임": sw.get("hostname"),
-            "벤더": sw.get("vendor"), "모델": sw.get("model"), "버전": sw.get("os_version"),
+            # '벤더'는 벤더사다 — 예전엔 드라이버 키(cisco_nxos)를 그대로 내보내
+            # 자산 목록에 제조사가 아닌 값이 들어갔다. 판별은 manufacturer 한 곳.
+            "벤더": manufacturer.resolve(sw.get("vendor"), sw.get("model"),
+                                       sw.get("os_version")),
+            "제품": manufacturer.product_label(sw.get("vendor")),
+            "모델": sw.get("model"), "버전": sw.get("os_version"),
             "시리얼": sw.get("serial"), "위치": _switch_location(sw),
             "위치(원문)": _location_raw(sw),
             "상태": sw.get("status"),
@@ -145,7 +150,7 @@ def servers_rows(db_path):
     return rows
 
 
-FIREWALL_COLS = ["이름", "벤더", "호스트", "포트", "위치", "상태", "연결 상태",
+FIREWALL_COLS = ["이름", "벤더", "제품", "호스트", "포트", "위치", "상태", "연결 상태",
                  "마지막 수집"]
 
 
@@ -162,7 +167,11 @@ def firewalls_rows(db_path):
     for f in db.list_firewalls(db_path):
         reach = fw_state.get(f.get("id"))
         rows.append({
-            "이름": f.get("name"), "벤더": f.get("vendor"), "호스트": f.get("host"),
+            "이름": f.get("name"),
+            # fortigate는 제품 계열이지 제조사가 아니다(화면과 같은 판별을 쓴다).
+            "벤더": manufacturer.resolve(f.get("vendor")),
+            "제품": manufacturer.product_label(f.get("vendor")),
+            "호스트": f.get("host"),
             "포트": f.get("port"), "위치": f.get("location"),
             "상태": f.get("status"),
             "연결 상태": ("연결됨" if reach is True else
