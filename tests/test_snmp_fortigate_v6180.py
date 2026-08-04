@@ -238,9 +238,10 @@ def test_firewall_ui_shows_load_and_probe():
     root = Path(__file__).parent.parent
     js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (root / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert "function fwLoadCell" in js and "fwLoadCell(f)" in js
+    # v6.25.0: 방화벽 표의 부하 컬럼 제거(통계는 관제 전담) — SNMP 확인 버튼은 유지
     assert "snmp-probe-fw" in js and "function snmpProbeFirewall" in js
-    assert ">부하</th>" in html
+    assert ">부하</th>" not in html[html.index('id="fw-check-all"'):
+                                    html.index('id="fw-check-all"') + 900]
 
 
 # --- v6.24.0: CPU 코어 폴백 · 디스크 없음 구분 -------------------------------

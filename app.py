@@ -610,6 +610,17 @@ def _attach_env(db_path, rows, kind):
                     if sen.get("max_temp_c") is not None and r.get("temp_c") is None:
                         r["temp_c"] = sen["max_temp_c"]
                         r["temp_level"] = sen.get("level")
+                # 모델·버전(get system status/REST) + 수명주기(내장 표) — 방화벽 표 표기용
+                if kind == "firewall":
+                    r["fw_model"] = m.get("model")
+                    r["fw_version"] = m.get("version")
+                    if m.get("model") or m.get("version"):
+                        try:
+                            from core import fortilifecycle
+                            r["lifecycle"] = fortilifecycle.lookup(
+                                m.get("model"), m.get("version"))
+                        except Exception:
+                            pass
     return rows
 
 

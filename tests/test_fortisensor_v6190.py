@@ -189,24 +189,17 @@ def test_merge_skips_non_fortigate(temp_db):
 
 # --- 대시보드 UI -------------------------------------------------------------
 
-def test_dashboard_ui_present():
+def test_dashboard_removed_from_firewall_page():
+    """v6.25.0 사용자 지시: 방화벽 현황은 리스트만 — 통계는 관제 페이지 전담.
+
+    v6.19.0에서 이 페이지에 넣었던 대시보드(fw-dashboard)는 제거됐다.
+    상세보기의 부하 막대(fwBar/fwStatusHtml)는 유지된다.
+    """
     from pathlib import Path
     root = Path(__file__).parent.parent
     js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (root / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    css = (root / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert 'id="fw-dashboard"' in html and 'id="fw-kpi"' in html and 'id="fw-tiles"' in html
-    assert "function renderFirewallDashboard" in js and "function fwBar" in js
-    assert "function fwStatusHtml" in js
-    assert ".fw-tile" in css and ".fw-bar__fill" in css
-    # 폐쇄망이라 외부 차트 라이브러리를 끌어오면 안 된다
-    assert "cdn." not in js and "https://" not in css
-
-
-def test_dashboard_uses_unfiltered_list():
-    """검색어를 치는 동안 KPI가 흔들리면 현황판으로 못 쓴다."""
-    from pathlib import Path
-    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    i_dash = js.index("renderFirewallDashboard(firewalls || [])")
-    i_filter = js.index('var q = ((document.getElementById("fw-search")')
-    assert i_dash < i_filter, "대시보드는 검색 필터를 적용하기 전에 그려야 한다"
+    assert 'id="fw-dashboard"' not in html
+    assert "renderFirewallDashboard" not in js
+    assert "function fwBar" in js and "function fwStatusHtml" in js
+    assert "cdn." not in js

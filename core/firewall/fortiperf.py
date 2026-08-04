@@ -76,3 +76,28 @@ def parse_perf_status(output):
         d, h, mi = (int(x or 0) for x in m.groups())
         out["uptime_sec"] = d * 86400 + h * 3600 + mi * 60
     return out
+
+
+def parse_sys_status(output):
+    """`get system status` 출력 → {model, version, serial, hostname}.
+
+    형식 예:
+        Version: FortiGate-1100E v7.2.5,build1517,230330 (GA.F)
+        Serial-Number: FG1K1E0000000000
+        Hostname: FW-HQ-01
+    사용자 요구: 방화벽 현황 표에 모델명·버전을 이 명령 기준으로 표기.
+    """
+    out = {}
+    s = output or ""
+    m = re.search(r"^\s*Version:\s*(FortiGate[\w-]*|FortiWiFi[\w-]*|FGT[\w-]*)\s+"
+                  r"(v[\d.]+(?:,build\d+)?)", s, re.MULTILINE | re.IGNORECASE)
+    if m:
+        out["model"] = m.group(1)[:60]
+        out["version"] = m.group(2).split(",")[0][:40]
+    m = re.search(r"^\s*Serial-?Number:\s*(\S+)", s, re.MULTILINE | re.IGNORECASE)
+    if m:
+        out["serial"] = m.group(1)[:40]
+    m = re.search(r"^\s*Hostname:\s*(\S+)", s, re.MULTILINE | re.IGNORECASE)
+    if m:
+        out["hostname"] = m.group(1)[:100]
+    return out

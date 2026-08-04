@@ -290,6 +290,30 @@ def _fetch_ha(s, base, host):
         return None
 
 
+def _fetch_sysinfo(s, base, host):
+    """모델명·버전·시리얼(monitor/system/status) — SSH 없는 토큰 전용 장비 대비."""
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/monitor/system/status")
+        if r is None or r.status_code != 200:
+            return None
+        body = r.json()
+        res = body.get("results") or {}
+        out = {}
+        model = res.get("model_name") or body.get("model_name") or ""
+        model_num = res.get("model_number") or body.get("model_number") or ""
+        if model:
+            out["model"] = ("%s-%s" % (model, model_num)) if model_num else model
+        ver = body.get("version") or res.get("version") or ""
+        if ver:
+            out["version"] = str(ver).split(",")[0][:40]
+        serial = body.get("serial") or res.get("serial") or ""
+        if serial:
+            out["serial"] = str(serial)[:40]
+        return out or None
+    except Exception:
+        return None
+
+
 def parse_ipsec_tunnels(results):
     """monitor/vpn/ipsec 결과 → [{name, status, incoming_bytes, outgoing_bytes, peer}].
 
@@ -401,8 +425,9 @@ def collect(host, port=443, token="", username="", password="", verify_ssl=False
         # 대시보드용 부가 정보 — 실패해도 인터페이스/ARP 수집은 그대로 성공시킨다.
         vpn = _fetch_vpn(s, base, host)
         policy = _fetch_policy_stats(s, base, host)
+        sysinfo = _fetch_sysinfo(s, base, host)
         return {"interfaces": interfaces, "arp": arp, "ha": ha,
-                "vpn": vpn, "policy": policy}
+                "vpn": vpn, "policy": policy, "sysinfo": sysinfo}
     finally:
         # requests.Session 연결 풀 정리(자동수집 반복 시 핸들 누수 방지)
         try:

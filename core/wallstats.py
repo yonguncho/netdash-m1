@@ -183,11 +183,19 @@ def _firewall_stats(conn, db_path):
             _v, _p, _s = m.get("vpn") or {}, m.get("policy") or {}, m.get("sensors") or {}
             if m:      # 지표가 있는 장비만 카드로(빈 카드 금지 — 사용자 요구)
                 _tuns = _v.get("tunnels") or []
+                _lc = None
+                if m.get("model") or m.get("version"):
+                    try:
+                        from . import fortilifecycle
+                        _lc = fortilifecycle.lookup(m.get("model"), m.get("version"))
+                    except Exception:
+                        _lc = None
                 devices.append({
                     "id": f["id"], "name": f.get("name"), "host": f.get("host"),
                     "cpu": m.get("cpu_pct"), "mem": m.get("mem_pct"),
                     "disk": m.get("disk_pct"), "sessions": m.get("sessions"),
                     "level": m.get("level"), "version": m.get("version"),
+                    "model": m.get("model"), "lifecycle": _lc,
                     "uptime_sec": m.get("uptime_sec"), "ha_mode": m.get("ha_mode"),
                     "temp_c": _e.get("max_temp_c") or _s.get("max_temp_c"),
                     "psu_count": _s.get("psu_count"),

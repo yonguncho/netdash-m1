@@ -426,8 +426,16 @@ function renderFirewallTab(f) {
         "<tr><td class='fwc__k'>" + esc(k) + "</td><td" +
         (cls ? " class='" + cls + "'" : "") + ">" + val + "</td></tr>";
     }
+    var lc = d.lifecycle || {};
+    function lcTxt(e) {
+      if (!e || !e.status || e.status === "unknown") return "";
+      var cls = e.status === "expired" ? "wbad" : (e.status === "ok" ? "" : "wam");
+      return " <span class='" + cls + "'>· " + esc(e.message || "") + "</span>";
+    }
     var facts =
-      frow("펌웨어", d.version ? esc("v" + String(d.version).replace(/^v/, "")) : null) +
+      frow("모델", d.model ? esc(d.model) + lcTxt(lc.hw) : null) +
+      frow("펌웨어", d.version
+        ? esc("v" + String(d.version).replace(/^v/, "")) + lcTxt(lc.os) : null) +
       frow("가동 시간", d.uptime_sec ? Math.floor(d.uptime_sec / 86400) + "일" : null) +
       frow("HA", d.ha_mode && d.ha_mode !== "standalone" ? esc(d.ha_mode) : null) +
       frow("온도", d.temp_c !== null && d.temp_c !== undefined

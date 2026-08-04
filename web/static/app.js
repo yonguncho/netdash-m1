@@ -2050,131 +2050,49 @@ function _applySwSearch(list) {
   });
 }
 
-// ── 방화벽 모니터링 대시보드 ────────────────────────────────────────
-// 외부 차트 라이브러리를 쓰지 않는다(폐쇄망이라 CDN 불가). 막대는 CSS로 그린다.
-function _lvlColor(lvl) {
+// 사용률 막대(방화벽 상세보기 전용) — 값이 없으면 '-'로 두고 막대를 그리지 않는다.
+// (v6.25.0에서 방화벽 표의 대시보드를 걷어낼 때 실수로 같이 지워져 상세가 깨졌었다 —
+//  테스트가 잡음. 상세보기가 쓰는 함수이므로 여기 남긴다.)
+function _fwLvlColor(lvl) {
   return lvl === "critical" ? "#dc2626" : lvl === "warning" ? "#f59e0b" : "#16a34a";
 }
-function _pctLevel(p) {
-  if (p === null || p === undefined) return null;
-  return p >= 90 ? "critical" : p >= 80 ? "warning" : "normal";
-}
-
-// 사용률 막대 한 줄 — 값이 없으면 '-'로 두고 막대를 그리지 않는다(0%와 구분).
 function fwBar(label, pct, suffix) {
   if (pct === null || pct === undefined) {
     return "<div class='fw-tile__row'><b>" + escHtml(label) + "</b>" +
       "<div class='fw-bar'></div><span class='fw-tile__val'>-</span></div>";
   }
   var p = Math.max(0, Math.min(100, pct));
+  var lvl = pct >= 90 ? "critical" : pct >= 80 ? "warning" : "normal";
   return "<div class='fw-tile__row'><b>" + escHtml(label) + "</b>" +
     "<div class='fw-bar'><div class='fw-bar__fill' style='width:" + p + "%;" +
-    "background:" + _lvlColor(_pctLevel(pct)) + "'></div></div>" +
+    "background:" + _fwLvlColor(lvl) + "'></div></div>" +
     "<span class='fw-tile__val'>" + escHtml(String(pct)) + (suffix || "%") + "</span></div>";
 }
 
-// 장비 하나의 종합 등급 — 부하·온도·센서 알람 중 가장 나쁜 것을 따른다.
-function _fwLevel(f) {
-  var order = { normal: 0, warning: 1, critical: 2 };
-  var worst = null;
-  [f.metrics_level, f.temp_level, f.sensor_level].forEach(function (l) {
-    if (!l) return;
-    if (worst === null || order[l] > order[worst]) worst = l;
-  });
-  return worst;
+// 수명주기 배지 — 내장 표(작성 기준일 포함) 기반. 모르면 아무것도 안 붙인다.
+function lifeBadge(entry) {
+  if (!entry || !entry.status || entry.status === "unknown" || entry.status === "ok") return "";
+  var color = entry.status === "expired" ? "background:#fee2e2;color:#b91c1c"
+    : entry.status === "imminent" ? "background:#ffedd5;color:#c2410c"
+    : "background:#fef3c7;color:#b45309";           // eoes_passed
+  var label = entry.status === "expired" ? "지원 종료"
+    : entry.status === "imminent" ? "EOS 임박" : "EoES 지남";
+  return " <span class='status-badge' style='" + color + "' title='" +
+    escHtml(entry.message || "") + "'>" + label + "</span>";
 }
 
-function renderFirewallDashboard(fws) {
-  var box = document.getElementById("fw-dashboard");
-  var kpi = document.getElementById("fw-kpi");
-  var tiles = document.getElementById("fw-tiles");
-  if (!box || !kpi || !tiles) return;
-  // 수집된 지표가 하나도 없으면 빈 대시보드를 띄우지 않는다 — 자리만 차지한다.
-  var withData = (fws || []).filter(function (f) { return _fwLevel(f) !== null; });
-  if (!withData.length) { box.style.display = "none"; return; }
-  box.style.display = "";
-
-  var counts = { normal: 0, warning: 0, critical: 0 };
-  var vpnUp = 0, vpnTotal = 0, polTotal = 0, sessions = 0;
-  withData.forEach(function (f) {
-    counts[_fwLevel(f)] += 1;
-    if (f.vpn_total) { vpnTotal += f.vpn_total; vpnUp += (f.vpn_up || 0); }
-    if (f.policy_total) polTotal += f.policy_total;
-    if (f.sessions) sessions += f.sessions;
-  });
-
-  function card(num, label, cls, title) {
-    return "<div class='fw-kpi__card " + (cls || "") + "'" +
-      (title ? " title='" + escHtml(title) + "'" : "") + ">" +
-      "<div class='fw-kpi__num'>" + escHtml(String(num)) + "</div>" +
-      "<div class='fw-kpi__label'>" + escHtml(label) + "</div></div>";
+// 모델 셀 — get system status(SSH) 또는 REST에서 수집. 없으면 수집 안내.
+function fwModelCell(f) {
+  if (!f.fw_model) {
+    return "<span class='cell-none' title='SSH 계정 또는 REST 토큰으로 수집하면 get system status에서 채워집니다'>-</span>";
   }
-  kpi.innerHTML =
-    card((fws || []).length, "등록 방화벽") +
-    card(counts.normal, "정상", "fw-kpi--ok") +
-    card(counts.warning, "주의", "fw-kpi--warn", "사용률 80% 이상 또는 팬 정지") +
-    card(counts.critical, "위험", "fw-kpi--crit", "사용률 90% 이상 또는 장비 센서 알람") +
-    (vpnTotal ? card(vpnUp + "/" + vpnTotal, "VPN 터널 연결",
-                     vpnUp < vpnTotal ? "fw-kpi--warn" : "fw-kpi--ok") : "") +
-    (polTotal ? card(polTotal.toLocaleString(), "방화벽 정책") : "") +
-    (sessions ? card(sessions.toLocaleString(), "동시 세션") : "");
-
-  tiles.innerHTML = withData.map(function (f) {
-    var lvl = _fwLevel(f) || "unknown";
-    var chips = [];
-    if (f.temp_c !== null && f.temp_c !== undefined) {
-      chips.push("<span class='fw-chip fw-chip--" +
-        (f.temp_level === "critical" ? "crit" : f.temp_level === "warning" ? "warn" : "ok") +
-        "'>" + escHtml(String(f.temp_c)) + "°C</span>");
-    }
-    if (f.psu_count) {
-      chips.push("<span class='fw-chip " + (f.sensor_level === "critical" ? "fw-chip--crit" : "fw-chip--ok") +
-        "' title='전원 공급 장치'>PSU " + escHtml(String(f.psu_count)) + "</span>");
-    }
-    if (f.sensor_alarms && f.sensor_alarms.length) {
-      chips.push("<span class='fw-chip fw-chip--crit' title='" +
-        escHtml(f.sensor_alarms.join(", ")) + "'>센서 알람 " + f.sensor_alarms.length + "</span>");
-    }
-    if (f.vpn_total) {
-      chips.push("<span class='fw-chip " + (f.vpn_up < f.vpn_total ? "fw-chip--warn" : "fw-chip--ok") +
-        "'>VPN " + f.vpn_up + "/" + f.vpn_total + "</span>");
-    }
-    if (f.policy_total) {
-      chips.push("<span class='fw-chip' title='전체 정책 수" +
-        (f.policy_unused ? " · 히트 0건 " + f.policy_unused + "개" : "") + "'>정책 " +
-        escHtml(String(f.policy_total)) + "</span>");
-    }
-    if (f.ha_mode && f.ha_mode !== "standalone") {
-      chips.push("<span class='fw-chip'>HA " + escHtml(f.ha_mode) + "</span>");
-    }
-    return "<div class='fw-tile fw-tile--" + lvl + "' data-action='detail-fw' data-id='" + f.id + "'>" +
-      "<div class='fw-tile__head'><span class='fw-tile__name'>" + escHtml(f.name || "-") + "</span>" +
-      "<span class='fw-tile__host'>" + escHtml(f.host || "") + "</span></div>" +
-      fwBar("CPU", f.cpu_pct === undefined ? null : f.cpu_pct) +
-      fwBar("MEM", f.mem_pct === undefined ? null : f.mem_pct) +
-      fwBar("DISK", f.disk_pct === undefined ? null : f.disk_pct) +
-      (chips.length ? "<div class='fw-tile__chips'>" + chips.join("") + "</div>" : "") +
-      "</div>";
-  }).join("");
+  return escHtml(f.fw_model) + lifeBadge(f.lifecycle && f.lifecycle.hw);
 }
 
-// 방화벽 부하 셀 — SNMP(FORTINET-FORTIGATE-MIB)로 읽은 CPU·메모리·세션.
-function fwLoadCell(f) {
-  var cpu = (f.cpu_pct === undefined || f.cpu_pct === null) ? null : f.cpu_pct;
-  var mem = (f.mem_pct === undefined || f.mem_pct === null) ? null : f.mem_pct;
-  if (cpu === null && mem === null && (f.sessions === undefined || f.sessions === null)) {
-    return "<span class='cell-none' title='SNMP 상태 지표 없음 — 설정에서 SNMP 커뮤니티를 넣고 재수집하세요. " +
-      "FortiGate 전용 MIB이라 다른 벤더는 비어 있습니다'>-</span>";
-  }
-  var lvl = f.metrics_level || "normal";
-  var color = lvl === "critical" ? "#b91c1c" : lvl === "warning" ? "#b45309" : "#334155";
-  var parts = [];
-  if (cpu !== null) parts.push("CPU " + cpu + "%");
-  if (mem !== null) parts.push("MEM " + mem + "%");
-  var main = parts.join(" · ") || "-";
-  var sub = (f.sessions === undefined || f.sessions === null)
-    ? "" : "<div class='cell-sub'>세션 " + escHtml(String(f.sessions)) + "</div>";
-  return "<span style='color:" + color + ";font-weight:600'>" + escHtml(main) + "</span>" + sub;
+function fwVersionCell(f) {
+  if (!f.fw_version) return "<span class='cell-none'>-</span>";
+  return "<code>" + escHtml(f.fw_version) + "</code>" +
+    lifeBadge(f.lifecycle && f.lifecycle.os);
 }
 
 // 온도 셀 — SNMP(ENTITY-SENSOR-MIB)로 읽은 최고 센서 온도.
@@ -3179,9 +3097,6 @@ function loadFirewalls() {
 function renderFirewalls(firewalls) {
   var tbody = document.getElementById("firewall-table-body");
   if (!tbody) return;
-  // 대시보드는 검색·필터와 무관하게 '전체' 기준으로 그린다 —
-  // 검색어를 치는 동안 KPI 숫자가 흔들리면 현황판으로서 못 쓴다.
-  renderFirewallDashboard(firewalls || []);
   // 검색 필터(이름·벤더·호스트·위치)
   var q = ((document.getElementById("fw-search") || {}).value || "").trim().toLowerCase();
   if (q) {
@@ -3219,11 +3134,10 @@ function renderFirewalls(firewalls) {
       "<td>" + (f.manufacturer
         ? escHtml(f.manufacturer)
         : "<span class='cell-none' title='등록된 제품 정보로 제조사를 특정하지 못했습니다'>-</span>") + "</td>" +
-      "<td>" + escHtml(f.product || f.vendor || "-") + "</td>" +
+      "<td>" + fwModelCell(f) + "</td>" +
+      "<td>" + fwVersionCell(f) + "</td>" +
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
-      "<td>" + tempCell(f) + "</td>" +      // 스위치와 같은 SNMP 경로 · 같은 셀 함수
-      "<td>" + fwLoadCell(f) + "</td>" +
       // 이중화(동일 VIP) 대기 장비는 개별 수집이 실패할 수밖에 없다 →
       // 짝이 정상이면 정상으로 표기하고 근거를 툴팁에 남긴다.
       "<td>" + (f.ha_via

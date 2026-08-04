@@ -10,7 +10,33 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.24.0) — 사용자 지적 5건: 일괄수집 버그·SNMP CPU/DISK·정돈·팝업
+## 작업 중 (v6.25.0) — 방화벽 현황 단순화 + get sys status + EOS/EoES
+
+사용자 지시: 방화벽 현황은 **리스트만**(상단 통계 제거 — 관제 전담, 부하·온도
+컬럼 제거), get sys status 기준 **모델·버전** 컬럼. 보유 모델 1000D/1500D/1100E
++ FortiOS 6.0~7.4 수명주기 조사.
+
+- **수명주기 조사 결과(2026-08-04 기준, `core/fortilifecycle.py` 내장)**:
+  - FG-1000D: EOO 2023-04-16 / EOS 2028-04-16 (Fortinet 공식 커뮤니티 확인)
+  - FG-1500D: **EOS 2025-04-15 — 이미 지원 종료**(2개 출처 수렴, 일부 자료
+    2026-12 표기 상충 → confidence에 명시)
+  - FG-1100E: 수명주기 미발표(지원 중)
+  - FortiOS: 6.0~7.0 **EOS 경과**(7.0은 2025-09-30), **7.2 EOS 2026-09-30 임박**,
+    7.4 EoES 2026-05-11 지남/EOS 2027-11-11.
+  - 표는 낡는다 — `AS_OF` 기준일을 조회 결과에 항상 포함.
+- `get system status` 수집: SSH 배치에 추가 + `parse_sys_status`(모델/버전/시리얼/
+  호스트네임). REST `monitor/system/status` 폴백(`_fetch_sysinfo`). 표기 우선순위:
+  SSH get sys status > REST > SNMP(사용자 지정 기준이라 SSH가 덮는다).
+- 방화벽 현황: fw-dashboard 제거, 제품·온도·부하 컬럼 제거 → 모델·버전 컬럼
+  (+수명주기 배지: 지원 종료/EOS 임박/EoES 지남, 툴팁에 날짜·기준일).
+- 관제 방화벽 카드에도 모델 + 수명주기 문구.
+- **테스트가 잡은 내 실수**: 대시보드 블록 삭제 때 상세보기가 쓰는 `fwBar`까지
+  지워짐(호출 시점 에러라 문법 검사 무통과) → 복구.
+
+**남은 것(합의된 다음 단계)**: 시계열(metrics_history+폴러+uPlot 번들) — 사용자
+uPlot 승인·폴링 주기 답 대기. 라이선스(REST monitor/license/status)·객체 수.
+
+## v6.24.0 — 사용자 지적 5건: 일괄수집 버그·SNMP CPU/DISK·정돈·팝업
 
 - **일괄 수집 "수집 오류" 버그** — app.js `_fwRunBulk`의 `.then` 핸들러가 **중복**
   돼 있었다(5559-5560행). 두 번째가 파싱된 객체에 다시 `.json()` → TypeError →

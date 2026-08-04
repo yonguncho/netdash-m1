@@ -132,7 +132,8 @@ def test_ui_shows_manufacturer_column():
     root = Path(__file__).parent.parent
     js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (root / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert ">제조사</th>" in html and ">제품</th>" in html
+    # v6.25.0: 방화벽 표의 '제품' 컬럼은 get system status 기반 '모델·버전'으로 대체
+    assert ">제조사</th>" in html and ">모델</th>" in html
     assert "f.manufacturer" in js
     # 스위치 표도 서버 판별을 우선해야 한다(판별 규칙이 둘로 갈라지지 않게)
     assert "sw.manufacturer || _vendorLabel(sw.vendor)" in js

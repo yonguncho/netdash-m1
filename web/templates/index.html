@@ -497,26 +497,20 @@
         </div>
       </div>
       <div id="firewall-progress" style="margin:6px 0"></div>
-      <!-- 모니터링 대시보드 — 요약 지표 + 장비별 상태 타일(수집된 값이 있을 때만 표시) -->
-      <div id="fw-dashboard" style="display:none">
-        <div id="fw-kpi" class="fw-kpi"></div>
-        <div id="fw-tiles" class="fw-tiles"></div>
-      </div>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr><th style="width:34px;text-align:center"><input type="checkbox" id="fw-check-all" title="전체 선택"></th>
                 <th>이름</th>
                 <th title="제조사(벤더사). 등록된 제품 정보로 판별합니다 — 예: FortiGate → Fortinet">제조사</th>
-                <th title="제품 계열(FortiGate, PAN-OS 등)">제품</th>
+                <th title="get system status에서 수집한 모델명. 지원 종료(EOS) 모델은 배지로 표시됩니다">모델</th>
+                <th title="get system status에서 수집한 펌웨어 버전. 지원 종료된 FortiOS 브랜치는 배지로 표시됩니다">버전</th>
                 <th>IP</th><th>위치</th>
-                <th title="SNMP로 읽은 최고 센서 온도(ENTITY-SENSOR-MIB). 설정에서 SNMP 커뮤니티를 넣고 재수집하면 채워집니다">온도</th>
-                <th title="SNMP로 읽은 CPU·메모리 사용률과 세션 수(FORTINET-FORTIGATE-MIB). FortiGate 전용입니다">부하</th>
                 <th>상태</th><th>연결 상태</th>
                 <th title="수집 · 상세 · 수정 · 진단 · SNMP 확인 · SSH 터미널 · 삭제">작업</th></tr>
           </thead>
           <tbody id="firewall-table-body">
-            <tr><td colspan="11" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
+            <tr><td colspan="10" style="color:#64748b">등록된 방화벽이 없습니다. '+ 방화벽 추가'로 등록하세요.</td></tr>
           </tbody>
         </table>
       </div>

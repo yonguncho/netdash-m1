@@ -537,6 +537,9 @@ def merge_fw_extra(db_path, fw, collected, cred=None):
         v = (collected or {}).get(key)
         if v:
             extra[key] = v
+    # 모델·버전(REST monitor/system/status) — SSH의 get system status가 있으면
+    # 그쪽이 이겨야 하므로(사용자 지정 기준) extra가 아니라 '빈 곳 채움'으로 합류.
+    sysinfo = (collected or {}).get("sysinfo") or {}
 
     cred = cred or {}
     user, pw = cred.get("username", ""), cred.get("password", "")
@@ -559,9 +562,15 @@ def merge_fw_extra(db_path, fw, collected, cred=None):
     except Exception:
         cur = {}
     cur.update(extra)
-    # get sys perf status(SSH) — SNMP가 이미 채운 값은 그대로 두고 빈 곳만 채운다.
-    # SNMP 미설정 환경에서는 CPU·메모리·세션이 이 경로로 들어온다.
+    # get sys status(SSH)의 model/version은 표기 기준이라 항상 덮는다(사용자 지정).
+    # 그 외(perf 지표)는 SNMP가 이미 채운 값을 그대로 두고 빈 곳만 채운다.
+    for k in ("model", "version", "serial", "hostname"):
+        if perf.get(k):
+            cur[k] = perf.pop(k)
     for k, v in perf.items():
+        if cur.get(k) is None:
+            cur[k] = v
+    for k, v in sysinfo.items():
         if cur.get(k) is None:
             cur[k] = v
     if any(cur.get(k) is not None for k in ("cpu_pct", "mem_pct", "disk_pct")):

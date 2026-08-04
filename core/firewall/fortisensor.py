@@ -144,8 +144,11 @@ def collect_ssh_all(host, username, password, port=22, timeout=20):
     """
     from . import fortiperf
     raw = _ssh_run(host, username, password,
-                   ["execute sensor list", "get system performance status"],
+                   ["execute sensor list", "get system performance status",
+                    "get system status"],
                    port=port, timeout=timeout)
     sensors = summarize(parse_sensor_list(raw.get("execute sensor list", "")))
     perf = fortiperf.parse_perf_status(raw.get("get system performance status", ""))
+    # 모델·정식 버전 문자열은 get system status가 정확하다(사용자 요구 — 표에 표기)
+    perf.update(fortiperf.parse_sys_status(raw.get("get system status", "")))
     return {"sensors": sensors if sensors.get("sensors") else None, "perf": perf}
