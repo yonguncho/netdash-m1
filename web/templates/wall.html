@@ -22,7 +22,21 @@
     <div class="tile tile--warn"><div class="tile__num" id="t-unack">-</div><div class="tile__label">미확인 알람</div></div>
   </section>
 
-  <section id="wall-problems" class="wall-problems"></section>
+  <!-- 통합 대시보드 탭 — 요약(문제 목록)은 그대로 두고, 장비 종류별 통계를 더한다.
+       기존 관제는 '무엇이 고장났나'만 보여줘서 '전체가 어떤 상태인가'를 알 수 없었다. -->
+  <nav class="wall-tabs" id="wall-tabs">
+    <button class="wall-tab wall-tab--on" data-wtab="summary">요약 · 장애</button>
+    <button class="wall-tab" data-wtab="switch">스위치</button>
+    <button class="wall-tab" data-wtab="firewall">방화벽</button>
+    <button class="wall-tab" data-wtab="facility">설비</button>
+  </nav>
+
+  <section id="wtab-summary" class="wall-pane wall-pane--on">
+    <div id="wall-problems" class="wall-problems"></div>
+  </section>
+  <section id="wtab-switch" class="wall-pane"></section>
+  <section id="wtab-firewall" class="wall-pane"></section>
+  <section id="wtab-facility" class="wall-pane"></section>
 
   <footer class="wall-ticker">
     <div id="wall-events" class="wall-ticker__inner"></div>

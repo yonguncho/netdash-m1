@@ -3185,6 +3185,17 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/wall/stats", methods=["GET"])
+    def wall_stats():
+        """관제 통합 대시보드 통계(스위치·방화벽·설비 탭 공용)."""
+        try:
+            from core import wallstats
+            return jsonify(wallstats.build(db_path))
+        except Exception as e:
+            log_event("error", "wall_stats_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/firewalls/<int:fw_id>/snmp-probe", methods=["POST"])
     @rate_limit("fw_snmp_probe", max_requests=10, window_seconds=60)
     def firewall_snmp_probe(fw_id):

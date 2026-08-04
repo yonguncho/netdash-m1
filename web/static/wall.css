@@ -114,3 +114,53 @@ body {
 }
 .wall-ticker__inner { display: flex; gap: 40px; white-space: nowrap; font-size: 14px; color: #94a3b8; }
 .wall-ticker__inner b { color: #e2e8f0; }
+
+/* ── 관제 통합 대시보드(탭 + 차트) ────────────────────────────────
+   외부 차트 라이브러리 없이 SVG 도넛 + CSS 막대로 그린다(폐쇄망 = CDN 불가). */
+.wall-tabs { display:flex; gap:6px; padding:0 16px; margin-top:10px; flex-wrap:wrap; }
+.wall-tab {
+  background:#1e293b; color:#cbd5e1; border:1px solid #334155; cursor:pointer;
+  padding:7px 16px; border-radius:6px 6px 0 0; font-size:14px; font-weight:600;
+}
+.wall-tab:hover { color:#f8fafc; }
+.wall-tab--on { background:#0f172a; color:#f8fafc; border-bottom-color:#0f172a; }
+
+.wall-pane { display:none; padding:12px 16px 4px; }
+.wall-pane--on { display:block; }
+
+.wkpi { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+.wkpi__c {
+  flex:1 1 140px; min-width:140px; background:#1e293b; border:1px solid #334155;
+  border-radius:8px; padding:10px 14px;
+}
+.wkpi__n { font-size:26px; font-weight:800; line-height:1.1; }
+.wkpi__l { font-size:12px; color:#94a3b8; margin-top:3px; }
+
+.wgrid { display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); }
+.wcard { background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px 14px; }
+.wcard--wide { grid-column:1 / -1; }
+.wcard__t { margin:0 0 10px; font-size:13px; color:#e2e8f0; font-weight:700; }
+
+.wchart { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.wdonut { width:130px; height:130px; flex:none; }
+.wdonut__num { fill:#f8fafc; font-size:22px; font-weight:800; }
+.wdonut__lbl { fill:#94a3b8; font-size:11px; }
+.wlegend { font-size:12px; color:#cbd5e1; }
+.wl-item { display:flex; align-items:center; gap:6px; margin:3px 0; }
+.wl-dot { width:10px; height:10px; border-radius:2px; display:inline-block; flex:none; }
+
+.wbars { display:flex; flex-direction:column; gap:6px; }
+.wbar { display:flex; align-items:center; gap:8px; font-size:12px; color:#cbd5e1; }
+.wbar__name { width:120px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wbar__track { flex:1; height:9px; background:#0f172a; border-radius:5px; overflow:hidden; }
+.wbar__fill { display:block; height:100%; border-radius:5px; }
+.wbar__val { width:78px; text-align:right; flex:none; color:#e2e8f0; font-weight:600; }
+
+.wtable { width:100%; border-collapse:collapse; font-size:12px; color:#cbd5e1; }
+.wtable th, .wtable td { padding:6px 8px; border-bottom:1px solid #334155; text-align:left; }
+.wtable th { color:#94a3b8; font-weight:600; }
+.wmini { display:inline-block; width:56px; height:8px; background:#0f172a;
+         border-radius:4px; overflow:hidden; vertical-align:middle; margin-right:5px; }
+.wmini__f { display:block; height:100%; border-radius:4px; }
+.wdim { color:#64748b; font-size:11px; }
+.wnone { color:#64748b; font-size:13px; margin:8px 0; }
