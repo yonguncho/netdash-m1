@@ -533,7 +533,7 @@ def merge_fw_extra(db_path, fw, collected, cred=None):
     if (fw or {}).get("vendor") != "fortigate":
         return None
     extra = {}
-    for key in ("vpn", "policy"):
+    for key in ("vpn", "policy", "license", "objects"):
         v = (collected or {}).get(key)
         if v:
             extra[key] = v

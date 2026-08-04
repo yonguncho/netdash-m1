@@ -52,6 +52,15 @@ def seed(db_path):
                     {"name": "BR-JEJU-01", "status": "up", "peer": "203.0.113.30"},
                     {"name": "BR-BUSAN-02", "status": "down", "peer": "203.0.113.44"}]},
         "policy": {"total": 412, "proxy_total": 31, "unused": 37, "disabled": 9},
+        "objects": {"address": 214, "addrgrp": 18, "service": 66, "vip": 9,
+                    "ippool": 4, "total": 311},
+        "license": [
+            {"key": "forticare_hardware", "name": "FortiCare 하드웨어",
+             "status": "licensed", "expires": "2026-08-17"},
+            {"key": "antivirus", "name": "안티바이러스", "status": "licensed",
+             "expires": "2027-03-01"},
+            {"key": "ips", "name": "IPS", "status": "expired",
+             "expires": "2026-05-01"}],
         "sensors": {"alarms": [], "psu_count": 2, "max_temp_c": 47},
     })
     db.save_device_metrics(db_path, "firewall", fws[1]["id"], {

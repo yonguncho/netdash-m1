@@ -3284,13 +3284,33 @@ function fwStatusHtml(fw, env) {
   if (vpn.ssl_users) facts.push(["SSL VPN 접속자", vpn.ssl_users]);
   var pol = m.policy || {};
   if (pol.total !== undefined) facts.push(["방화벽 정책", pol.total + "개"]);
+  if (pol.proxy_total !== undefined) facts.push(["Proxy 정책", pol.proxy_total + "개"]);
   if (pol.unused !== undefined) facts.push(["히트 0건 정책", pol.unused + "개"]);
   if (pol.disabled !== undefined) facts.push(["비활성 정책", pol.disabled + "개"]);
+  var obj = m.objects || {};
+  if (obj.total) {
+    facts.push(["객체", obj.total + "개 (주소 " + (obj.address || 0) + " · 그룹 " +
+      (obj.addrgrp || 0) + " · 서비스 " + (obj.service || 0) + " · VIP " +
+      (obj.vip || 0) + ")"]);
+  }
   if (facts.length) {
     H += "<table class='data-table' style='margin-top:10px;max-width:520px'><tbody>" +
       facts.map(function (f) {
         return "<tr><td style='width:150px;color:#475569'>" + escHtml(f[0]) +
           "</td><td><b>" + escHtml(String(f[1])) + "</b></td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  // 라이선스 — FortiGuard 구독·지원계약(수집된 장비만, 만료일 표기)
+  if (m.license && m.license.length) {
+    H += "<h4 style='margin:14px 0 6px'>라이선스</h4><table class='data-table' style='max-width:520px'>" +
+      "<thead><tr><th>구독</th><th>만료일</th><th>상태</th></tr></thead><tbody>" +
+      m.license.map(function (l) {
+        var st = l.status === "expired"
+          ? "<span class='status-badge status-badge--err'>만료</span>"
+          : "<span class='status-badge status-badge--ok'>정상</span>";
+        return "<tr><td>" + escHtml(l.name || "-") + "</td><td>" +
+          escHtml(l.expires || "-") + "</td><td>" + st + "</td></tr>";
       }).join("") + "</tbody></table>";
   }
 

@@ -170,6 +170,23 @@ def _firewall_stats(conn, db_path):
     # 장비별 상세 목록 — "어느 방화벽이"에 답하기 위한 재료.
     # 수집 상태(실패 사유 포함) / 정책 수(Firewall·Proxy) / VPN 터널 이름별 상태.
     fw_status_list, policy_rows, vpn_rows, devices = [], [], [], []
+    license_rows, objects_rows = [], []
+    import datetime as _dt
+    _today = _dt.date.today()
+
+    def _lic_level(expires, status):
+        """만료일 → expired / imminent(90일) / ok."""
+        if status == "expired":
+            return "expired"
+        if not expires:
+            return "ok"
+        try:
+            days = (_dt.date.fromisoformat(expires) - _today).days
+        except ValueError:
+            return "ok"
+        if days < 0:
+            return "expired"
+        return "imminent" if days <= 90 else "ok"
     try:
         env_map = db.get_device_env_map(db_path, "firewall") or {}
         for f in db.list_firewalls(db_path):
@@ -213,6 +230,15 @@ def _firewall_stats(conn, db_path):
                     "proxy_total": p.get("proxy_total"),
                     "unused": p.get("unused"), "disabled": p.get("disabled")})
                 policy["proxy_total"] = (policy.get("proxy_total") or 0) + (p.get("proxy_total") or 0)
+            # 라이선스 — 방화벽별 구독 목록(만료/임박 판정 포함)
+            for lic in (m.get("license") or []):
+                license_rows.append({
+                    "fw": f.get("name"), "name": lic.get("name"),
+                    "expires": lic.get("expires"),
+                    "level": _lic_level(lic.get("expires"), lic.get("status"))})
+            obj = m.get("objects") or {}
+            if obj.get("total"):
+                objects_rows.append(dict(obj, fw=f.get("name")))
             v = m.get("vpn") or {}
             tuns = v.get("tunnels") or []
             if tuns:
@@ -228,7 +254,14 @@ def _firewall_stats(conn, db_path):
             "reach": reach, "interfaces": ifaces, "vpn": vpn, "policy": policy,
             "sensors": sensors, "load": load, "temps": temps[:8],
             "fw_status_list": fw_status_list, "policy_rows": policy_rows,
-            "vpn_rows": vpn_rows, "devices": devices}
+            "vpn_rows": vpn_rows, "devices": devices,
+            "license_rows": sorted(license_rows,
+                                   key=lambda x: ({"expired": 0, "imminent": 1,
+                                                   "ok": 2}[x["level"]],
+                                                  x.get("expires") or "9999")),
+            "license_bad": sum(1 for x in license_rows
+                               if x["level"] in ("expired", "imminent")),
+            "objects_rows": objects_rows}
 
 
 def _facility_stats(conn):

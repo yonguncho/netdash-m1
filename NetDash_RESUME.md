@@ -10,7 +10,21 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.26.0) — 시계열: 이력 테이블 + 폴러 + uPlot 번들 (사용자 승인)
+## 작업 중 (v6.27.0) — 라이선스 만료일 + 객체 수 (합의된 마지막 항목)
+
+- REST 확장: `_fetch_license`(monitor/license/status → parse_license_status:
+  forticare 중첩+최상위 구독, 미보유 제외, epoch→ISO) + `_fetch_objects`
+  (address/addrgrp/service/service_group/vip/ippool — format=name으로 개수만).
+- merge_fw_extra extra 키에 license/objects 합류 → metrics_json 저장.
+- wallstats: license_rows(만료→임박(90일)→정상 정렬), license_bad(KPI),
+  objects_rows.
+- 관제 방화벽 탭: KPI '라이선스 만료·임박', 정책 표에 '객체' 열(툴팁에 내역),
+  라이선스 카드(전 방화벽 합본, 만료·임박 우선). 상세(fwStatusHtml)에도
+  라이선스 표 + 객체 facts.
+- **실화면 검증이 잡은 결함**: objByFw 정의를 사용처(polTable) 뒤에 삽입해
+  렌더 전체가 죽음(콘솔 오류로 발견 — pageerror 아님) → 정의 순서 수정.
+
+## v6.26.0 — 시계열: 이력 테이블 + 폴러 + uPlot 번들
 
 - `metrics_history` 테이블 — kind(firewall/switch/facility/ports)별 시각 점.
   30일 보존, 폴러가 하루 1회 정리.

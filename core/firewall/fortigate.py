@@ -314,6 +314,105 @@ def _fetch_sysinfo(s, base, host):
         return None
 
 
+# 라이선스 구독 키 → 한글 표기(모르는 키는 원문 그대로)
+_LIC_NAMES = {
+    "antivirus": "안티바이러스", "ips": "IPS", "web_filtering": "웹 필터",
+    "antispam": "안티스팸", "appctrl": "앱 컨트롤", "outbreak_prevention": "아웃브레이크 방지",
+    "forticare_hardware": "FortiCare 하드웨어", "forticare_enhanced": "FortiCare 지원",
+    "security_rating": "보안 등급", "sdwan_network_monitor": "SD-WAN 모니터",
+    "vdom": "VDOM", "fortiguard": "FortiGuard",
+}
+
+
+def parse_license_status(results):
+    """monitor/license/status 결과 → [{key, name, status, expires(ISO)|None}].
+
+    버전마다 구조가 다르다(항목이 최상위 dict거나 forticare.support 아래 중첩).
+    미보유(unlicensed/no_support) 항목은 뺀다 — 안 쓰는 구독을 나열하면 잡음이고,
+    관제에서 봐야 할 것은 '갖고 있는데 만료가 다가오는 것'이다.
+    """
+    import datetime as _dt
+
+    def _iso(epoch):
+        try:
+            e = int(epoch)
+            if e <= 0:
+                return None
+            return _dt.date.fromtimestamp(e).isoformat()
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    out = []
+
+    def _add(key, ent):
+        if not isinstance(ent, dict):
+            return
+        status = str(ent.get("status") or "").lower()
+        expires = _iso(ent.get("expires"))
+        if status in ("no_license", "no_support", "unlicensed", "free_license", "unknown", ""):
+            return                      # 미보유 — 표기 대상 아님
+        out.append({"key": key, "name": _LIC_NAMES.get(key, key),
+                    "status": "expired" if status == "expired" else "licensed",
+                    "expires": expires})
+
+    for key, ent in (results or {}).items() if isinstance(results, dict) else []:
+        if key == "forticare" and isinstance(ent, dict):
+            sup = ent.get("support") or {}
+            for sub in ("hardware", "enhanced"):
+                _add("forticare_%s" % sub, sup.get(sub))
+            continue
+        _add(key, ent)
+    return out
+
+
+def _fetch_license(s, base, host):
+    """구독 라이선스 상태(monitor/license/status). 실패하면 None."""
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/monitor/license/status")
+        if r is None or r.status_code != 200:
+            return None
+        lic = parse_license_status(r.json().get("results"))
+        if lic:
+            logger.info("fortigate_license host=%s entries=%d", host, len(lic))
+        return lic or None
+    except Exception:
+        return None
+
+
+# 객체 수 집계 대상 — (표기, cmdb 경로)
+_OBJECT_PATHS = (
+    ("address", "firewall/address"),
+    ("addrgrp", "firewall/addrgrp"),
+    ("service", "firewall.service/custom"),
+    ("service_group", "firewall.service/group"),
+    ("vip", "firewall/vip"),
+    ("ippool", "firewall/ippool"),
+)
+
+
+def _fetch_objects(s, base, host):
+    """방화벽 객체 수(주소·주소그룹·서비스·VIP·IP풀). 실패 항목은 뺀다.
+
+    format=name으로 이름만 받아 응답을 줄인다 — 필요한 것은 개수뿐인데
+    객체 수천 개의 전체 본문을 받으면 낭비다.
+    """
+    out = {}
+    for key, path in _OBJECT_PATHS:
+        try:
+            r = _get_with_retry(s, f"{base}/api/v2/cmdb/{path}?format=name")
+            if r is None or r.status_code != 200:
+                continue
+            res = r.json().get("results")
+            if isinstance(res, list):
+                out[key] = len(res)
+        except Exception:
+            continue
+    if out:
+        out["total"] = sum(v for k, v in out.items() if k != "total")
+        logger.info("fortigate_objects host=%s total=%d", host, out["total"])
+    return out or None
+
+
 def parse_ipsec_tunnels(results):
     """monitor/vpn/ipsec 결과 → [{name, status, incoming_bytes, outgoing_bytes, peer}].
 
@@ -426,8 +525,11 @@ def collect(host, port=443, token="", username="", password="", verify_ssl=False
         vpn = _fetch_vpn(s, base, host)
         policy = _fetch_policy_stats(s, base, host)
         sysinfo = _fetch_sysinfo(s, base, host)
+        license_ = _fetch_license(s, base, host)
+        objects = _fetch_objects(s, base, host)
         return {"interfaces": interfaces, "arp": arp, "ha": ha,
-                "vpn": vpn, "policy": policy, "sysinfo": sysinfo}
+                "vpn": vpn, "policy": policy, "sysinfo": sysinfo,
+                "license": license_, "objects": objects}
     finally:
         # requests.Session 연결 풀 정리(자동수집 반복 시 핸들 누수 방지)
         try:

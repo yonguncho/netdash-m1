@@ -523,21 +523,51 @@ function renderFirewallTab(f) {
   /* 정책 구성 — 도넛 + 전 장비 표(지표 없는 장비도 사유와 함께) */
   var polById = {};
   (f.policy_rows || []).forEach(function (r) { polById[r.name] = r; });
-  var polTable = "<table class='wtable'><thead><tr><th>방화벽</th><th>Firewall 정책</th><th>Proxy 정책</th><th>히트 0건</th><th>비활성</th></tr></thead><tbody>" +
+  /* 객체 수 — 방화벽별 주소/서비스/VIP 등(수집된 장비만).
+     polTable이 참조하므로 반드시 그보다 먼저 정의(정의를 뒤에 뒀다가
+     '오류 없음+빈 표'가 아니라 렌더 전체가 죽는 걸 실화면 검증에서 잡았다). */
+  var objByFw = {};
+  (f.objects_rows || []).forEach(function (o) { objByFw[o.fw] = o; });
+  var polTable = "<table class='wtable'><thead><tr><th>방화벽</th><th>Firewall 정책</th><th>Proxy 정책</th><th>히트 0건</th><th>비활성</th><th title='주소·주소그룹·서비스·VIP·IP풀 객체 합계'>객체</th></tr></thead><tbody>" +
     stList.map(function (x) {
       var r = polById[x.name];
+      var ob = objByFw[x.name];
+      var objCell = ob
+        ? "<td title='주소 " + _n(ob.address) + " · 그룹 " + _n(ob.addrgrp) +
+          " · 서비스 " + _n(ob.service) + " · VIP " + _n(ob.vip) + "'>" +
+          _n(ob.total) + "</td>"
+        : "<td class='wdim'>-</td>";
       if (!r) {
         return "<tr><td><b>" + esc(x.name || "-") + "</b></td>" +
-          "<td colspan='4' class='wdim'>" + esc(whyEmpty(x)) + "</td></tr>";
+          "<td colspan='5' class='wdim'>" + esc(whyEmpty(x)) + "</td></tr>";
       }
       return "<tr><td><b>" + esc(r.name) + "</b></td><td><b>" + _n(r.total) + "</b></td><td>" +
         _n(r.proxy_total) + "</td><td class='wam'>" + _n(r.unused) + "</td><td>" +
-        _n(r.disabled) + "</td></tr>";
+        _n(r.disabled) + "</td>" + objCell + "</tr>";
     }).join("") +
     ((f.policy_rows || []).length > 1
       ? "<tr class='wsum'><td>합계</td><td><b>" + _n(pol.total) + "</b></td><td><b>" +
         _n(pol.proxy_total) + "</b></td><td>" + _n(pol.unused) + "</td><td>" +
-        _n(pol.disabled) + "</td></tr>" : "") + "</tbody></table>";
+        _n(pol.disabled) + "</td><td>" +
+        _n((f.objects_rows || []).reduce(function (a, o) { return a + (o.total || 0); }, 0)) +
+        "</td></tr>" : "") + "</tbody></table>";
+  /* 라이선스 — 만료·임박 우선 정렬 목록(전 방화벽 합본) */
+  var licRows = f.license_rows || [];
+  var licTable = licRows.length
+    ? "<table class='wtable'><thead><tr><th>방화벽</th><th>구독</th><th>만료일</th><th>상태</th></tr></thead><tbody>" +
+      licRows.map(function (l) {
+        var badge = l.level === "expired"
+          ? "<span class='wst wst--bad'>만료</span>"
+          : l.level === "imminent"
+            ? "<span class='wst' style='background:rgba(251,191,36,.15);color:#fcd34d'>임박</span>"
+            : "<span class='wst wst--ok'>정상</span>";
+        return "<tr><td><b>" + esc(l.fw || "-") + "</b></td><td>" + esc(l.name || "-") +
+          "</td><td>" + esc(l.expires || "-") + "</td><td>" + badge + "</td></tr>";
+      }).join("") + "</tbody></table>"
+    : "<p class='wnone'>라이선스 정보가 수집된 방화벽이 없습니다. REST 토큰/계정으로 재수집하면 채워집니다.</p>";
+  var licCard = "<div class='wcard wcard--6'><h3>라이선스" +
+    "<span class='hint'>FortiGuard 구독·지원계약 — 만료·임박 우선</span></h3>" + licTable + "</div>";
+
   var polCard = "<div class='wcard wcard--6'><h3>정책 구성" +
     "<span class='hint'>방화벽별 Firewall / Proxy 정책 수</span></h3>" +
     ((pol.total || 0) > 0
@@ -584,7 +614,9 @@ function renderFirewallTab(f) {
         color: v.down ? "#fbbf24" : "#34d399" },
       { num: _n(pol.total), label: "총 방화벽 정책",
         detail: pol.proxy_total ? "Proxy 정책 " + _n(pol.proxy_total) : "", color: "#a78bfa" },
-      { num: _n(sess), label: "동시 세션 합계", color: "#fbbf24" }
+      { num: _n(sess), label: "동시 세션 합계", color: "#fbbf24" },
+      { num: _n(f.license_bad || 0), label: "라이선스 만료·임박",
+        color: f.license_bad ? "#fb7185" : "#34d399" }
     ]) +
     "<div class='wgrid'>" +
     "<div class='wcard wcard--6'><h3>세션 추이" + rangeBtns() +
@@ -594,7 +626,7 @@ function renderFirewallTab(f) {
       "</span></h3><div id='ch-fw-cpu' class='wchartbox'></div></div>" +
     "</div>" +
     (cards ? "<div class='fwrow'>" + cards + "</div>" : "") +
-    "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + "</div>";
+    "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + licCard + "</div>";
 }
 
 /* ── 설비 탭 ── */
