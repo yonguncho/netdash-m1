@@ -166,9 +166,42 @@ def _firewall_stats(conn, db_path):
     reach["unknown"] = max(0, total - reach["up"] - reach["down"])
 
     vpn["down"] = max(0, vpn["tunnels"] - vpn["up"])
+
+    # 장비별 상세 목록 — "어느 방화벽이"에 답하기 위한 재료.
+    # 수집 상태(실패 사유 포함) / 정책 수(Firewall·Proxy) / VPN 터널 이름별 상태.
+    fw_status_list, policy_rows, vpn_rows = [], [], []
+    try:
+        env_map = db.get_device_env_map(db_path, "firewall") or {}
+        for f in db.list_firewalls(db_path):
+            fw_status_list.append({
+                "name": f.get("name"), "host": f.get("host"),
+                "status": f.get("status") or "new",
+                "last_error": (f.get("last_error") or "")[:120],
+                "last_collected": f.get("last_collected")})
+            m = (env_map.get(f["id"]) or {}).get("metrics") or {}
+            p = m.get("policy") or {}
+            if p.get("total") is not None:
+                policy_rows.append({
+                    "name": f.get("name"), "total": p.get("total") or 0,
+                    "proxy_total": p.get("proxy_total"),
+                    "unused": p.get("unused"), "disabled": p.get("disabled")})
+                policy["proxy_total"] = (policy.get("proxy_total") or 0) + (p.get("proxy_total") or 0)
+            v = m.get("vpn") or {}
+            tuns = v.get("tunnels") or []
+            if tuns:
+                vpn_rows.append({
+                    "name": f.get("name"),
+                    "up": [t.get("name") for t in tuns if t.get("status") == "up"][:30],
+                    "down": [{"name": t.get("name"), "peer": t.get("peer")}
+                             for t in tuns if t.get("status") != "up"][:30]})
+    except Exception:
+        pass
+
     return {"total": total, "by_status": by_status, "by_vendor": by_vendor,
             "reach": reach, "interfaces": ifaces, "vpn": vpn, "policy": policy,
-            "sensors": sensors, "load": load, "temps": temps[:8]}
+            "sensors": sensors, "load": load, "temps": temps[:8],
+            "fw_status_list": fw_status_list, "policy_rows": policy_rows,
+            "vpn_rows": vpn_rows}
 
 
 def _facility_stats(conn):
@@ -190,9 +223,24 @@ def _facility_stats(conn):
     by_switch = _counter(_rows(conn,
         "SELECT IFNULL(switch_name,'') AS k, COUNT(*) AS c FROM facility_hosts "
         "WHERE IFNULL(switch_name,'')<>'' GROUP BY k ORDER BY c DESC LIMIT 10"))
+    # 최근 7일 연결 실패 다발 스위치 — 이벤트의 IP를 설비의 연결 스위치로 대조.
+    # 특정 스위치 아래 설비만 자주 끊기면 스위치·포트·전원 쪽 문제를 의심할 수 있다.
+    offline_by_switch = _counter(_rows(conn,
+        "SELECT IFNULL(f.switch_name,'') AS k, COUNT(*) AS c "
+        "FROM device_events e JOIN facility_hosts f ON f.ip = e.ip "
+        "WHERE e.kind='device_offline' AND IFNULL(f.switch_name,'')<>'' "
+        "  AND e.ts >= datetime('now','localtime','-7 days') "
+        "GROUP BY k ORDER BY c DESC LIMIT 10"))
+    offline_24h = 0
+    r24 = _rows(conn, "SELECT COUNT(*) AS c FROM device_events "
+                      "WHERE kind='device_offline' "
+                      "  AND ts >= datetime('now','localtime','-1 day')")
+    if r24:
+        offline_24h = r24[0]["c"] or 0
     return {"total": total, "online": online, "offline": max(0, total - online),
             "direct": direct, "indirect": max(0, total - direct),
-            "by_subnet": by_subnet, "by_switch": by_switch}
+            "by_subnet": by_subnet, "by_switch": by_switch,
+            "offline_by_switch": offline_by_switch, "offline_24h": offline_24h}
 
 
 def build(db_path):

@@ -372,6 +372,14 @@ def _fetch_policy_stats(s, base, host):
                                     if not (p.get("hit_count") or p.get("bytes") or 0))
     except Exception:
         pass
+    # Proxy 정책(명시적 프록시) — 없는 구성도 많다: 404/빈 결과면 키 자체를 뺀다.
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/cmdb/firewall/proxy-policy")
+        if r is not None and r.status_code == 200:
+            res = r.json().get("results") or []
+            out["proxy_total"] = len(res)
+    except Exception:
+        pass
     if out:
         logger.info("fortigate_policy host=%s total=%s unused=%s",
                     host, out.get("total"), out.get("unused"))

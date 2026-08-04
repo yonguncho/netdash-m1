@@ -10,7 +10,33 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.21.0) — 랙 배치 저장/업데이트 + 높이 저장 하드닝 + 대시보드 검증
+## 작업 중 (v6.22.0) — 관제 대시보드 2차 개편 (목업 승인 대기 + 백엔드 완료)
+
+사용자 요청: 빈 공간 채우기 / Top10 리스트(클릭→상세) / 고급스러운 시각화 /
+**샘플 먼저 보여줄 것** / 방화벽별 VPN 터널·정책(Firewall+Proxy)·수집상태 리스트 /
+get sys perf status로 CPU·MEM·세션 / 설비 실패다발 스위치·대역 통계 / 큰 글씨.
+
+**목업**: `build/wall_mockup.html` (브라우저로 열면 됨) — 그라데이션+글로우 막대,
+순위 배지 Top10, 방화벽 장비 카드(미터+터널 목록), 수집상태·정책 표.
+스크린샷 `build/wall_verify/mockup_full.png`. **사용자 승인 후 wall.js에 적용.**
+
+**백엔드(디자인 무관, 완료)**:
+- `core/firewall/fortiperf.py` — `get system performance status` 파서.
+  CPU(전체 줄 idle 역산, CPU0 개별 코어 줄 무시), 메모리(신형 k단위+%/구형
+  states 둘 다), 세션(1분 평균), 트래픽, 업타임. 오류 출력은 빈 dict.
+- `fortisensor._ssh_run()` — SSH 1접속 다명령(관리 세션 제한 회피).
+  `collect_ssh_all()` = 센서 + perf 동시 수집.
+- `merge_fw_extra` — perf는 **빈 값만** 채운다(SNMP 우선). level 재계산.
+- REST에 proxy-policy 수(`cmdb/firewall/proxy-policy`) 추가.
+- `wallstats` 확장: fw_status_list(수집 상태+사유), policy_rows(방화벽별
+  Firewall/Proxy/미사용/비활성), vpn_rows(방화벽별 up/down 터널 이름·상대IP,
+  지표 없는 방화벽은 목록에서 제외 — 빈 줄 금지), facility.offline_by_switch
+  (최근 7일 device_offline을 설비 연결 스위치로 대조), offline_24h.
+
+**다음 단계**: 사용자 목업 승인 → wall.js/wall.css 새 디자인 적용(3탭),
+Top10 클릭 → 본 화면 상세 연동(관제는 읽기전용이라 /로 이동+해시 or 새 탭).
+
+## v6.21.0 — 랙 배치 저장/업데이트 + 높이 저장 하드닝 + 대시보드 검증
 
 사용자 3건: ① 랙 높이 저장 "TypeError: failed to fetch" 버그 확인 ② 서버실
 배치 저장 + 업데이트 버튼(자동 갱신으로 사라지지 않게) ③ 관제 대시보드 재검증.

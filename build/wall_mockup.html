@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>NetDash 관제 — 개선 샘플 (목업)</title>
+<style>
+:root {
+  --bg0:#070c16; --bg1:#0b1322; --card:#101a2e; --card2:#0d1626;
+  --line:rgba(148,163,184,.14); --tx:#e6edf7; --tx2:#8fa3bd; --tx3:#5b6f8c;
+  --cy:#22d3ee; --em:#34d399; --am:#fbbf24; --rs:#fb7185; --vi:#a78bfa; --bl:#60a5fa;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family:"Segoe UI","Malgun Gothic",sans-serif; color:var(--tx);
+  background:
+    radial-gradient(1100px 500px at 15% -10%, rgba(34,211,238,.09), transparent 60%),
+    radial-gradient(900px 500px at 90% 0%, rgba(167,139,250,.08), transparent 55%),
+    linear-gradient(180deg, var(--bg1), var(--bg0) 45%);
+  min-height:100vh; padding:22px 26px 60px;
+}
+.mock-note { background:linear-gradient(90deg, rgba(34,211,238,.14), rgba(167,139,250,.10));
+  border:1px solid rgba(34,211,238,.35); border-radius:10px; padding:10px 16px;
+  font-size:13px; color:#a5f3fc; margin-bottom:18px; }
+h1 { font-size:19px; letter-spacing:.4px; margin-bottom:4px; }
+h1 .dot { color:var(--cy); }
+.sub { color:var(--tx2); font-size:12px; margin-bottom:18px; }
+.sect { margin:34px 0 12px; font-size:15px; font-weight:700; color:#cbd5e1;
+  display:flex; align-items:center; gap:10px; }
+.sect::after { content:""; flex:1; height:1px;
+  background:linear-gradient(90deg, var(--line), transparent); }
+.sect .tag { font-size:10px; font-weight:600; color:var(--bg0); background:var(--cy);
+  border-radius:4px; padding:2px 8px; letter-spacing:.5px; }
+
+/* KPI */
+.kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+.kpi__c { position:relative; overflow:hidden; border-radius:14px; padding:14px 16px 12px;
+  background:linear-gradient(160deg, rgba(255,255,255,.045), rgba(255,255,255,.012) 55%), var(--card);
+  border:1px solid var(--line); box-shadow:0 10px 26px rgba(2,6,17,.45); }
+.kpi__c::before { content:""; position:absolute; inset:0 0 auto 0; height:2px;
+  background:linear-gradient(90deg, transparent, var(--ac,#334155), transparent); opacity:.9; }
+.kpi__n { font-size:30px; font-weight:800; font-variant-numeric:tabular-nums;
+  letter-spacing:-.5px; line-height:1.05; color:var(--ac,var(--tx)); }
+.kpi__n small { font-size:15px; color:var(--tx2); font-weight:600; }
+.kpi__l { font-size:11px; color:var(--tx2); margin-top:5px; letter-spacing:.4px; }
+.kpi__d { font-size:10.5px; color:var(--tx3); margin-top:2px; }
+
+/* 카드 그리드 */
+.grid { display:grid; gap:14px; grid-template-columns:repeat(12,1fr); margin-top:14px; }
+.card { grid-column:span 4; border-radius:16px; padding:16px 18px;
+  background:linear-gradient(165deg, rgba(255,255,255,.04), rgba(255,255,255,.01) 60%), var(--card);
+  border:1px solid var(--line); box-shadow:0 14px 34px rgba(2,6,17,.5); }
+.card--6 { grid-column:span 6; } .card--8 { grid-column:span 8; } .card--12 { grid-column:span 12; }
+.card h3 { font-size:12.5px; font-weight:700; color:#b9c7da; letter-spacing:.5px;
+  margin-bottom:12px; display:flex; justify-content:space-between; align-items:baseline; }
+.card h3 .hint { font-size:10.5px; color:var(--tx3); font-weight:400; }
+
+/* 도넛(그라데이션+글로우) */
+.dwrap { display:flex; gap:18px; align-items:center; }
+.dsvg { width:132px; height:132px; flex:none; filter:drop-shadow(0 0 10px rgba(34,211,238,.16)); }
+.dnum { fill:var(--tx); font-size:23px; font-weight:800; }
+.dlbl { fill:var(--tx2); font-size:10px; }
+.dleg { display:flex; flex-direction:column; gap:7px; font-size:12px; color:var(--tx2); }
+.dleg b { color:var(--tx); font-variant-numeric:tabular-nums; }
+.dleg i { width:9px; height:9px; border-radius:3px; display:inline-block; margin-right:7px; }
+
+/* 랭킹 리스트(Top N) */
+.rank { display:flex; flex-direction:column; gap:6px; }
+.rank__row { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:10px;
+  cursor:pointer; transition:background .15s, transform .15s; }
+.rank__row:hover { background:rgba(34,211,238,.07); transform:translateX(3px); }
+.rank__no { width:24px; height:24px; border-radius:7px; flex:none; display:flex;
+  align-items:center; justify-content:center; font-size:11px; font-weight:800;
+  background:#1a2740; color:var(--tx2); }
+.rank__row:nth-child(1) .rank__no { background:linear-gradient(140deg,#fde68a,#f59e0b); color:#4a2c00; }
+.rank__row:nth-child(2) .rank__no { background:linear-gradient(140deg,#e2e8f0,#94a3b8); color:#1e293b; }
+.rank__row:nth-child(3) .rank__no { background:linear-gradient(140deg,#fdba74,#c2703d); color:#431f07; }
+.rank__name { width:170px; flex:none; font-size:12.5px; font-weight:600; color:#d7e1ef;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rank__bar { flex:1; height:10px; border-radius:6px; background:rgba(10,17,31,.9);
+  overflow:hidden; box-shadow:inset 0 1px 3px rgba(0,0,0,.5); }
+.rank__fill { height:100%; border-radius:6px;
+  background:linear-gradient(90deg, var(--f0,#0891b2), var(--f1,#22d3ee));
+  box-shadow:0 0 8px var(--f1,#22d3ee); }
+.rank__val { width:86px; text-align:right; font-size:12.5px; font-weight:700;
+  font-variant-numeric:tabular-nums; color:var(--tx); flex:none; }
+.rank__val small { color:var(--tx3); font-weight:400; }
+
+/* 방화벽 장비 카드 */
+.fwrow { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:14px; }
+.fwc { border-radius:16px; overflow:hidden; border:1px solid var(--line);
+  background:linear-gradient(165deg, rgba(255,255,255,.04), rgba(255,255,255,.01) 60%), var(--card);
+  box-shadow:0 14px 34px rgba(2,6,17,.5); }
+.fwc__hd { display:flex; align-items:center; gap:10px; padding:12px 16px;
+  border-bottom:1px solid var(--line); background:rgba(255,255,255,.02); }
+.fwc--crit .fwc__hd { box-shadow:inset 3px 0 0 var(--rs); }
+.fwc--ok .fwc__hd { box-shadow:inset 3px 0 0 var(--em); }
+.fwc__nm { font-size:14px; font-weight:800; }
+.fwc__ip { font-size:11px; color:var(--tx3); }
+.pulse { width:8px; height:8px; border-radius:50%; margin-left:auto; }
+.pulse--ok { background:var(--em); box-shadow:0 0 0 3px rgba(52,211,153,.18); }
+.pulse--bad { background:var(--rs); box-shadow:0 0 0 3px rgba(251,113,133,.2);
+  animation:pp 1.6s infinite; }
+@keyframes pp { 50% { box-shadow:0 0 0 7px rgba(251,113,133,.05); } }
+.fwc__bd { padding:12px 16px 14px; }
+.meter { display:flex; align-items:center; gap:9px; margin:6px 0; font-size:11px; }
+.meter b { width:44px; color:var(--tx2); font-weight:600; }
+.meter__t { flex:1; height:8px; border-radius:5px; background:rgba(10,17,31,.9);
+  overflow:hidden; box-shadow:inset 0 1px 3px rgba(0,0,0,.5); }
+.meter__f { height:100%; border-radius:5px; }
+.meter__v { width:44px; text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }
+.f-ok { background:linear-gradient(90deg,#059669,#34d399); box-shadow:0 0 7px rgba(52,211,153,.5); }
+.f-warn { background:linear-gradient(90deg,#d97706,#fbbf24); box-shadow:0 0 7px rgba(251,191,36,.5); }
+.f-crit { background:linear-gradient(90deg,#e11d48,#fb7185); box-shadow:0 0 8px rgba(251,113,133,.6); }
+.fwc__facts { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.chip { font-size:10.5px; padding:3px 9px; border-radius:20px; border:1px solid var(--line);
+  color:var(--tx2); background:rgba(255,255,255,.025); }
+.chip--em { color:#6ee7b7; border-color:rgba(52,211,153,.35); }
+.chip--rs { color:#fda4af; border-color:rgba(251,113,133,.4); }
+.chip--am { color:#fcd34d; border-color:rgba(251,191,36,.35); }
+.tunnels { margin-top:10px; border-top:1px dashed var(--line); padding-top:9px; }
+.tunnels h4 { font-size:10.5px; color:var(--tx3); letter-spacing:.5px; margin-bottom:6px; }
+.tun { display:flex; align-items:center; gap:7px; font-size:11.5px; padding:2.5px 0;
+  color:var(--tx2); }
+.tun i { width:7px; height:7px; border-radius:50%; flex:none; }
+.tun--up i { background:var(--em); box-shadow:0 0 5px var(--em); }
+.tun--dn i { background:var(--rs); box-shadow:0 0 5px var(--rs); }
+.tun--dn { color:#fda4af; font-weight:600; }
+.tun .peer { margin-left:auto; color:var(--tx3); font-size:10.5px; font-variant-numeric:tabular-nums; }
+
+/* 표(정책·수집 상태) */
+.tb { width:100%; border-collapse:collapse; font-size:12px; }
+.tb th { text-align:left; color:var(--tx3); font-weight:600; font-size:10.5px;
+  letter-spacing:.6px; padding:5px 8px; border-bottom:1px solid var(--line); }
+.tb td { padding:7px 8px; border-bottom:1px solid rgba(148,163,184,.07);
+  color:var(--tx2); font-variant-numeric:tabular-nums; }
+.tb td b { color:var(--tx); }
+.tb tr:hover td { background:rgba(34,211,238,.04); }
+.st { font-size:10.5px; padding:2px 9px; border-radius:20px; font-weight:700; }
+.st--ok { background:rgba(52,211,153,.13); color:#6ee7b7; }
+.st--bad { background:rgba(251,113,133,.15); color:#fda4af; }
+</style>
+</head>
+<body>
+<div class="mock-note">🎨 <b>목업 샘플</b> — 실제 화면이 아니라 디자인 확인용입니다. 데이터는 예시입니다.
+승인하시면 이 디자인으로 관제 3개 탭을 구현합니다.</div>
+<h1>NetDash 관제 <span class="dot">●</span></h1>
+<div class="sub">2026. 8. 4. 오전 11:33 · 30초마다 갱신</div>
+
+<!-- ══════════════ 1. 스위치 탭 ══════════════ -->
+<div class="sect"><span class="tag">TAB 1</span> 스위치</div>
+<div class="kpi">
+  <div class="kpi__c" style="--ac:#60a5fa"><div class="kpi__n">48</div><div class="kpi__l">등록 스위치</div><div class="kpi__d">BackBone 2 · L3 6 · L2 40</div></div>
+  <div class="kpi__c" style="--ac:#34d399"><div class="kpi__n">45</div><div class="kpi__l">정상 수집</div><div class="kpi__d">마지막 수집 오늘 10:00</div></div>
+  <div class="kpi__c" style="--ac:#fb7185"><div class="kpi__n">2</div><div class="kpi__l">도달 불가</div><div class="kpi__d">SKBA_F3_ASW_12 외 1</div></div>
+  <div class="kpi__c" style="--ac:#fbbf24"><div class="kpi__n">1</div><div class="kpi__l">경보 FLAP/LOOP</div><div class="kpi__d">SKBA_F1_ASW_03 Gi1/0/7</div></div>
+  <div class="kpi__c" style="--ac:#22d3ee"><div class="kpi__n">1,847<small>/2,304</small></div><div class="kpi__l">포트 사용 (80%)</div><div class="kpi__d">여유 457포트</div></div>
+  <div class="kpi__c" style="--ac:#a78bfa"><div class="kpi__n">41°C</div><div class="kpi__l">최고 온도</div><div class="kpi__d">SKBA_F2_BB_01</div></div>
+</div>
+<div class="grid">
+  <div class="card card--8">
+    <h3>포트 사용률 TOP 10 <span class="hint">클릭 → 스위치 상세보기</span></h3>
+    <div class="rank" id="r1"></div>
+  </div>
+  <div class="card card--4">
+    <h3>수집 상태</h3>
+    <div class="dwrap">
+      <svg class="dsvg" viewBox="0 0 140 140">
+        <defs>
+          <linearGradient id="g-em" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#059669"/><stop offset="1" stop-color="#34d399"/></linearGradient>
+          <linearGradient id="g-rs" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e11d48"/><stop offset="1" stop-color="#fb7185"/></linearGradient>
+          <linearGradient id="g-cy" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0891b2"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+          <linearGradient id="g-am" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d97706"/><stop offset="1" stop-color="#fbbf24"/></linearGradient>
+          <linearGradient id="g-sl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#334155"/><stop offset="1" stop-color="#64748b"/></linearGradient>
+          <linearGradient id="g-bl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2563eb"/><stop offset="1" stop-color="#60a5fa"/></linearGradient>
+        </defs>
+        <circle cx="70" cy="70" r="54" fill="none" stroke="rgba(148,163,184,.1)" stroke-width="14"/>
+        <circle cx="70" cy="70" r="54" fill="none" stroke="url(#g-em)" stroke-width="14" stroke-linecap="round"
+          stroke-dasharray="318 339" stroke-dashoffset="0" transform="rotate(-90 70 70)"/>
+        <circle cx="70" cy="70" r="54" fill="none" stroke="url(#g-rs)" stroke-width="14" stroke-linecap="round"
+          stroke-dasharray="14 339" stroke-dashoffset="-320" transform="rotate(-90 70 70)"/>
+        <text x="70" y="66" text-anchor="middle" class="dnum">94%</text>
+        <text x="70" y="84" text-anchor="middle" class="dlbl">정상 수집률</text>
+      </svg>
+      <div class="dleg">
+        <span><i style="background:#34d399"></i>정상 <b>45</b></span>
+        <span><i style="background:#fb7185"></i>수집 실패 <b>2</b></span>
+        <span><i style="background:#64748b"></i>미수집 <b>1</b></span>
+      </div>
+    </div>
+    <h3 style="margin-top:16px">제조사</h3>
+    <div class="rank" id="r2"></div>
+  </div>
+</div>
+
+<!-- ══════════════ 2. 방화벽 탭 ══════════════ -->
+<div class="sect"><span class="tag">TAB 2</span> 방화벽 — 장비별 카드(수집된 장비만) + 수집 상태·정책 표</div>
+<div class="kpi">
+  <div class="kpi__c" style="--ac:#60a5fa"><div class="kpi__n">4</div><div class="kpi__l">등록 방화벽</div><div class="kpi__d">Fortinet 4</div></div>
+  <div class="kpi__c" style="--ac:#34d399"><div class="kpi__n">3</div><div class="kpi__l">수집 정상</div></div>
+  <div class="kpi__c" style="--ac:#fb7185"><div class="kpi__n">1</div><div class="kpi__l">수집 실패</div><div class="kpi__d">FW-DMZ-02</div></div>
+  <div class="kpi__c" style="--ac:#22d3ee"><div class="kpi__n">18<small>/21</small></div><div class="kpi__l">VPN 터널 연결</div><div class="kpi__d">끊김 3 ⚠</div></div>
+  <div class="kpi__c" style="--ac:#a78bfa"><div class="kpi__n">1,207</div><div class="kpi__l">총 방화벽 정책</div><div class="kpi__d">Proxy 정책 84</div></div>
+  <div class="kpi__c" style="--ac:#fbbf24"><div class="kpi__n">139,730</div><div class="kpi__l">동시 세션 합계</div></div>
+</div>
+<div class="fwrow" style="margin-top:14px">
+  <div class="fwc fwc--ok">
+    <div class="fwc__hd"><div><div class="fwc__nm">FW-HQ-01</div><div class="fwc__ip">10.10.0.1 · FortiGate 601E · v7.2.5</div></div><span class="pulse pulse--ok"></span></div>
+    <div class="fwc__bd">
+      <div class="meter"><b>CPU</b><div class="meter__t"><div class="meter__f f-ok" style="width:34%"></div></div><span class="meter__v">34%</span></div>
+      <div class="meter"><b>MEM</b><div class="meter__t"><div class="meter__f f-ok" style="width:61%"></div></div><span class="meter__v">61%</span></div>
+      <div class="meter"><b>DISK</b><div class="meter__t"><div class="meter__f f-ok" style="width:22%"></div></div><span class="meter__v">22%</span></div>
+      <div class="meter"><b>세션</b><div class="meter__t"><div class="meter__f f-ok" style="width:29%"></div></div><span class="meter__v">48.2k</span></div>
+      <div class="fwc__facts">
+        <span class="chip chip--em">VPN 10/10</span><span class="chip">정책 412</span>
+        <span class="chip">Proxy 31</span><span class="chip">PSU 2 정상</span><span class="chip">41°C</span>
+        <span class="chip">HA active-passive</span>
+      </div>
+    </div>
+  </div>
+  <div class="fwc fwc--crit">
+    <div class="fwc__hd"><div><div class="fwc__nm">FW-BR-01</div><div class="fwc__ip">10.20.0.1 · FortiGate 201F · v7.0.12</div></div><span class="pulse pulse--bad"></span></div>
+    <div class="fwc__bd">
+      <div class="meter"><b>CPU</b><div class="meter__t"><div class="meter__f f-crit" style="width:87%"></div></div><span class="meter__v">87%</span></div>
+      <div class="meter"><b>MEM</b><div class="meter__t"><div class="meter__f f-crit" style="width:92%"></div></div><span class="meter__v">92%</span></div>
+      <div class="meter"><b>DISK</b><div class="meter__t"><div class="meter__f f-ok" style="width:41%"></div></div><span class="meter__v">41%</span></div>
+      <div class="meter"><b>세션</b><div class="meter__t"><div class="meter__f f-warn" style="width:71%"></div></div><span class="meter__v">91.5k</span></div>
+      <div class="fwc__facts">
+        <span class="chip chip--rs">VPN 6/8 — 끊김 2</span><span class="chip">정책 380</span>
+        <span class="chip">Proxy 22</span><span class="chip chip--rs">센서 알람 PS2</span><span class="chip chip--am">63°C</span>
+      </div>
+      <div class="tunnels">
+        <h4>VPN 터널 (끊김 우선)</h4>
+        <div class="tun tun--dn"><i></i>BR-SEOUL-DR <span class="peer">203.0.113.9</span></div>
+        <div class="tun tun--dn"><i></i>BR-BUSAN-02 <span class="peer">203.0.113.44</span></div>
+        <div class="tun tun--up"><i></i>BR-SEOUL-01 <span class="peer">203.0.113.5</span></div>
+        <div class="tun tun--up"><i></i>BR-DAEGU-01 <span class="peer">203.0.113.17</span></div>
+        <div class="tun tun--up"><i></i>외 4개 연결됨</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="grid">
+  <div class="card card--6">
+    <h3>수집 상태 <span class="hint">어떤 장비가 왜 실패했는지</span></h3>
+    <table class="tb">
+      <thead><tr><th>방화벽</th><th>IP</th><th>상태</th><th>마지막 수집</th></tr></thead>
+      <tbody>
+        <tr><td><b>FW-HQ-01</b></td><td>10.10.0.1</td><td><span class="st st--ok">정상</span></td><td>10:00</td></tr>
+        <tr><td><b>FW-BR-01</b></td><td>10.20.0.1</td><td><span class="st st--ok">정상</span></td><td>10:00</td></tr>
+        <tr><td><b>FW-HQ-02</b></td><td>10.10.0.2</td><td><span class="st st--ok">정상</span></td><td>10:01</td></tr>
+        <tr><td><b>FW-DMZ-02</b></td><td>10.30.0.2</td><td><span class="st st--bad">실패 — 인증 오류</span></td><td>09:30</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card card--6">
+    <h3>정책 구성 <span class="hint">방화벽별 Firewall / Proxy 정책 수</span></h3>
+    <table class="tb">
+      <thead><tr><th>방화벽</th><th>Firewall 정책</th><th>Proxy 정책</th><th>히트 0건</th><th>비활성</th></tr></thead>
+      <tbody>
+        <tr><td><b>FW-HQ-01</b></td><td><b>412</b></td><td>31</td><td style="color:#fcd34d">37</td><td>9</td></tr>
+        <tr><td><b>FW-BR-01</b></td><td><b>380</b></td><td>22</td><td style="color:#fcd34d">51</td><td>2</td></tr>
+        <tr><td><b>FW-HQ-02</b></td><td><b>415</b></td><td>31</td><td style="color:#fcd34d">35</td><td>9</td></tr>
+        <tr><td style="color:#5b6f8c">합계</td><td><b>1,207</b></td><td><b>84</b></td><td>123</td><td>20</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════ 3. 설비 탭 ══════════════ -->
+<div class="sect"><span class="tag">TAB 3</span> 설비 — 큰 글씨 · 이름 안 잘림 · TOP 10 · 대역 통계</div>
+<div class="kpi">
+  <div class="kpi__c" style="--ac:#60a5fa"><div class="kpi__n">1,284</div><div class="kpi__l">전체 설비</div><div class="kpi__d">대역 14개</div></div>
+  <div class="kpi__c" style="--ac:#34d399"><div class="kpi__n">1,231</div><div class="kpi__l">온라인 (95.9%)</div></div>
+  <div class="kpi__c" style="--ac:#fb7185"><div class="kpi__n">53</div><div class="kpi__l">연결 실패</div><div class="kpi__d">24시간 내 +7</div></div>
+  <div class="kpi__c" style="--ac:#22d3ee"><div class="kpi__n">1,198</div><div class="kpi__l">연결 지점 확인</div></div>
+  <div class="kpi__c" style="--ac:#fbbf24"><div class="kpi__n">86</div><div class="kpi__l">미확인</div><div class="kpi__d">액세스 스위치 미수집</div></div>
+</div>
+<div class="grid">
+  <div class="card card--6">
+    <h3>설비 최다 연결 스위치 TOP 10 <span class="hint">클릭 → 스위치 상세</span></h3>
+    <div class="rank" id="r3"></div>
+  </div>
+  <div class="card card--6">
+    <h3>최근 7일 연결 실패 다발 스위치 <span class="hint">이 스위치 아래 설비가 자주 끊긴다</span></h3>
+    <div class="rank" id="r4"></div>
+    <h3 style="margin-top:14px">대역별 수집 IP <span class="hint">온라인/실패</span></h3>
+    <div class="rank" id="r5"></div>
+  </div>
+</div>
+
+<script>
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function rank(el, items, grad, unit){
+  document.getElementById(el).innerHTML = items.map(function(i){
+    var pct = Math.round(i.v*100/items[0].v);
+    return "<div class='rank__row' title='클릭하면 상세로 이동'>"+
+      "<span class='rank__no'></span>"+
+      "<span class='rank__name'>"+esc(i.n)+"</span>"+
+      "<span class='rank__bar'><span class='rank__fill' style='--f0:"+grad[0]+";--f1:"+grad[1]+";width:"+pct+"%'></span></span>"+
+      "<span class='rank__val'>"+esc(i.d||i.v)+(unit?" <small>"+unit+"</small>":"")+"</span></div>";
+  }).join("");
+  var rows=document.querySelectorAll("#"+el+" .rank__no");
+  rows.forEach(function(r,idx){r.textContent=idx+1;});
+}
+rank("r1",[
+ {n:"SKBA_F1_ASW_03",v:96,d:"96% (46/48)"},{n:"SKBA_F2_ASW_11",v:94,d:"94% (45/48)"},
+ {n:"SKBA_F1_ASW_07",v:92,d:"92% (44/48)"},{n:"SKBA_F3_ASW_01",v:88,d:"88% (42/48)"},
+ {n:"SKBA_F2_ASW_04",v:85,d:"85% (41/48)"},{n:"SKBA_F1_TPS_01",v:83,d:"83% (20/24)"},
+ {n:"SKBA_F4_ASW_02",v:81,d:"81% (39/48)"},{n:"SKBA_F1_ASW_09",v:79,d:"79% (38/48)"},
+ {n:"SKBA_F2_TPS_03",v:75,d:"75% (18/24)"},{n:"SKBA_F3_ASW_05",v:73,d:"73% (35/48)"}],
+ ["#0891b2","#22d3ee"]);
+rank("r2",[{n:"Cisco",v:38},{n:"Arista",v:6},{n:"Extreme Networks",v:3},{n:"HPE Aruba",v:1}],
+ ["#2563eb","#60a5fa"],"대");
+rank("r3",[
+ {n:"SKBA_F1_TPS_01",v:214},{n:"SKBA_F2_TPS_03",v:198},{n:"SKBA_F1_ASW_03",v:171},
+ {n:"SKBA_F3_TPS_02",v:149},{n:"SKBA_F2_ASW_11",v:122},{n:"SKBA_F1_ASW_07",v:104},
+ {n:"SKBA_F4_TPS_01",v:88},{n:"SKBA_F3_ASW_01",v:71},{n:"SKBA_F2_ASW_04",v:52},
+ {n:"SKBA_F1_ASW_09",v:41}],["#7c3aed","#a78bfa"],"대");
+rank("r4",[
+ {n:"SKBA_F3_TPS_02",v:11,d:"11건"},{n:"SKBA_F1_ASW_03",v:6,d:"6건"},
+ {n:"SKBA_F2_TPS_03",v:4,d:"4건"},{n:"SKBA_F4_ASW_02",v:2,d:"2건"}],
+ ["#e11d48","#fb7185"]);
+rank("r5",[
+ {n:"10.92.140.0/24",v:214,d:"207/214"},{n:"10.92.150.0/24",v:186,d:"186/186"},
+ {n:"10.92.174.0/23",v:342,d:"330/342"},{n:"10.92.130.0/24",v:96,d:"89/96"}],
+ ["#059669","#34d399"]);
+</script>
+</body>
+</html>

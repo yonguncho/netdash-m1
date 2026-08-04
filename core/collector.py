@@ -540,25 +540,37 @@ def merge_fw_extra(db_path, fw, collected, cred=None):
 
     cred = cred or {}
     user, pw = cred.get("username", ""), cred.get("password", "")
+    perf = {}
     if user and pw and fw.get("host"):
         try:
             from .firewall import fortisensor
-            s = fortisensor.collect_ssh(fw["host"], user, pw)
+            s = fortisensor.collect_ssh_all(fw["host"], user, pw)
             if s.get("sensors"):
-                extra["sensors"] = s
+                extra["sensors"] = s["sensors"]
+            perf = s.get("perf") or {}
         except Exception as e:
             # VM 모델은 센서가 없고, SSH가 막힌 장비도 있다 — 정상 범주다.
             utils.log_event("info", "fw_sensor_list_skipped", firewall_id=fw.get("id"),
                             error=_sanitize_error_msg(str(e))[:120])
-    if not extra:
+    if not extra and not perf:
         return None
     try:
         cur = (db.get_device_env(db_path, "firewall", fw["id"]) or {}).get("metrics") or {}
     except Exception:
         cur = {}
     cur.update(extra)
+    # get sys perf status(SSH) — SNMP가 이미 채운 값은 그대로 두고 빈 곳만 채운다.
+    # SNMP 미설정 환경에서는 CPU·메모리·세션이 이 경로로 들어온다.
+    for k, v in perf.items():
+        if cur.get(k) is None:
+            cur[k] = v
+    if any(cur.get(k) is not None for k in ("cpu_pct", "mem_pct", "disk_pct")):
+        from . import snmp_fortigate as _fgm
+        worst = max([p for p in (cur.get("cpu_pct"), cur.get("mem_pct"),
+                                 cur.get("disk_pct")) if p is not None], default=None)
+        cur["level"] = _fgm.pct_level(worst)
     db.save_device_metrics(db_path, "firewall", fw["id"], cur, source="rest+ssh")
-    return extra
+    return cur
 
 
 def _commands_for(vendor):

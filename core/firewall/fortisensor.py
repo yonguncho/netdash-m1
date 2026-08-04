@@ -101,23 +101,51 @@ def summarize(sensors):
     }
 
 
-def collect_ssh(host, username, password, port=22, timeout=20):
-    """SSH로 `execute sensor list`를 실행해 요약을 반환.
+def _ssh_run(host, username, password, commands, port=22, timeout=20):
+    """SSH 한 번 접속으로 여러 명령 실행 → {명령: 출력}.
 
-    ARP 수집(get_arp_table_ssh)과 같은 방식 — 한 번 접속해 한 명령만 쓴다.
+    명령마다 접속을 새로 열면 FortiGate 관리 세션 제한에 걸리고 느리다.
+    한 명령이 실패해도 나머지는 계속한다(모델·권한에 따라 되는 명령이 다르다).
     """
     import paramiko
     from .. import secpolicy
     client = paramiko.SSHClient()
     secpolicy.apply_host_key_policy(client)
+    out = {}
     try:
         client.connect(host, port=port, username=username, password=password,
                        timeout=timeout, allow_agent=False, look_for_keys=False)
-        _, stdout, _ = client.exec_command("execute sensor list", timeout=timeout)
-        output = stdout.read().decode("utf-8", errors="replace")
+        for cmd in commands:
+            try:
+                _, stdout, _ = client.exec_command(cmd, timeout=timeout)
+                out[cmd] = stdout.read().decode("utf-8", errors="replace")
+            except Exception:
+                out[cmd] = ""
     finally:
         try:
             client.close()
         except Exception:
             pass
-    return summarize(parse_sensor_list(output))
+    return out
+
+
+def collect_ssh(host, username, password, port=22, timeout=20):
+    """SSH로 `execute sensor list`를 실행해 요약을 반환(하위 호환)."""
+    raw = _ssh_run(host, username, password, ["execute sensor list"],
+                   port=port, timeout=timeout)
+    return summarize(parse_sensor_list(raw.get("execute sensor list", "")))
+
+
+def collect_ssh_all(host, username, password, port=22, timeout=20):
+    """센서 + 성능(get system performance status)을 SSH 한 번으로 수집.
+
+    반환: {"sensors": summarize()결과|None, "perf": parse_perf_status()결과}
+    SNMP 미설정 환경에서도 SSH 계정만 있으면 CPU·메모리·세션이 채워진다.
+    """
+    from . import fortiperf
+    raw = _ssh_run(host, username, password,
+                   ["execute sensor list", "get system performance status"],
+                   port=port, timeout=timeout)
+    sensors = summarize(parse_sensor_list(raw.get("execute sensor list", "")))
+    perf = fortiperf.parse_perf_status(raw.get("get system performance status", ""))
+    return {"sensors": sensors if sensors.get("sensors") else None, "perf": perf}
