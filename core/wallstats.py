@@ -174,7 +174,7 @@ def _firewall_stats(conn, db_path):
         env_map = db.get_device_env_map(db_path, "firewall") or {}
         for f in db.list_firewalls(db_path):
             fw_status_list.append({
-                "name": f.get("name"), "host": f.get("host"),
+                "id": f["id"], "name": f.get("name"), "host": f.get("host"),
                 "status": f.get("status") or "new",
                 "last_error": (f.get("last_error") or "")[:120],
                 "last_collected": f.get("last_collected")})

@@ -199,3 +199,42 @@ def test_main_page_opens_detail_from_hash():
     assert "function _openHashDetail" in js
     assert "#switch=(" in js.replace("\\", "") or "switch=(" in js
     assert "_openHashDetail()" in js, "폴링 후 호출돼야 한다(목록 로드 전이면 재시도)"
+
+
+# --- v3 방화벽 탭 (사용자 지적 반영: 터널 상시 표시 + 사유 있는 전 장비 표) ----
+
+def test_fw_tab_v3_shows_connected_tunnels_too():
+    """'연결'도 모니터링이다 — 끊김이 있을 때만 터널을 보여주면 안 된다."""
+    from pathlib import Path
+    js = (Path(__file__).parent.parent / "web" / "static" / "wall.js").read_text(encoding="utf-8")
+    assert "downs.length || ups.length" in js, \
+        "터널 섹션은 up만 있어도 나와야 한다(예전엔 down 있을 때만)"
+    assert "tst--up" in js and "tst--dn" in js, "터널마다 연결/끊김 배지"
+    assert "VPN 터널 모니터링" in js
+    assert "vgrp__fw" in js, "방화벽별로 묶어 어느 방화벽의 터널인지 보여야 한다"
+
+
+def test_fw_tab_v3_tables_list_all_firewalls_with_reason():
+    """지표 없는 방화벽을 말없이 빼지 않는다 — '왜 안 나오는지'가 줄에 적힌다."""
+    from pathlib import Path
+    js = (Path(__file__).parent.parent / "web" / "static" / "wall.js").read_text(encoding="utf-8")
+    assert "function whyEmpty" in js
+    assert "지표 없음" in js and "미수집" in js
+    # 부하·정책 표 모두 전 장비 목록(stList) 기준으로 돈다
+    assert js.count("stList.map(function (x)") >= 3, "부하/정책/수집상태 표가 전 장비 기준이어야 한다"
+
+
+def test_snmp_settings_label_covers_all_uses():
+    """커뮤니티 입력란이 '서버 전용'처럼 보여 사용자가 못 찾았다 — 라벨 교정."""
+    from pathlib import Path
+    html = (Path(__file__).parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert "FortiGate 부하" in html and "스위치/방화벽 온도" in html
+    assert "SNMP 허용 호스트" in html, "장비 쪽 hosts 등록 안내도 있어야 한다"
+
+
+def test_snmp_probe_failure_tells_where_community_is(tmp_path, monkeypatch):
+    """확인 실패 메시지가 '어디서 고치는지'를 알려줘야 한다."""
+    from pathlib import Path
+    src = (Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
+    assert "⚙설정 → SNMP 커뮤니티" in src
+    assert "커뮤니티가 틀리면 오류 없이 무응답" in src

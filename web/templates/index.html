@@ -649,15 +649,15 @@
           <p class="ac-section__hint">수집 시각은 서버 PC의 시각으로 저장되고, 화면에는 여기서 고른 시간대로 표시됩니다(저장된 값은 바뀌지 않습니다).</p>
         </div>
 
-        <!-- ③-B SNMP 사양 수집 -->
+        <!-- ③-B SNMP (서버 사양 + 스위치·방화벽 온도/부하 공용) -->
         <div class="ac-section">
-          <div class="ac-section__title">🖥 서버 사양 수집 (SNMP)</div>
-          <label class="ac-toggle"><input id="ac-snmp-enabled" type="checkbox"> SNMP로 사양 보완 (SSH가 닫힌 리눅스·UNIX 서버)</label>
+          <div class="ac-section__title">📡 SNMP <span style="font-weight:400;color:#94a3b8">(서버 사양 · 스위치/방화벽 온도 · FortiGate 부하 공용)</span></div>
+          <label class="ac-toggle"><input id="ac-snmp-enabled" type="checkbox"> SNMP 수집 사용 (161/UDP 읽기 전용)</label>
           <div class="field-row" style="margin-top:8px">
-            <div style="flex:1"><label>SNMP 커뮤니티 <span style="color:#94a3b8">(읽기 전용, 비우면 기존 값 유지)</span></label>
+            <div style="flex:1"><label>SNMP 커뮤니티 <span style="color:#94a3b8">(장비에 설정된 값과 같아야 합니다 · 비우면 기존 값 유지, 미설정 시 public)</span></label>
               <input id="ac-snmp-community" type="password" autocomplete="new-password" placeholder="public"></div>
           </div>
-          <p class="ac-section__hint">SSH 접속이 안 되는 서버는 SNMP(161/UDP) 읽기 전용 조회로 CPU·메모리·디스크를 채웁니다. Windows 서버는 WMI(135)로 자동 처리되므로 SNMP가 없어도 됩니다.</p>
+          <p class="ac-section__hint">여기 지정한 커뮤니티 하나로 ① SSH가 닫힌 서버의 사양 ② 스위치·방화벽 온도(ENTITY-SENSOR-MIB) ③ FortiGate CPU·메모리·세션을 읽습니다. 장비 쪽에는 이 PC IP를 SNMP 허용 호스트로 등록해야 합니다.</p>
         </div>
 
         <!-- ④ 이메일 알림 (넓은 팝업에서 전체 폭) -->

@@ -3255,10 +3255,18 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 out = snmp_fortigate.probe(fw["host"], community)
             except snmp_fortigate.SnmpClosed:
                 return jsonify({"ok": False, "error":
-                                "161/UDP에서 응답이 없습니다 — 장비에 SNMP 에이전트가 "
-                                "떠 있는지, 이 PC IP가 허용 호스트인지 확인하세요"})
-            except snmp_fortigate.SnmpError as e:
-                return jsonify({"ok": False, "error": str(e)[:300]})
+                                "161/UDP에서 응답할 프로세스가 없습니다 — 장비에서 SNMP "
+                                "에이전트가 켜져 있는지 확인하세요"})
+            except snmp_fortigate.SnmpError:
+                # 무응답의 두 원인(차단/커뮤니티 불일치)은 밖에서 구분이 안 된다.
+                # 사용자가 스스로 점검할 수 있게 확인 순서를 그대로 알려준다.
+                return jsonify({"ok": False, "error":
+                                "응답이 없습니다. 순서대로 확인하세요: "
+                                "① 상단 ⚙설정 → SNMP 커뮤니티가 장비에 설정된 값과 같은지 "
+                                "(미설정이면 public으로 시도합니다) "
+                                "② 장비에서 이 PC IP가 SNMP 허용 호스트(hosts)로 등록됐는지 "
+                                "③ 중간 방화벽이 161/UDP를 막는지 "
+                                "— SNMPv2c는 커뮤니티가 틀리면 오류 없이 무응답입니다"})
             return jsonify({"ok": True, "host": fw["host"], "probe": out})
         except Exception as e:
             log_event("error", "fw_snmp_probe_error",

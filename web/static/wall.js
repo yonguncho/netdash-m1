@@ -388,26 +388,38 @@ function renderSwitchTab(s) {
     "</div>";
 }
 
-/* ── 방화벽 탭 ── */
+/* ── 방화벽 탭 v3 ──
+   원칙(사용자 지적 반영):
+   ① 터널은 '연결'도 모니터링이다 — 끊김이 있을 때만 보여주지 않는다.
+     방화벽별로 모든 터널의 상태(연결/끊김)를 항상 나열한다(끊김 우선).
+   ② 표에서 장비를 말없이 빼지 않는다 — 지표가 없으면 없는 이유("미수집",
+     "실패", "지표 없음")를 그 줄에 적는다. "왜 2대만 나오지?"가 화면에서
+     답이 되게 한다.
+   ③ 도표는 반드시 실제 목록과 짝으로 — 도넛만 있으면 '어느 장비인지'를 모른다. */
 function renderFirewallTab(f) {
   var el = document.getElementById("wtab-firewall");
   if (!el) return;
   if (!f || !f.total) { el.innerHTML = "<p class='wnone'>등록된 방화벽이 없습니다.</p>"; return; }
-  var v = f.vpn || {}, pol = f.policy || {}, sen = f.sensors || {}, r = f.reach || {};
-  var st = f.by_status || {};
-  var sess = (f.devices || []).reduce(function (a, d) { return a + (d.sessions || 0); }, 0);
-  var failedNames = (f.fw_status_list || []).filter(function (x) { return x.status === "failed"; })
+  var v = f.vpn || {}, pol = f.policy || {}, st = f.by_status || {};
+  var devs = f.devices || [], stList = f.fw_status_list || [];
+  var devById = {};
+  devs.forEach(function (d) { devById[d.id] = d; });
+  var sess = devs.reduce(function (a, d) { return a + (d.sessions || 0); }, 0);
+  var failedNames = stList.filter(function (x) { return x.status === "failed"; })
     .map(function (x) { return x.name; });
 
-  /* 장비별 카드 — 지표가 수집된 방화벽만(빈 카드 금지) */
-  var cards = (f.devices || []).map(function (d) {
+  /* 지표가 왜 없는지 — 줄마다 설명할 사유 */
+  function whyEmpty(x) {
+    if (x.status === "failed") return "수집 실패" + (x.last_error ? " — " + x.last_error.slice(0, 30) : "");
+    if (x.status === "new") return "미수집 — '수집'을 눌러 첫 수집을 하세요";
+    if (x.status === "collecting") return "수집 중...";
+    return "지표 없음 — SNMP 커뮤니티(⚙설정) 또는 SSH 계정 지정 후 재수집";
+  }
+
+  /* 장비별 카드 — 지표가 수집된 방화벽만 */
+  var cards = devs.map(function (d) {
     var lv = d.level || (d.alarms.length ? "critical" : "normal");
     var chips = [];
-    if (d.vpn_total) {
-      chips.push("<span class='chip " + (d.vpn_up < d.vpn_total ? "chip--rs" : "chip--em") + "'>VPN " +
-        d.vpn_up + "/" + d.vpn_total +
-        (d.vpn_up < d.vpn_total ? " — 끊김 " + (d.vpn_total - d.vpn_up) : "") + "</span>");
-    }
     if (d.policy_total !== null && d.policy_total !== undefined) {
       chips.push("<span class='chip'>정책 " + _n(d.policy_total) + "</span>");
     }
@@ -427,21 +439,22 @@ function renderFirewallTab(f) {
     if (d.ha_mode && d.ha_mode !== "standalone") {
       chips.push("<span class='chip'>HA " + esc(d.ha_mode) + "</span>");
     }
+    /* 터널 — 있으면 항상 전부 보여준다(끊김 우선). '연결됨' 확인도 모니터링이다. */
     var tun = "";
-    if ((d.tunnels_down || []).length) {
-      tun = "<div class='tunnels'><h4>VPN 터널 — 끊김 우선</h4>" +
-        d.tunnels_down.map(function (t) {
+    var downs = d.tunnels_down || [], ups = d.tunnels_up || [];
+    if (downs.length || ups.length) {
+      tun = "<div class='tunnels'><h4>VPN 터널 " +
+        (d.vpn_up !== undefined ? "(" + d.vpn_up + "/" + d.vpn_total + " 연결)" : "") + "</h4>" +
+        downs.map(function (t) {
           return "<div class='tun tun--dn'><i></i>" + esc(t.name || "-") +
-            "<span class='peer'>" + esc(t.peer || "") + "</span></div>";
+            " <span class='tst tst--dn'>끊김</span><span class='peer'>" + esc(t.peer || "") + "</span></div>";
         }).join("") +
-        (d.tunnels_up || []).slice(0, 4).map(function (nm) {
-          return "<div class='tun tun--up'><i></i>" + esc(nm) + "</div>";
-        }).join("") +
-        ((d.tunnels_up || []).length > 4
-          ? "<div class='tun tun--up'><i></i>외 " + (d.tunnels_up.length - 4) + "개 연결됨</div>" : "") +
-        "</div>";
+        ups.map(function (nm) {
+          return "<div class='tun tun--up'><i></i>" + esc(nm) +
+            " <span class='tst tst--up'>연결</span></div>";
+        }).join("") + "</div>";
     }
-    var sub = [d.host, d.version ? "v" + d.version.replace(/^v/, "") : "",
+    var sub = [d.host, d.version ? "v" + String(d.version).replace(/^v/, "") : "",
                d.uptime_sec ? Math.floor(d.uptime_sec / 86400) + "일 가동" : ""]
       .filter(Boolean).join(" · ");
     return "<div class='fwc fwc--" + (lv === "critical" ? "crit" : lv === "warning" ? "warn" : "ok") + "'>" +
@@ -456,9 +469,34 @@ function renderFirewallTab(f) {
       tun + "</div></div>";
   }).join("");
 
-  /* 수집 상태 표 — 어떤 장비가 왜 실패했는지 */
+  /* VPN 터널 모니터링 — 도넛 + 방화벽별 전체 터널 목록(도표·목록 한 카드) */
+  var vpnRows = f.vpn_rows || [];
+  var vpnList = vpnRows.length
+    ? vpnRows.map(function (r) {
+        return "<div class='vgrp'><div class='vgrp__fw'>" + esc(r.name) +
+          " <span class='wdim'>(" + ((r.up || []).length) + "/" +
+          (((r.up || []).length) + ((r.down || []).length)) + " 연결)</span></div>" +
+          (r.down || []).map(function (t) {
+            return "<div class='tun tun--dn'><i></i>" + esc(t.name || "-") +
+              " <span class='tst tst--dn'>끊김</span><span class='peer'>" + esc(t.peer || "") + "</span></div>";
+          }).join("") +
+          (r.up || []).map(function (nm) {
+            return "<div class='tun tun--up'><i></i>" + esc(nm) +
+              " <span class='tst tst--up'>연결</span></div>";
+          }).join("") + "</div>";
+      }).join("")
+    : "<p class='wnone'>VPN 터널이 수집된 방화벽이 없습니다. REST 토큰/계정을 지정하고 수집하면 채워집니다.</p>";
+  var vpnCard = "<div class='wcard wcard--6'><h3>VPN 터널 모니터링" +
+    "<span class='hint'>방화벽별 전체 터널 — 끊김 우선</span></h3>" +
+    ((v.tunnels || 0) > 0
+      ? donut([{ label: "연결", value: v.up || 0, c0: "#059669", c1: "#34d399" },
+               { label: "끊김", value: v.down || 0, c0: "#e11d48", c1: "#fb7185" }],
+              _n(v.tunnels), "터널") : "") +
+    "<div class='vlist'>" + vpnList + "</div></div>";
+
+  /* 수집 상태 — 도넛 + 전 장비 표 */
   var stTable = "<table class='wtable'><thead><tr><th>방화벽</th><th>IP</th><th>상태</th><th>마지막 수집</th></tr></thead><tbody>" +
-    (f.fw_status_list || []).map(function (x) {
+    stList.map(function (x) {
       var badge = x.status === "done" ? "<span class='wst wst--ok'>정상</span>"
         : x.status === "failed" ? "<span class='wst wst--bad'>실패" +
             (x.last_error ? " — " + esc(x.last_error.slice(0, 40)) : "") + "</span>"
@@ -468,19 +506,61 @@ function renderFirewallTab(f) {
         "</td><td>" + badge + "</td><td>" +
         esc((x.last_collected || "-").toString().slice(5, 16)) + "</td></tr>";
     }).join("") + "</tbody></table>";
+  var stCard = "<div class='wcard wcard--6'><h3>수집 상태" +
+    "<span class='hint'>어떤 장비가 왜 실패했는지</span></h3>" +
+    donut(statusSegs(st), _n(f.total), "대") + stTable + "</div>";
 
-  /* 정책 표 — 방화벽별 Firewall/Proxy 정책 수(수집된 장비만) + 합계 */
-  var polTable = (f.policy_rows || []).length
-    ? "<table class='wtable'><thead><tr><th>방화벽</th><th>Firewall 정책</th><th>Proxy 정책</th><th>히트 0건</th><th>비활성</th></tr></thead><tbody>" +
-      f.policy_rows.map(function (x) {
-        return "<tr><td><b>" + esc(x.name) + "</b></td><td><b>" + _n(x.total) + "</b></td><td>" +
-          _n(x.proxy_total) + "</td><td class='wam'>" + _n(x.unused) + "</td><td>" +
-          _n(x.disabled) + "</td></tr>";
-      }).join("") +
-      "<tr class='wsum'><td>합계</td><td><b>" + _n(pol.total) + "</b></td><td><b>" +
-      _n(pol.proxy_total) + "</b></td><td>" + _n(pol.unused) + "</td><td>" +
-      _n(pol.disabled) + "</td></tr></tbody></table>"
-    : "<p class='wnone'>정책 정보가 수집된 방화벽이 없습니다. REST 토큰/계정을 지정하고 수집하세요.</p>";
+  /* 정책 구성 — 도넛 + 전 장비 표(지표 없는 장비도 사유와 함께) */
+  var polById = {};
+  (f.policy_rows || []).forEach(function (r) { polById[r.name] = r; });
+  var polTable = "<table class='wtable'><thead><tr><th>방화벽</th><th>Firewall 정책</th><th>Proxy 정책</th><th>히트 0건</th><th>비활성</th></tr></thead><tbody>" +
+    stList.map(function (x) {
+      var r = polById[x.name];
+      if (!r) {
+        return "<tr><td><b>" + esc(x.name || "-") + "</b></td>" +
+          "<td colspan='4' class='wdim'>" + esc(whyEmpty(x)) + "</td></tr>";
+      }
+      return "<tr><td><b>" + esc(r.name) + "</b></td><td><b>" + _n(r.total) + "</b></td><td>" +
+        _n(r.proxy_total) + "</td><td class='wam'>" + _n(r.unused) + "</td><td>" +
+        _n(r.disabled) + "</td></tr>";
+    }).join("") +
+    ((f.policy_rows || []).length > 1
+      ? "<tr class='wsum'><td>합계</td><td><b>" + _n(pol.total) + "</b></td><td><b>" +
+        _n(pol.proxy_total) + "</b></td><td>" + _n(pol.unused) + "</td><td>" +
+        _n(pol.disabled) + "</td></tr>" : "") + "</tbody></table>";
+  var polCard = "<div class='wcard wcard--6'><h3>정책 구성" +
+    "<span class='hint'>방화벽별 Firewall / Proxy 정책 수</span></h3>" +
+    ((pol.total || 0) > 0
+      ? donut([{ label: "사용 중",
+                 value: Math.max(0, (pol.total || 0) - (pol.unused || 0) - (pol.disabled || 0)),
+                 c0: "#2563eb", c1: "#60a5fa" },
+               { label: "히트 0건", value: pol.unused || 0, c0: "#d97706", c1: "#fbbf24" },
+               { label: "비활성", value: pol.disabled || 0, c0: "#334155", c1: "#64748b" }],
+              _n(pol.total), "정책") : "") + polTable + "</div>";
+
+  /* 장비별 부하 — 전 장비 표(지표 없는 장비는 사유) */
+  var loadTable = "<table class='wtable'><thead><tr><th>방화벽</th><th>CPU</th><th>MEM</th><th>DISK</th><th>세션</th></tr></thead><tbody>" +
+    stList.map(function (x) {
+      var d = devById[x.id];
+      if (!d || (d.cpu === null || d.cpu === undefined) &&
+                (d.mem === null || d.mem === undefined) &&
+                (d.sessions === null || d.sessions === undefined)) {
+        return "<tr><td><b>" + esc(x.name || "-") + "</b><div class='wdim'>" + esc(x.host || "") +
+          "</div></td><td colspan='4' class='wdim'>" + esc(whyEmpty(x)) + "</td></tr>";
+      }
+      function cell(pv) {
+        if (pv === null || pv === undefined) return "<td class='wdim'>-</td>";
+        var lv2 = pctLv(pv) || "normal";
+        var cls = lv2 === "critical" ? "mf-crit" : lv2 === "warning" ? "mf-warn" : "mf-ok";
+        return "<td><span class='wmini'><span class='wmini__f " + cls + "' style='width:" +
+          Math.min(100, pv) + "%'></span></span> " + pv + "%</td>";
+      }
+      return "<tr><td><b>" + esc(d.name) + "</b><div class='wdim'>" + esc(d.host || "") +
+        "</div></td>" + cell(d.cpu) + cell(d.mem) + cell(d.disk) +
+        "<td>" + _n(d.sessions) + "</td></tr>";
+    }).join("") + "</tbody></table>";
+  var loadCard = "<div class='wcard wcard--6'><h3>장비별 부하" +
+    "<span class='hint'>SNMP 또는 SSH(get sys perf status)로 수집</span></h3>" + loadTable + "</div>";
 
   el.innerHTML =
     kpiRow([
@@ -497,16 +577,7 @@ function renderFirewallTab(f) {
       { num: _n(sess), label: "동시 세션 합계", color: "#fbbf24" }
     ]) +
     (cards ? "<div class='fwrow'>" + cards + "</div>" : "") +
-    "<div class='wgrid'>" +
-    wcard("수집 상태", "어떤 장비가 왜 실패했는지", stTable, "wcard--6") +
-    wcard("정책 구성", "방화벽별 Firewall / Proxy 정책 수", polTable, "wcard--6") +
-    ((v.tunnels || 0) > 0
-      ? wcard("VPN 터널", "",
-          donut([{ label: "연결", value: v.up || 0, c0: "#059669", c1: "#34d399" },
-                 { label: "끊김", value: v.down || 0, c0: "#e11d48", c1: "#fb7185" }],
-                _n(v.tunnels), "터널"), "wcard--4")
-      : "") +
-    "</div>";
+    "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + "</div>";
 }
 
 /* ── 설비 탭 ── */
