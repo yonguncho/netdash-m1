@@ -122,6 +122,7 @@ document.addEventListener("click", function (e) {
     case "delete-fw": deleteFirewall(nid); break;
     case "diagnose-server": diagnoseServer(nid); break;
     case "explain-facility": explainFacility(id); break;   // id는 IP 문자열(정수 아님)
+    case "snmp-probe-fw": snmpProbeFirewall(nid); break;
     case "hw-detail":
       e.preventDefault();
       showHwDetail(nid, btn.getAttribute("data-hw"));
@@ -1959,6 +1960,25 @@ function _applySwSearch(list) {
   });
 }
 
+// 방화벽 부하 셀 — SNMP(FORTINET-FORTIGATE-MIB)로 읽은 CPU·메모리·세션.
+function fwLoadCell(f) {
+  var cpu = (f.cpu_pct === undefined || f.cpu_pct === null) ? null : f.cpu_pct;
+  var mem = (f.mem_pct === undefined || f.mem_pct === null) ? null : f.mem_pct;
+  if (cpu === null && mem === null && (f.sessions === undefined || f.sessions === null)) {
+    return "<span class='cell-none' title='SNMP 상태 지표 없음 — 설정에서 SNMP 커뮤니티를 넣고 재수집하세요. " +
+      "FortiGate 전용 MIB이라 다른 벤더는 비어 있습니다'>-</span>";
+  }
+  var lvl = f.metrics_level || "normal";
+  var color = lvl === "critical" ? "#b91c1c" : lvl === "warning" ? "#b45309" : "#334155";
+  var parts = [];
+  if (cpu !== null) parts.push("CPU " + cpu + "%");
+  if (mem !== null) parts.push("MEM " + mem + "%");
+  var main = parts.join(" · ") || "-";
+  var sub = (f.sessions === undefined || f.sessions === null)
+    ? "" : "<div class='cell-sub'>세션 " + escHtml(String(f.sessions)) + "</div>";
+  return "<span style='color:" + color + ";font-weight:600'>" + escHtml(main) + "</span>" + sub;
+}
+
 // 온도 셀 — SNMP(ENTITY-SENSOR-MIB)로 읽은 최고 센서 온도.
 // 값이 없는 게 정상인 경우가 많아(이 MIB 미지원 / SNMP 미설정) '-'에 사유를 달아둔다.
 function tempCell(d) {
@@ -2151,6 +2171,36 @@ function diagnoseSwitch(id) {
   }).catch(function (e) {
     if (prog) prog.textContent = "진단 오류: " + e;
   });
+}
+
+// FortiGate SNMP 확인 — 어떤 OID가 실제로 응답하는지 원문으로 보여준다.
+// 실장비 없이 작성한 OID가 맞는지 눈으로 확인하기 위한 경로(진단 팝업 재사용).
+function snmpProbeFirewall(id) {
+  var out = document.getElementById("diag-result");
+  openModal("modal-diagnose");
+  if (out) out.textContent = "SNMP 조회 중... (최대 25초)";
+  fetch("/api/firewalls/" + id + "/snmp-probe", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!out) return;
+      if (!res.ok) { out.textContent = "SNMP 확인 실패: " + (res.error || ""); return; }
+      var p = res.probe || {}, L = [];
+      L.push("FortiGate SNMP 확인 — " + (res.host || ""));
+      L.push("");
+      L.push("── 주요 OID 응답 ──");
+      (p.scalars || []).forEach(function (s) {
+        L.push("  " + s.oid + "  =  " + s.value);
+      });
+      var sub = p.subtree || [];
+      L.push("");
+      L.push("── 시스템 정보 하위 트리 (" + sub.length + "건) ──");
+      if (!sub.length) L.push("  (없음 — 이 장비는 Fortinet 전용 MIB을 노출하지 않거나 접근이 막혀 있습니다)");
+      sub.forEach(function (s) { L.push("  " + s.oid + "  =  " + s.value); });
+      L.push("");
+      L.push("※ '(응답 없음)'인 항목은 이 장비/펌웨어가 해당 OID를 주지 않는다는 뜻입니다.");
+      out.textContent = L.join("\n");
+    })
+    .catch(function (e) { if (out) out.textContent = "조회 오류: " + e; });
 }
 
 // 방화벽 진단 — 관리 포트/SSH 도달성 + 저장 계정 인증(스위치 진단 팝업 재사용)
@@ -2972,6 +3022,7 @@ function renderFirewalls(firewalls) {
       "<td><code>" + escHtml(f.host) + "</code></td>" +
       "<td>" + locCell + "</td>" +
       "<td>" + tempCell(f) + "</td>" +      // 스위치와 같은 SNMP 경로 · 같은 셀 함수
+      "<td>" + fwLoadCell(f) + "</td>" +
       // 이중화(동일 VIP) 대기 장비는 개별 수집이 실패할 수밖에 없다 →
       // 짝이 정상이면 정상으로 표기하고 근거를 툴팁에 남긴다.
       "<td>" + (f.ha_via
@@ -2985,6 +3036,11 @@ function renderFirewalls(firewalls) {
         "data-action='collect-fw' data-payload='" + fjson + "'>수집</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
         "data-action='detail-fw' data-id='" + f.id + "'>상세</button> " +
+        (f.vendor === "fortigate"
+          ? "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+            "title='SNMP로 실제 어떤 값이 오는지 원문 확인(CPU·메모리·세션 OID)' " +
+            "data-action='snmp-probe-fw' data-id='" + f.id + "'>SNMP</button> "
+          : "") +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
         "data-action='edit-fw' data-payload='" + payloadAttr((f)) + "'>수정</button> " +
         "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +

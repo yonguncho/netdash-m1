@@ -586,6 +586,13 @@ def _attach_env(db_path, rows, kind):
             r["temp_level"] = e.get("level")
             r["env_updated"] = e.get("updated")
             r["env_fan_count"] = e.get("fan_count")
+            m = e.get("metrics") or {}
+            if m:
+                # 표 한 줄에 필요한 것만 — 상세 지표는 상세보기에서 읽는다.
+                r["cpu_pct"] = m.get("cpu_pct")
+                r["mem_pct"] = m.get("mem_pct")
+                r["sessions"] = m.get("sessions")
+                r["metrics_level"] = m.get("level")
     return rows
 
 
@@ -3160,6 +3167,34 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "export_error", kind=kind,
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/firewalls/<int:fw_id>/snmp-probe", methods=["POST"])
+    @rate_limit("fw_snmp_probe", max_requests=10, window_seconds=60)
+    def firewall_snmp_probe(fw_id):
+        """FortiGate가 SNMP로 실제 무엇을 주는지 원문 확인(파싱 확정 전 검증용)."""
+        try:
+            fw = db.get_firewall(db_path, fw_id)
+            if not fw:
+                return jsonify({"ok": False, "error": "방화벽을 찾을 수 없습니다"}), 404
+            community = collector._snmp_community_if_enabled(db_path)
+            if not community:
+                return jsonify({"ok": False, "error":
+                                "SNMP가 꺼져 있거나 커뮤니티가 설정되지 않았습니다 "
+                                "— 설정에서 먼저 지정하세요"}), 400
+            from core import snmp_fortigate
+            try:
+                out = snmp_fortigate.probe(fw["host"], community)
+            except snmp_fortigate.SnmpClosed:
+                return jsonify({"ok": False, "error":
+                                "161/UDP에서 응답이 없습니다 — 장비에 SNMP 에이전트가 "
+                                "떠 있는지, 이 PC IP가 허용 호스트인지 확인하세요"})
+            except snmp_fortigate.SnmpError as e:
+                return jsonify({"ok": False, "error": str(e)[:300]})
+            return jsonify({"ok": True, "host": fw["host"], "probe": out})
+        except Exception as e:
+            log_event("error", "fw_snmp_probe_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
 
     @app.route("/api/facility/explain", methods=["GET"])
     @rate_limit("facility_explain", max_requests=60, window_seconds=60)

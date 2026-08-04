@@ -10,7 +10,30 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.17.0) — 제조사(벤더사)와 제품 분리
+## 작업 중 (v6.18.0) — FortiGate SNMP 상태 지표
+
+사용자 질문: FortiGate SNMP 연동이 가능한데 무엇을 모니터링할 수 있나.
+
+- `core/snmp_fortigate.py` 신규 — FORTINET-FORTIGATE-MIB(1.3.6.1.4.1.12356.101)
+  CPU·메모리·디스크·세션 수·펌웨어·업타임 + HA 모드/멤버별 부하·동기화.
+  온도·팬은 표준 MIB이라 v6.16.0의 snmp_env가 이미 담당(중복 구현 안 함).
+- **OID 실장비 미검증** — 그래서 ① 없는 항목은 그 항목만 빠지고 ② `probe()`로
+  장비가 실제 무엇을 주는지 원문을 화면에서 볼 수 있게 했다
+  (`POST /api/firewalls/<id>/snmp-probe`, 방화벽 행의 'SNMP' 버튼).
+  v6.8.0 사양 진단과 같은 패턴 — 실장비 응답을 받아 파싱을 확정한다.
+- `device_env.metrics_json` 컬럼 추가(ALTER 마이그레이션). 온도와 지표는 수집
+  경로가 달라 `INSERT OR REPLACE`로 덮으면 서로를 지운다 → `ON CONFLICT DO UPDATE`로
+  각자 자기 컬럼만 갱신. 회귀 테스트로 양방향 확인.
+- 방화벽 표에 '부하'(CPU·MEM·세션) 컬럼.
+
+**테스트가 잡아준 내 오류 2건**:
+- `probe()`가 응답이 빈 목록일 때 "(응답 없음)" 줄을 안 만들어, 정작 '무엇이
+  없는지' 묻는 진단이 답을 못 했다.
+- "커뮤니티 미설정이면 SNMP를 시도조차 안 한다"고 주석·테스트에 적었는데 사실이
+  아니다 — `snmp_community()`는 저장값이 없어도 **기본값 'public'을 돌려준다**.
+  끄는 스위치는 `snmp_enabled`뿐이다. v6.16.0 주석·테스트까지 함께 정정.
+
+## v6.17.0 — 제조사(벤더사)와 제품 분리
 
 사용자 지적: 방화벽 현황의 '벤더'가 `fortigate`로 나오는데 FortiGate는 제품이고
 벤더사는 Fortinet이다. 벤더사 컬럼을 추가하고, 앞으로 제품 정보로 벤더사를

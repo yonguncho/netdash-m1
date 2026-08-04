@@ -190,9 +190,15 @@ def test_env_absent_returns_none(temp_db):
 
 # --- 수집 연동: 설정이 없으면 조용히 건너뛴다 --------------------------------
 
-def test_collect_env_skipped_without_community(temp_db):
-    """커뮤니티 미설정이면 SNMP를 시도조차 하지 않는다(장비마다 타임아웃 낭비 방지)."""
-    from core import collector
+def test_collect_env_skipped_when_snmp_disabled(temp_db):
+    """설정에서 SNMP를 끄면 시도하지 않는다.
+
+    v6.18.0 정정: 예전엔 '커뮤니티 미설정이면 안 한다'고 적었는데 사실이 아니다.
+    snmp_community()는 저장값이 없어도 기본값 public을 돌려준다 — 끄는 스위치는
+    snmp_enabled뿐이다.
+    """
+    from core import db, collector
+    db.set_setting(temp_db, "snmp_enabled", "0")
     assert collector.collect_env_snmp(temp_db, "switch", 1, "10.0.0.1") is None
 
 

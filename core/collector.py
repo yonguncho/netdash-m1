@@ -412,19 +412,17 @@ def collect_env_snmp(db_path, kind, device_id, ip, budget=15.0):
 
     스위치·방화벽·서버가 같은 표준 MIB(ENTITY-SENSOR-MIB)을 쓰므로 구현은 하나다.
     - 서버 사양 수집이 쓰던 SNMP 설정(사용 여부·커뮤니티)을 그대로 재사용한다.
-      온도 때문에 커뮤니티를 또 입력하게 만들 이유가 없다.
+      온도 때문에 커뮤니티를 또 입력하게 만들 이유가 없다. 설정을 안 했으면
+      기본값 'public'으로 시도한다(끄려면 설정에서 SNMP를 끈다).
     - 실패는 조용히 넘긴다: 이 MIB 미지원 장비가 흔하고, SSH 수집 결과까지
       같이 버리면 손해가 더 크다. 원인은 로그로 남긴다.
     """
     if not ip:
         return None
+    community = _snmp_community_if_enabled(db_path)
+    if not community:
+        return None
     try:
-        from . import server_collector as _sc
-        if not _sc.snmp_enabled(db_path):
-            return None
-        community = _sc.snmp_community(db_path)
-        if not community:
-            return None
         from . import snmp_env
     except Exception:
         return None
@@ -446,6 +444,49 @@ def collect_env_snmp(db_path, kind, device_id, ip, budget=15.0):
         return None
     db.save_device_env(db_path, kind, device_id, env, source="snmp")
     return env
+
+
+def _snmp_community_if_enabled(db_path):
+    """SNMP가 켜져 있으면 커뮤니티, 꺼져 있으면 None.
+
+    주의: `snmp_community()`는 저장값이 없어도 기본값 'public'을 돌려준다
+    (서버 사양 수집 때부터의 동작). 즉 커뮤니티를 설정하지 않아도 시도는 한다 —
+    폐쇄망에서 public이 열려 있는 경우가 많아 그대로 두지만, '설정해야만 시도한다'는
+    뜻이 아니다. 끄려면 설정에서 SNMP 자체를 꺼야 한다.
+    """
+    try:
+        from . import server_collector as _sc
+        if not _sc.snmp_enabled(db_path):
+            return None
+        return _sc.snmp_community(db_path) or None
+    except Exception:
+        return None
+
+
+def collect_fw_metrics_snmp(db_path, fw):
+    """FortiGate 상태 지표(CPU·메모리·디스크·세션·HA)를 SNMP로 읽어 저장.
+
+    벤더 전용 MIB이라 FortiGate에만 시도한다. 실패는 조용히 넘긴다 —
+    REST/SSH 수집 결과까지 같이 버리면 손해가 크다.
+    """
+    if (fw or {}).get("vendor") != "fortigate" or not fw.get("host"):
+        return None
+    community = _snmp_community_if_enabled(db_path)
+    if not community:
+        return None
+    try:
+        from . import snmp_fortigate
+        m = snmp_fortigate.collect_health(fw["host"], community)
+    except Exception as e:
+        utils.log_event("info", "fw_metrics_snmp_skipped", firewall_id=fw.get("id"),
+                        error=_sanitize_error_msg(str(e))[:120])
+        return None
+    if not m or all(m.get(k) is None for k in ("cpu_pct", "mem_pct", "sessions")):
+        # 응답은 왔는데 핵심 지표가 없다 = SNMP는 되지만 이 MIB이 막혀 있다.
+        utils.log_event("info", "fw_metrics_snmp_empty", firewall_id=fw.get("id"))
+        return None
+    db.save_device_metrics(db_path, "firewall", fw["id"], m, source="snmp")
+    return m
 
 
 def _commands_for(vendor):
@@ -1617,6 +1658,8 @@ def collect_all_registered(db_path):
                 db.save_firewall_arp(db_path, fw["id"], r["arp"])
                 # 온도·팬 — 스위치와 같은 표준 MIB 경로를 그대로 쓴다.
                 collect_env_snmp(db_path, "firewall", fw["id"], fw.get("host"))
+                # FortiGate 고유 지표(CPU·메모리·세션·HA) — 전용 MIB.
+                collect_fw_metrics_snmp(db_path, fw)
                 db.set_firewall_status(db_path, fw["id"], "done")
                 result["firewalls"] += 1
             except Exception as e:

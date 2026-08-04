@@ -308,6 +308,7 @@ CREATE TABLE IF NOT EXISTS device_env (
     temp_count INTEGER DEFAULT 0,
     fan_count INTEGER DEFAULT 0,
     sensors_json TEXT,
+    metrics_json TEXT,
     source TEXT,
     updated TEXT,
     PRIMARY KEY (kind, device_id)
@@ -708,6 +709,12 @@ def init_schema(db_path):
             # 방화벽 HA 구성(JSON: mode/hbdev/monitor) — 이중화 연결선에 HA 포트 표기용
             try:
                 cursor.execute("ALTER TABLE firewalls ADD COLUMN ha_info TEXT")
+            except Exception:
+                pass
+            # 장비 상태 지표(CPU·메모리·세션 등, JSON) — v6.16.0의 device_env에
+            # 뒤늦게 추가. 온도(센서)와 성격이 달라 컬럼을 나눈다.
+            try:
+                cursor.execute("ALTER TABLE device_env ADD COLUMN metrics_json TEXT")
             except Exception:
                 pass
             # 서버 하드웨어 사양(CPU/메모리/디스크) — SSH 상세 수집에서 채움
@@ -1905,7 +1912,11 @@ _ENV_KINDS = ("switch", "firewall", "server")
 
 
 def save_device_env(db_path, kind, device_id, env, source="snmp"):
-    """장비 환경 정보 저장(kind+device_id 교체). env는 snmp_env.summarize() 결과."""
+    """장비 환경 정보(온도·팬) 저장. env는 snmp_env.summarize() 결과.
+
+    metrics_json은 건드리지 않는다 — 온도와 상태 지표는 수집 경로가 달라서
+    INSERT OR REPLACE로 통째로 덮으면 방금 저장한 지표가 지워진다.
+    """
     if kind not in _ENV_KINDS:
         raise ValueError("unknown device kind: %s" % kind)
     import json as _json
@@ -1913,15 +1924,40 @@ def save_device_env(db_path, kind, device_id, env, source="snmp"):
         with get_db(db_path) as conn:
             try:
                 conn.execute(
-                    """INSERT OR REPLACE INTO device_env
+                    """INSERT INTO device_env
                        (kind, device_id, max_temp_c, level, temp_count, fan_count,
                         sensors_json, source, updated)
-                       VALUES (?,?,?,?,?,?,?,?, datetime('now','localtime'))""",
+                       VALUES (?,?,?,?,?,?,?,?, datetime('now','localtime'))
+                       ON CONFLICT(kind, device_id) DO UPDATE SET
+                         max_temp_c=excluded.max_temp_c, level=excluded.level,
+                         temp_count=excluded.temp_count, fan_count=excluded.fan_count,
+                         sensors_json=excluded.sensors_json, source=excluded.source,
+                         updated=excluded.updated""",
                     (kind, int(device_id), env.get("max_temp_c"), env.get("level"),
                      env.get("temp_count") or 0, env.get("fan_count") or 0,
                      _json.dumps(env.get("sensors") or [], ensure_ascii=False), source))
             except Exception as e:
                 log_event("warning", "save_device_env_skipped", error=str(e))
+
+
+def save_device_metrics(db_path, kind, device_id, metrics, source="snmp"):
+    """장비 상태 지표(CPU·메모리·세션 등) 저장. 온도(sensors_json)는 보존한다."""
+    if kind not in _ENV_KINDS:
+        raise ValueError("unknown device kind: %s" % kind)
+    import json as _json
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute(
+                    """INSERT INTO device_env (kind, device_id, metrics_json, source, updated)
+                       VALUES (?,?,?,?, datetime('now','localtime'))
+                       ON CONFLICT(kind, device_id) DO UPDATE SET
+                         metrics_json=excluded.metrics_json, source=excluded.source,
+                         updated=excluded.updated""",
+                    (kind, int(device_id),
+                     _json.dumps(metrics or {}, ensure_ascii=False), source))
+            except Exception as e:
+                log_event("warning", "save_device_metrics_skipped", error=str(e))
 
 
 def get_device_env(db_path, kind, device_id):
@@ -1932,7 +1968,8 @@ def get_device_env(db_path, kind, device_id):
             cur = conn.cursor()
             cur.execute(
                 "SELECT max_temp_c, level, temp_count, fan_count, sensors_json, "
-                "source, updated FROM device_env WHERE kind=? AND device_id=?",
+                "metrics_json, source, updated FROM device_env "
+                "WHERE kind=? AND device_id=?",
                 (kind, int(device_id)))
             row = cur.fetchone()
         except Exception:
@@ -1945,6 +1982,11 @@ def get_device_env(db_path, kind, device_id):
     except (ValueError, TypeError):
         out["sensors"] = []
         out.pop("sensors_json", None)
+    try:
+        out["metrics"] = _json.loads(out.pop("metrics_json") or "{}")
+    except (ValueError, TypeError):
+        out["metrics"] = {}
+        out.pop("metrics_json", None)
     return out
 
 
@@ -1953,15 +1995,23 @@ def get_device_env_map(db_path, kind):
 
     센서 상세(sensors_json)는 빼고 준다. 표 한 줄에 필요한 건 최고 온도와 등급뿐인데
     장비마다 센서 수십 개를 실어 보내면 목록 응답이 통째로 무거워진다.
+    상태 지표(metrics)는 항목이 몇 개뿐이라 그대로 싣는다.
     """
+    import json as _json
     out = {}
     with get_db(db_path) as conn:
         try:
             cur = conn.cursor()
             cur.execute("SELECT device_id, max_temp_c, level, temp_count, fan_count, "
-                        "source, updated FROM device_env WHERE kind=?", (kind,))
+                        "metrics_json, source, updated FROM device_env WHERE kind=?",
+                        (kind,))
             for r in cur.fetchall():
                 d = dict(r)
+                try:
+                    d["metrics"] = _json.loads(d.pop("metrics_json") or "{}")
+                except (ValueError, TypeError):
+                    d["metrics"] = {}
+                    d.pop("metrics_json", None)
                 out[d.pop("device_id")] = d
         except Exception:
             return {}
