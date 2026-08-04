@@ -187,6 +187,7 @@ function _applyLocFilter(list, inputId) {
       _setVal("ac-retention", d.retention_days || "90");
       _setVal("ac-timezone", d.display_timezone || "America/New_York");
       _setChk("ac-snmp-enabled", d.snmp_enabled !== false);
+      _setVal("ac-metrics-minutes", d.metrics_poll_minutes || "5");
       // 커뮤니티는 자격증명이라 서버가 값을 안 내려준다 — 저장 여부만 안내한다.
       _setVal("ac-snmp-community", "");
       var sc = document.getElementById("ac-snmp-community");
@@ -262,6 +263,7 @@ function _applyLocFilter(list, inputId) {
       retention_days: _val("ac-retention", "90"),
       display_timezone: _val("ac-timezone", "America/New_York"),
       snmp_enabled: _chk("ac-snmp-enabled"),
+      metrics_poll_minutes: _val("ac-metrics-minutes", "5"),
       snmp_community: _val("ac-snmp-community", ""),
     };
     var emailBody = {

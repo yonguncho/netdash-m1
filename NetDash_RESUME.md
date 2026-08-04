@@ -10,7 +10,29 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.25.0) — 방화벽 현황 단순화 + get sys status + EOS/EoES
+## 작업 중 (v6.26.0) — 시계열: 이력 테이블 + 폴러 + uPlot 번들 (사용자 승인)
+
+- `metrics_history` 테이블 — kind(firewall/switch/facility/ports)별 시각 점.
+  30일 보존, 폴러가 하루 1회 정리.
+- `core/metrics_poller.py` — 기본 5분(⚙설정 `지표 기록 주기(분)`, 0=끔).
+  FortiGate cpu/mem/sessions/temp(SNMP, 예산 8s/6s), 스위치 temp, 설비·포트는
+  DB 집계(네트워크 접근 없음). 데모 모드는 SNMP 생략(가짜 IP 타임아웃 방지).
+  장비 하나 죽어도 나머지 기록(테스트 고정). 실행 시간 차감 대기(주기 밀림 방지).
+- `GET /api/wall/series?hours=1|24|168` (상한 720h).
+- **uPlot v1.6.32 (MIT) 번들** — `web/static/vendor/uplot.*` (vendor는 기존
+  xterm처럼 spec에 이미 포함). CDN 참조 없음(테스트 고정).
+- 관제 위젯: 방화벽 탭 세션·CPU 추이(장비별 다중 선), 스위치 탭 포트 사용·온도
+  추이, 설비 탭 온라인 설비 추이(계단 꺾임 = 장애 시각). 1h/24h/7d 전환.
+  데이터 없으면 "기록 수집 중" 안내(켠 직후 빈 그래프 오해 방지).
+- 시리즈 갱신 60초(5분 격자라 충분).
+- **검증 중 잡은 결함 2건**: ① 30초 통계 갱신(renderStats)이 innerHTML을 다시
+  그리며 차트를 지움 → renderStats 끝에서 차트 재렌더. ② `PALETTE` 정의가 이전
+  블록 교체 때 유실 — 에러가 .catch에 잡혀 pageerror에 안 걸림("JS errors: none"
+  인데 차트 빈 화면). console 수집으로 발견. 메모리
+  `netdash_block_replace_drops_shared_defs` 기록.
+- 실화면: 세션·CPU 하루 파형, 설비 온라인 계단(1240→1180→복구) 렌더 확인.
+
+## v6.25.0 — 방화벽 현황 단순화 + get sys status + EOS/EoES
 
 사용자 지시: 방화벽 현황은 **리스트만**(상단 통계 제거 — 관제 전담, 부하·온도
 컬럼 제거), get sys status 기준 **모델·버전** 컬럼. 보유 모델 1000D/1500D/1100E

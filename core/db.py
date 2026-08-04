@@ -315,6 +315,24 @@ CREATE TABLE IF NOT EXISTS device_env (
 )
 """
 
+# 지표 이력 — 시계열 그래프의 재료. 폴러가 5분(설정 가능)마다 한 점씩 기록한다.
+# kind: firewall(장비별 cpu/mem/sessions/temp) / switch(temp) /
+#       facility(전체 online/total, device_id=0) / ports(전체 up/total, device_id=0)
+CREATE_METRICS_HISTORY_TABLE = """
+CREATE TABLE IF NOT EXISTS metrics_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    device_id INTEGER NOT NULL DEFAULT 0,
+    ts TEXT NOT NULL,
+    cpu INTEGER,
+    mem INTEGER,
+    sessions INTEGER,
+    temp_c REAL,
+    online INTEGER,
+    total INTEGER
+)
+"""
+
 # 서버실 랙 배치 스냅샷 — 장비 삭제·재등록으로 랙 위치가 사라지지 않게 하는 보관본.
 # 키는 (kind, ip): 재등록하면 id는 바뀌지만 IP는 대개 유지된다.
 CREATE_RACK_LAYOUT_TABLE = """
@@ -641,6 +659,7 @@ def init_schema(db_path):
                 CREATE_FACILITY_HOSTS_TABLE,
                 CREATE_DEVICE_ENV_TABLE,
                 CREATE_RACK_LAYOUT_TABLE,
+                CREATE_METRICS_HISTORY_TABLE,
                 CREATE_SERVERS_TABLE,
                 CREATE_PC_PROFILES_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
@@ -2041,6 +2060,56 @@ def delete_device_env(db_path, kind, device_id):
                              (kind, int(device_id)))
             except Exception:
                 pass
+
+
+def save_metrics_point(db_path, kind, device_id=0, cpu=None, mem=None,
+                       sessions=None, temp_c=None, online=None, total=None):
+    """지표 한 점 기록. 폴러가 주기마다 부른다 — 실패해도 예외를 올리지 않는다
+    (한 번 빠진 점보다 폴러 스레드가 죽는 쪽이 훨씬 나쁘다)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO metrics_history "
+                    "(kind, device_id, ts, cpu, mem, sessions, temp_c, online, total) "
+                    "VALUES (?,?, datetime('now','localtime'), ?,?,?,?,?,?)",
+                    (kind, int(device_id), cpu, mem, sessions, temp_c, online, total))
+            except Exception as e:
+                log_event("warning", "save_metrics_point_skipped", error=str(e)[:120])
+
+
+def get_metrics_series(db_path, kind, device_id=None, hours=24, limit=4000):
+    """시계열 조회 → [{device_id, ts, cpu, mem, sessions, temp_c, online, total}].
+
+    hours 창 안의 점만. limit은 폭주 방지(5분 간격 × 7일 × 장비 20대 ≈ 4만이라
+    화면은 kind별로 나눠 부른다).
+    """
+    q = ("SELECT device_id, ts, cpu, mem, sessions, temp_c, online, total "
+         "FROM metrics_history WHERE kind=? AND ts >= datetime('now','localtime', ?)")
+    args = [kind, "-%d hours" % int(hours)]
+    if device_id is not None:
+        q += " AND device_id=?"
+        args.append(int(device_id))
+    q += " ORDER BY ts LIMIT ?"
+    args.append(int(limit))
+    with get_db(db_path) as conn:
+        try:
+            return [dict(r) for r in conn.execute(q, args).fetchall()]
+        except Exception:
+            return []
+
+
+def prune_metrics_history(db_path, days=30):
+    """보존기간 지난 이력 삭제. 반환: 삭제 건수(모르면 0)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                cur = conn.execute(
+                    "DELETE FROM metrics_history WHERE ts < datetime('now','localtime', ?)",
+                    ("-%d days" % int(days),))
+                return cur.rowcount or 0
+            except Exception:
+                return 0
 
 
 def save_switch_logs(db_path, switch_id, recent_lines, events_json, log_alert):

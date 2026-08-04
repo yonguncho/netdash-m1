@@ -784,6 +784,13 @@ def _start_primary_services(config, db_path):
         scheduler.start_scheduler(db_path)
     except Exception as e:
         log_event("warning", "scheduler_start_failed", error=str(e))
+    # 지표 이력 폴러 — 시계열 그래프의 데이터 공급(기본 5분, 설정으로 변경/끔).
+    # 데모 모드는 SNMP를 건너뛰고 DB 집계 점(설비·포트)만 기록한다.
+    try:
+        from core import metrics_poller
+        metrics_poller.start(db_path, demo_mode=bool(config.app.get("demo_mode")))
+    except Exception as e:
+        log_event("warning", "metrics_poller_start_failed", error=str(e))
     # 스위치 도달성 감시(TCP-22, 부하 없는 1분 내 끊김 감지 — 설정으로 on/off)
     if not config.app.get("demo_mode"):
         try:
@@ -3237,6 +3244,41 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"ok": False, "error": "Internal server error"}), 500
 
+    @app.route("/api/wall/series", methods=["GET"])
+    def wall_series():
+        """시계열 조회(관제 그래프용). ?hours=1|24|168 — kind별로 묶어 반환."""
+        try:
+            hours = int(request.args.get("hours") or 24)
+            hours = max(1, min(24 * 30, hours))
+        except (TypeError, ValueError):
+            hours = 24
+        try:
+            fw_names = {f["id"]: f.get("name") for f in db.list_firewalls(db_path)}
+            sw_names = {x["id"]: x.get("name") for x in db.get_switches(db_path)}
+
+            def by_dev(kind, names):
+                out = {}
+                for r in db.get_metrics_series(db_path, kind, hours=hours):
+                    d = out.setdefault(str(r["device_id"]), {
+                        "name": names.get(r["device_id"]) or ("#%s" % r["device_id"]),
+                        "points": []})
+                    d["points"].append([r["ts"], r["cpu"], r["mem"],
+                                        r["sessions"], r["temp_c"]])
+                return out
+
+            fac = [[r["ts"], r["online"], r["total"]]
+                   for r in db.get_metrics_series(db_path, "facility", hours=hours)]
+            ports = [[r["ts"], r["online"], r["total"]]
+                     for r in db.get_metrics_series(db_path, "ports", hours=hours)]
+            return jsonify({"hours": hours,
+                            "firewalls": by_dev("firewall", fw_names),
+                            "switches": by_dev("switch", sw_names),
+                            "facility": fac, "ports": ports})
+        except Exception as e:
+            log_event("error", "wall_series_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/wall/stats", methods=["GET"])
     def wall_stats():
         """관제 통합 대시보드 통계(스위치·방화벽·설비 탭 공용)."""
@@ -4167,6 +4209,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 # SNMP 사양 수집(SSH가 닫힌 리눅스·UNIX 서버용) — 커뮤니티 값은
                 # 자격증명이므로 내려주지 않고 '설정됨' 여부만 알린다.
                 "snmp_enabled": db.get_setting(db_path, "snmp_enabled", "1") != "0",
+                "metrics_poll_minutes": db.get_setting(db_path, "metrics_poll_minutes", "5"),
                 "snmp_has_community": bool(
                     db.get_setting(db_path, "snmp_community_blob", "")),
             })
@@ -4220,6 +4263,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # SNMP 사양 수집 on/off + 커뮤니티(암호화 저장, 빈 값이면 기존 값 유지)
             db.set_setting(db_path, "snmp_enabled",
                            "1" if data.get("snmp_enabled", True) else "0")
+            # 지표 기록 주기(분) — 0=끔, 1~1440. 다음 주기부터 폴러가 새 값을 읽는다.
+            if "metrics_poll_minutes" in data:
+                try:
+                    _mp = max(0, min(1440, int(data.get("metrics_poll_minutes"))))
+                    db.set_setting(db_path, "metrics_poll_minutes", str(_mp))
+                except (TypeError, ValueError):
+                    pass
             # 빈 값은 '변경 없음'이다 — 화면이 저장된 커뮤니티를 되돌려주지 않으므로
             # 빈 값으로 덮어쓰면 다른 설정을 저장할 때마다 커뮤니티가 지워진다.
             comm = data.get("snmp_community")

@@ -242,6 +242,12 @@ var _WSTAT = null;
 var _wtab = "summary";
 var _gid = 0;   // SVG 그라데이션 id 충돌 방지(도넛마다 고유 defs)
 
+// 시리즈 색상 팔레트 — 랭킹 막대·시계열 차트 공용.
+// (이전 블록 교체 때 정의가 유실돼 차트가 조용히 안 그려졌었다 — 오류가 .catch에
+//  잡혀 pageerror에도 안 걸림. 콘솔 로그까지 봐야 잡히는 유형.)
+var PALETTE = ["#22d3ee", "#a78bfa", "#34d399", "#fbbf24", "#fb7185",
+               "#60a5fa", "#f97316", "#2dd4bf"];
+
 function lvlColor(l) {
   return l === "critical" ? "#fb7185" : l === "warning" ? "#fbbf24" : "#34d399";
 }
@@ -385,6 +391,10 @@ function renderSwitchTab(s) {
             return { name: t.name, v: t.temp_c, d: t.temp_c + "°C" };
           }), { c0: "#c2410c", c1: "#fb923c" }), "wcard--6")
       : "") +
+    "<div class='wcard wcard--6'><h3>포트 사용 추이" + rangeBtns() +
+      "</h3><div id='ch-ports' class='wchartbox'></div></div>" +
+    "<div class='wcard wcard--6'><h3>온도 추이<span class='hint'>스위치별</span></h3>" +
+      "<div id='ch-sw-temp' class='wchartbox'></div></div>" +
     "</div>";
 }
 
@@ -576,6 +586,13 @@ function renderFirewallTab(f) {
         detail: pol.proxy_total ? "Proxy 정책 " + _n(pol.proxy_total) : "", color: "#a78bfa" },
       { num: _n(sess), label: "동시 세션 합계", color: "#fbbf24" }
     ]) +
+    "<div class='wgrid'>" +
+    "<div class='wcard wcard--6'><h3>세션 추이" + rangeBtns() +
+      "</h3><div id='ch-fw-sess' class='wchartbox'></div></div>" +
+    "<div class='wcard wcard--6'><h3>CPU 추이" +
+      "<span class='hint'>방화벽별 · " + (_seriesHours >= 168 ? "7일" : _seriesHours + "시간") +
+      "</span></h3><div id='ch-fw-cpu' class='wchartbox'></div></div>" +
+    "</div>" +
     (cards ? "<div class='fwrow'>" + cards + "</div>" : "") +
     "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + "</div>";
 }
@@ -616,7 +633,11 @@ function renderFacilityTab(c) {
         return { name: x.name, v: x.count,
                  d: _n(x.online) + "/" + _n(x.count) + " <small>(" + pct + "%)</small>" };
       }), { c0: "#059669", c1: "#34d399" }) +
-    "</div></div>";
+    "</div>" +
+    "<div class='wcard wcard--12'><h3>온라인 설비 추이" + rangeBtns() +
+      "<span class='hint'>계단이 꺾인 시각 = 설비가 무더기로 끊긴 시각 — 그 시각의 스위치·전원 이벤트와 대조</span></h3>" +
+      "<div id='ch-fac' class='wchartbox'></div></div>" +
+    "</div>";
 }
 
 function renderStats() {
@@ -624,6 +645,9 @@ function renderStats() {
   renderSwitchTab(_WSTAT.switches);
   renderFirewallTab(_WSTAT.firewalls);
   renderFacilityTab(_WSTAT.facility);
+  // 탭 HTML을 다시 그리면 차트 컨테이너도 비워진다 — 통계 갱신(30초)마다
+  // 차트를 다시 그리지 않으면 처음 1분 안에 그래프가 사라진다(실화면에서 재현).
+  if (typeof renderSeriesCharts === "function" && _SERIES) renderSeriesCharts();
 }
 
 function refreshStats() {
@@ -712,3 +736,139 @@ document.addEventListener("click", function (e) {
 refreshStats();
 // 통계는 집계 쿼리라 문제 목록(10초)보다 느슨하게 돈다 — 관제 화면 부하를 줄인다.
 setInterval(refreshStats, 30000);
+
+/* ── 시계열 차트 (uPlot 번들) ─────────────────────────────────────
+   폴러가 5분마다 쌓는 metrics_history를 그린다. 데이터가 없으면(방금 켠 경우)
+   "기록 수집 중" 안내를 보여준다 — 몇 시간 지나면 채워진다. */
+
+var _SERIES = null;
+var _seriesHours = 24;
+var _plots = [];          // 리사이즈·재렌더 시 파괴할 uPlot 인스턴스들
+
+function _tsToUnix(ts) {  // "2026-08-04 18:00:00" → epoch초
+  return Math.floor(new Date(String(ts).replace(" ", "T")).getTime() / 1000);
+}
+
+var _UP_AXIS = { stroke: "#5b6f8c", grid: { stroke: "rgba(148,163,184,.08)" },
+                 ticks: { stroke: "rgba(148,163,184,.15)" } };
+
+/* 여러 장비 시리즈를 한 차트에 — devs={id:{name,points[[ts,cpu,mem,sess,temp]]}}
+   pick: 점 배열에서 값 하나를 고르는 함수 */
+function chartMulti(elId, devs, pick, unit) {
+  var el = document.getElementById(elId);
+  if (!el || typeof uPlot === "undefined") return;
+  // 시간축 통합: 장비별 점을 시각 키로 합친다(5분 격자라 대부분 일치)
+  var byTs = {};
+  var names = [];
+  var ids = Object.keys(devs || {});
+  ids.forEach(function (id, di) {
+    names.push(devs[id].name || ("#" + id));
+    (devs[id].points || []).forEach(function (pt) {
+      var t = _tsToUnix(pt[0]);
+      (byTs[t] = byTs[t] || {})[di] = pick(pt);
+    });
+  });
+  var xs = Object.keys(byTs).map(Number).sort(function (a, b) { return a - b; });
+  var hasData = xs.length >= 2 && ids.length;
+  if (!hasData) {
+    el.innerHTML = "<p class='wnone'>기록 수집 중 — 지표 폴러(기본 5분)가 점을 쌓으면 그래프가 나타납니다.</p>";
+    return;
+  }
+  var data = [xs];
+  ids.forEach(function (_id, di) {
+    data.push(xs.map(function (t) {
+      var v = byTs[t][di];
+      return (v === undefined || v === null) ? null : v;
+    }));
+  });
+  var series = [{}];
+  ids.forEach(function (_id, di) {
+    series.push({ label: names[di], stroke: PALETTE[di % PALETTE.length],
+                  width: 2, points: { show: false }, spanGaps: true });
+  });
+  el.innerHTML = "";
+  var w = el.clientWidth || 500;
+  _plots.push(new uPlot({
+    width: w, height: 190,
+    legend: { show: ids.length <= 6 },
+    cursor: { points: { size: 6 } },
+    scales: { x: { time: true } },
+    axes: [Object.assign({}, _UP_AXIS),
+           Object.assign({}, _UP_AXIS, {
+             values: function (u, vals) {
+               return vals.map(function (v) { return v + (unit || ""); });
+             } })],
+    series: series,
+  }, data, el));
+}
+
+/* 단일 합계 시리즈(설비 온라인 수 / 포트 사용) — rows=[[ts, val, total]] */
+function chartTotal(elId, rows, label, color) {
+  var el = document.getElementById(elId);
+  if (!el || typeof uPlot === "undefined") return;
+  rows = rows || [];
+  if (rows.length < 2) {
+    el.innerHTML = "<p class='wnone'>기록 수집 중 — 지표 폴러(기본 5분)가 점을 쌓으면 그래프가 나타납니다.</p>";
+    return;
+  }
+  var xs = rows.map(function (r) { return _tsToUnix(r[0]); });
+  var ys = rows.map(function (r) { return r[1]; });
+  var tot = rows.map(function (r) { return r[2]; });
+  el.innerHTML = "";
+  _plots.push(new uPlot({
+    width: el.clientWidth || 500, height: 190,
+    legend: { show: true },
+    scales: { x: { time: true } },
+    axes: [Object.assign({}, _UP_AXIS), Object.assign({}, _UP_AXIS)],
+    series: [{},
+      { label: label, stroke: color, width: 2, fill: color + "22",
+        points: { show: false }, spanGaps: true },
+      { label: "전체", stroke: "#475569", width: 1, dash: [4, 4],
+        points: { show: false }, spanGaps: true }],
+  }, [xs, ys, tot], el));
+}
+
+/* 기간 전환 버튼 줄 */
+function rangeBtns() {
+  var opts = [["1", "1시간"], ["24", "24시간"], ["168", "7일"]];
+  return "<span class='wrange'>" + opts.map(function (o) {
+    return "<button class='wrange__b" + (Number(o[0]) === _seriesHours ? " wrange__b--on" : "") +
+      "' data-hours='" + o[0] + "'>" + o[1] + "</button>";
+  }).join("") + "</span>";
+}
+
+document.addEventListener("click", function (e) {
+  var b = e.target.closest && e.target.closest("[data-hours]");
+  if (!b) return;
+  _seriesHours = parseInt(b.getAttribute("data-hours"), 10) || 24;
+  refreshSeries();
+});
+
+function _destroyPlots() {
+  _plots.forEach(function (p) { try { p.destroy(); } catch (err) {} });
+  _plots = [];
+}
+
+function renderSeriesCharts() {
+  if (!_SERIES) return;
+  _destroyPlots();
+  chartMulti("ch-fw-sess", _SERIES.firewalls,
+             function (pt) { return pt[3]; }, "");
+  chartMulti("ch-fw-cpu", _SERIES.firewalls,
+             function (pt) { return pt[1]; }, "%");
+  chartMulti("ch-sw-temp", _SERIES.switches,
+             function (pt) { return pt[4]; }, "°C");
+  chartTotal("ch-ports", _SERIES.ports, "사용 중 포트", "#22d3ee");
+  chartTotal("ch-fac", _SERIES.facility, "온라인 설비", "#34d399");
+}
+
+function refreshSeries() {
+  fetch("/api/wall/series?hours=" + _seriesHours)
+    .then(function (r) { return r.json(); })
+    .then(function (d) { _SERIES = d; renderStats(); })
+    .catch(function (e) { console.error("wall series:", e); });
+}
+
+refreshSeries();
+// 5분 격자 데이터라 1분 갱신이면 충분(가장 최근 점 반영)
+setInterval(refreshSeries, 60000);

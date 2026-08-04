@@ -52,6 +52,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "device_env",
         # 서버실 랙 배치 스냅샷 — 장비 삭제·재등록에도 위치 보존(키: kind+ip)
         "rack_layout",
+        # 지표 이력(시계열 그래프) — 폴러가 5분마다 기록, 30일 보존
+        "metrics_history",
     }
     assert expected == tables
 

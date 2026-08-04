@@ -55,6 +55,9 @@
   </footer>
 
   <script>window._API_TOKEN = {{ (api_token or "")|tojson }};</script>
+  <!-- uPlot v1.6.32 (MIT) — 시계열 차트. 폐쇄망 대응으로 exe에 번들(외부 접근 없음) -->
+  <link rel="stylesheet" href="/static/vendor/uplot.min.css">
+  <script src="/static/vendor/uplot.iife.min.js"></script>
   <script src="/static/wall.js"></script>
 </body>
 </html>

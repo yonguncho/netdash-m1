@@ -292,3 +292,14 @@ body {
   color:#e6edf7; font-variant-numeric:tabular-nums; }
 .fwc__k { width:84px; color:#5b6f8c !important; font-size:11px; }
 .wbad { color:#fda4af; font-weight:700; }
+
+/* 시계열 차트(uPlot) — 다크 테마 정합 */
+.wchartbox { min-height:190px; }
+.wchartbox .u-legend { font-size:11px; color:#8fa3bd; }
+.wchartbox .u-legend .u-marker { width:8px; height:8px; }
+.wrange { margin-left:auto; display:inline-flex; gap:4px; }
+.wrange__b { background:rgba(255,255,255,.04); border:1px solid rgba(148,163,184,.18);
+  color:#8fa3bd; font-size:10.5px; padding:2px 9px; border-radius:12px; cursor:pointer; }
+.wrange__b:hover { color:#e6edf7; }
+.wrange__b--on { background:rgba(34,211,238,.14); border-color:rgba(34,211,238,.45);
+  color:#a5f3fc; }
