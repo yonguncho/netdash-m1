@@ -1,0 +1,123 @@
+# -*- coding: utf-8 -*-
+"""FortiGate `execute sensor list` 파싱 — PSU·CPU·시스템 온도/전압/전류/팬.
+
+하드웨어 모델은 이 명령으로 센서를 한 번에 내놓는다. SNMP의 ENTITY-SENSOR-MIB보다
+항목이 많고(전압·전류·PSU 상태), 무엇보다 **alarm 플래그**를 함께 준다 —
+수치 임계를 우리가 추측하지 않고 장비 자신의 판단을 그대로 쓸 수 있다.
+
+출력 형식(모델·펌웨어에 따라 공백 폭이 다르다):
+    Fan 1            alarm=0 value=8100  rpm
+    DTS CPU0         alarm=0 value=45    C
+    +3.3V            alarm=0 value=3.31  V
+    PS1 VOUT1        alarm=0 value=12.09 V
+    PS1 IOUT1        alarm=0 value=4.5   A
+    PS1 Temp1        alarm=0 value=35    C
+    PS1 Status       alarm=0 value=0
+
+VM 모델은 센서가 없어 빈 출력이거나 오류를 낸다 — 그건 정상이므로 빈 목록을 준다.
+"""
+import re
+
+# name / alarm / value / unit(없을 수 있음)
+_LINE = re.compile(
+    r"^\s*(?P<name>\S.*?)\s+alarm\s*=\s*(?P<alarm>\d+)\s+value\s*=\s*"
+    r"(?P<value>-?\d+(?:\.\d+)?)\s*(?P<unit>[A-Za-z%]*)\s*$")
+
+_UNIT_KIND = {"c": "temperature", "v": "voltage", "a": "current",
+              "rpm": "fan", "w": "power", "%": "percent"}
+
+# 이름으로 부품을 묶는다 — 화면에서 PSU/CPU/시스템별로 나눠 보여주기 위함.
+_GROUPS = (
+    (re.compile(r"^ps(\d+)\b", re.I), "PSU"),
+    (re.compile(r"^(dts\s*)?cpu", re.I), "CPU"),
+    (re.compile(r"^fan\b", re.I), "FAN"),
+    (re.compile(r"^(temp|sys|board|ambient|inlet|outlet)", re.I), "SYSTEM"),
+    (re.compile(r"^(vcc|[+-]?\d+(\.\d+)?v\b|vin|vout|vbat)", re.I), "POWER"),
+)
+
+
+def _group_of(name):
+    for pat, label in _GROUPS:
+        if pat.search(name or ""):
+            return label
+    return "ETC"
+
+
+def parse_sensor_list(output):
+    """`execute sensor list` 출력 → 센서 목록.
+
+    반환: [{name, group, kind, value, unit, alarm(bool)}]
+    형식에 안 맞는 줄(헤더·프롬프트·에러 메시지)은 조용히 건너뛴다.
+    """
+    out = []
+    for line in (output or "").splitlines():
+        m = _LINE.match(line)
+        if not m:
+            continue
+        name = m.group("name").strip()
+        unit = (m.group("unit") or "").strip()
+        try:
+            val = float(m.group("value"))
+        except (TypeError, ValueError):
+            continue
+        kind = _UNIT_KIND.get(unit.lower(), "status" if not unit else "other")
+        out.append({
+            "name": name[:80],
+            "group": _group_of(name),
+            "kind": kind,
+            # 정수로 떨어지면 정수로 — 8100.0 rpm은 읽기 나쁘다
+            "value": int(val) if val == int(val) else round(val, 2),
+            "unit": unit,
+            "alarm": m.group("alarm") != "0",
+        })
+    return out
+
+
+def summarize(sensors):
+    """센서 목록 → 화면·저장용 요약.
+
+    등급은 **장비가 준 alarm 플래그**를 따른다. 우리가 전압·전류 임계를 추측하면
+    모델마다 정상 범위가 달라 오탐이 난다(12V 레일과 3.3V 레일이 같을 리 없다).
+    """
+    sensors = sensors or []
+    temps = [s["value"] for s in sensors if s["kind"] == "temperature"]
+    fans = [s for s in sensors if s["kind"] == "fan"]
+    alarms = [s["name"] for s in sensors if s["alarm"]]
+    psu = sorted({s["name"].split()[0].upper()
+                  for s in sensors if s["group"] == "PSU" and s["name"].split()})
+    # 팬이 0 rpm이면 장비가 alarm을 안 올려도 이상 신호다(고장·미장착).
+    dead_fans = [s["name"] for s in fans if s["value"] == 0]
+    return {
+        "sensors": sensors,
+        "count": len(sensors),
+        "max_temp_c": max(temps) if temps else None,
+        "fan_count": len(fans),
+        "psu_names": psu,
+        "psu_count": len(psu),
+        "alarms": alarms,
+        "dead_fans": dead_fans,
+        "level": "critical" if alarms else ("warning" if dead_fans else
+                                            ("normal" if sensors else None)),
+    }
+
+
+def collect_ssh(host, username, password, port=22, timeout=20):
+    """SSH로 `execute sensor list`를 실행해 요약을 반환.
+
+    ARP 수집(get_arp_table_ssh)과 같은 방식 — 한 번 접속해 한 명령만 쓴다.
+    """
+    import paramiko
+    from .. import secpolicy
+    client = paramiko.SSHClient()
+    secpolicy.apply_host_key_policy(client)
+    try:
+        client.connect(host, port=port, username=username, password=password,
+                       timeout=timeout, allow_agent=False, look_for_keys=False)
+        _, stdout, _ = client.exec_command("execute sensor list", timeout=timeout)
+        output = stdout.read().decode("utf-8", errors="replace")
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+    return summarize(parse_sensor_list(output))

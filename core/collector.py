@@ -489,6 +489,78 @@ def collect_fw_metrics_snmp(db_path, fw):
     return m
 
 
+def save_firewall_result(db_path, fw, result, cred=None):
+    """방화벽 수집 결과 저장 — 인터페이스·ARP·HA·온도·지표·센서를 한 번에.
+
+    수집 호출부가 셋(자동 수집·수집 버튼·일괄 수집)이라 각자 저장하면 반드시
+    한 곳이 빠진다. 실제로 v6.16.0의 온도·지표가 자동 수집 경로에만 붙어 있어
+    '수집' 버튼으로는 채워지지 않았다. 저장은 여기 한 곳에서만 한다.
+    """
+    fid = fw["id"]
+    db.save_firewall_interfaces(db_path, fid, result.get("interfaces") or [])
+    db.save_firewall_arp(db_path, fid, result.get("arp") or [])
+    if result.get("ha"):
+        try:
+            import json as _json
+            db.set_firewall_ha_info(db_path, fid, _json.dumps(result["ha"]))
+        except Exception:
+            pass
+    # 아래는 모두 부가 정보 — 실패해도 인터페이스/ARP 수집 성공을 취소하지 않는다.
+    try:
+        collect_env_snmp(db_path, "firewall", fid, fw.get("host"))
+    except Exception:
+        pass
+    try:
+        collect_fw_metrics_snmp(db_path, fw)
+    except Exception:
+        pass
+    try:
+        merge_fw_extra(db_path, fw, result, cred)
+    except Exception:
+        pass
+
+
+def merge_fw_extra(db_path, fw, collected, cred=None):
+    """방화벽 대시보드용 부가 정보를 지표에 합쳐 저장.
+
+    - REST 수집 결과의 vpn·policy (collect_firewall이 함께 받아온다)
+    - `execute sensor list` (SSH) — PSU·전압·전류·팬. SNMP 온도보다 항목이 많고
+      장비가 준 alarm 플래그가 있어 임계를 우리가 추측하지 않아도 된다.
+
+    지표는 SNMP 경로가 먼저 저장했을 수 있으므로 **읽어서 합친 뒤 다시 쓴다** —
+    통째로 덮으면 CPU·메모리가 지워진다.
+    """
+    if (fw or {}).get("vendor") != "fortigate":
+        return None
+    extra = {}
+    for key in ("vpn", "policy"):
+        v = (collected or {}).get(key)
+        if v:
+            extra[key] = v
+
+    cred = cred or {}
+    user, pw = cred.get("username", ""), cred.get("password", "")
+    if user and pw and fw.get("host"):
+        try:
+            from .firewall import fortisensor
+            s = fortisensor.collect_ssh(fw["host"], user, pw)
+            if s.get("sensors"):
+                extra["sensors"] = s
+        except Exception as e:
+            # VM 모델은 센서가 없고, SSH가 막힌 장비도 있다 — 정상 범주다.
+            utils.log_event("info", "fw_sensor_list_skipped", firewall_id=fw.get("id"),
+                            error=_sanitize_error_msg(str(e))[:120])
+    if not extra:
+        return None
+    try:
+        cur = (db.get_device_env(db_path, "firewall", fw["id"]) or {}).get("metrics") or {}
+    except Exception:
+        cur = {}
+    cur.update(extra)
+    db.save_device_metrics(db_path, "firewall", fw["id"], cur, source="rest+ssh")
+    return extra
+
+
 def _commands_for(vendor):
     """벤더의 수집 명령 집합. config에 없으면 파서 모듈 COMMANDS로 폴백."""
     cmds = get_config().get_commands(vendor)
@@ -1654,12 +1726,7 @@ def collect_all_registered(db_path):
                     token=saved.get("token", ""), username=saved.get("username", ""),
                     password=saved.get("password", ""), source_ip=src,
                     verify_ssl=secpolicy.firewall_tls_verify())
-                db.save_firewall_interfaces(db_path, fw["id"], r["interfaces"])
-                db.save_firewall_arp(db_path, fw["id"], r["arp"])
-                # 온도·팬 — 스위치와 같은 표준 MIB 경로를 그대로 쓴다.
-                collect_env_snmp(db_path, "firewall", fw["id"], fw.get("host"))
-                # FortiGate 고유 지표(CPU·메모리·세션·HA) — 전용 MIB.
-                collect_fw_metrics_snmp(db_path, fw)
+                save_firewall_result(db_path, fw, r, saved)
                 db.set_firewall_status(db_path, fw["id"], "done")
                 result["firewalls"] += 1
             except Exception as e:

@@ -921,3 +921,41 @@ body.ru-moving, body.ru-moving * { cursor: grabbing !important; user-select: non
 .zsub { color: #a7f3d0; font-size: 11px; padding: 1px 0; }
 .zsub--none { color: #64748b; font-style: italic; }
 .zone-fwrow { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+/* ── 방화벽 모니터링 대시보드 ─────────────────────────────────────
+   외부 차트 라이브러리를 쓰지 않는다 — 폐쇄망이라 CDN을 못 쓰고,
+   막대/도넛 수준이면 CSS·인라인 SVG로 충분하다. */
+.fw-kpi { display:flex; flex-wrap:wrap; gap:10px; margin:10px 0; }
+.fw-kpi__card {
+  flex:1 1 130px; min-width:130px; background:#fff; border:1px solid #e2e8f0;
+  border-radius:8px; padding:10px 12px;
+}
+.fw-kpi__num { font-size:22px; font-weight:700; line-height:1.1; }
+.fw-kpi__label { font-size:11px; color:#64748b; margin-top:2px; }
+.fw-kpi--ok .fw-kpi__num { color:#166534; }
+.fw-kpi--warn .fw-kpi__num { color:#b45309; }
+.fw-kpi--crit .fw-kpi__num { color:#b91c1c; }
+
+.fw-tiles { display:grid; gap:10px; margin:10px 0 14px;
+            grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); }
+.fw-tile { background:#fff; border:1px solid #e2e8f0; border-left-width:4px;
+           border-radius:8px; padding:10px 12px; cursor:pointer; }
+.fw-tile:hover { border-color:#94a3b8; }
+.fw-tile--normal { border-left-color:#16a34a; }
+.fw-tile--warning { border-left-color:#f59e0b; }
+.fw-tile--critical { border-left-color:#dc2626; }
+.fw-tile--unknown { border-left-color:#cbd5e1; }
+.fw-tile__head { display:flex; justify-content:space-between; align-items:baseline; gap:6px; }
+.fw-tile__name { font-weight:700; font-size:13px; }
+.fw-tile__host { font-size:11px; color:#64748b; }
+.fw-tile__row { display:flex; align-items:center; gap:6px; margin-top:6px; font-size:11px; }
+.fw-tile__row b { width:38px; color:#475569; font-weight:600; flex:none; }
+.fw-tile__val { width:44px; text-align:right; color:#334155; flex:none; }
+.fw-bar { flex:1; height:7px; background:#f1f5f9; border-radius:4px; overflow:hidden; }
+.fw-bar__fill { height:100%; border-radius:4px; }
+.fw-tile__chips { margin-top:8px; display:flex; flex-wrap:wrap; gap:4px; }
+.fw-chip { font-size:10px; padding:1px 6px; border-radius:10px;
+           background:#f1f5f9; color:#475569; }
+.fw-chip--ok { background:#dcfce7; color:#166534; }
+.fw-chip--warn { background:#fef3c7; color:#b45309; }
+.fw-chip--crit { background:#fee2e2; color:#b91c1c; }

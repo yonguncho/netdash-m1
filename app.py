@@ -342,13 +342,9 @@ def _run_collect_all_firewalls(db_path, source_ip, ids=None, sess_cred=None,
                     fw["vendor"], fw["host"], fw.get("port"),
                     token=token, username=username, password=password,
                     verify_ssl=secpolicy.firewall_tls_verify(), source_ip=source_ip)
-                db.save_firewall_interfaces(db_path, fid, result["interfaces"])
-                db.save_firewall_arp(db_path, fid, result["arp"])
-                if result.get("ha"):
-                    try:
-                        db.set_firewall_ha_info(db_path, fid, _json.dumps(result["ha"]))
-                    except Exception:
-                        pass
+                collector.save_firewall_result(
+                    db_path, fw, result,
+                    {"username": username, "password": password})
                 db.set_firewall_status(db_path, fid, "done")
                 ok += 1
             except Exception as e:
@@ -588,11 +584,32 @@ def _attach_env(db_path, rows, kind):
             r["env_fan_count"] = e.get("fan_count")
             m = e.get("metrics") or {}
             if m:
-                # 표 한 줄에 필요한 것만 — 상세 지표는 상세보기에서 읽는다.
+                # 표·대시보드 타일에 필요한 것만 — 센서 목록·터널 목록 같은 큰 덩어리는
+                # 상세보기에서 읽는다(목록 응답이 무거워지면 화면 전체가 느려진다).
                 r["cpu_pct"] = m.get("cpu_pct")
                 r["mem_pct"] = m.get("mem_pct")
+                r["disk_pct"] = m.get("disk_pct")
                 r["sessions"] = m.get("sessions")
                 r["metrics_level"] = m.get("level")
+                r["ha_mode"] = m.get("ha_mode")
+                vpn = m.get("vpn") or {}
+                if vpn:
+                    r["vpn_total"] = vpn.get("tunnel_total")
+                    r["vpn_up"] = vpn.get("tunnel_up")
+                    r["ssl_users"] = vpn.get("ssl_users")
+                pol = m.get("policy") or {}
+                if pol:
+                    r["policy_total"] = pol.get("total")
+                    r["policy_unused"] = pol.get("unused")
+                sen = m.get("sensors") or {}
+                if sen:
+                    r["sensor_level"] = sen.get("level")
+                    r["sensor_alarms"] = sen.get("alarms") or []
+                    r["psu_count"] = sen.get("psu_count")
+                    # execute sensor list 쪽 온도가 더 촘촘하다(PSU 온도까지 포함)
+                    if sen.get("max_temp_c") is not None and r.get("temp_c") is None:
+                        r["temp_c"] = sen["max_temp_c"]
+                        r["temp_level"] = sen.get("level")
     return rows
 
 
@@ -4256,15 +4273,19 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
 
     @app.route("/api/firewalls/<int:fid>", methods=["GET"])
     def get_firewall_detail(fid):
-        """방화벽 상세 (인터페이스 + ARP)."""
+        """방화벽 상세 (인터페이스 + ARP + 상태 지표·센서·VPN·정책)."""
         try:
             fw = db.get_firewall(db_path, fid)
             if not fw:
                 return jsonify({"error": "not found"}), 404
+            from core import manufacturer
+            manufacturer.annotate([fw])
             return jsonify({
                 "firewall": fw,
                 "interfaces": db.get_firewall_interfaces(db_path, fid),
                 "arp": db.get_firewall_arp(db_path, fid),
+                # 온도(sensors) + CPU/메모리/세션/VPN/정책/센서목록(metrics)
+                "env": db.get_device_env(db_path, "firewall", fid),
             })
         except Exception as e:
             log_event("error", "firewall_detail_error", error=collector._sanitize_error_msg(str(e)))
@@ -4332,15 +4353,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 verify_ssl=bool(data.get("verify_ssl", False)),
                 source_ip=pcprofile.get_source_ip(db_path),
             )
-            db.save_firewall_interfaces(db_path, fid, result["interfaces"])
-            db.save_firewall_arp(db_path, fid, result["arp"])
-            # HA 구성(FortiGate cmdb/system/ha) — 이중화 연결선에 HA 포트 표기용
-            if result.get("ha"):
-                try:
-                    import json as _json
-                    db.set_firewall_ha_info(db_path, fid, _json.dumps(result["ha"]))
-                except Exception:
-                    pass
+            # 저장은 공용 함수 한 곳에서 — 인터페이스·ARP·HA·온도·지표·센서까지.
+            collector.save_firewall_result(
+                db_path, fw, result, {"username": username, "password": password})
             # 수집 모달에서 처음 입력한 자격증명은 저장해 다음 수집부터 재입력 불필요.
             if provided:
                 try:

@@ -10,7 +10,33 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.18.0) — FortiGate SNMP 상태 지표
+## 작업 중 (v6.19.0) — FortiGate 센서 수집 + 방화벽 모니터링 대시보드
+
+사용자 요청 3건: ① `execute sensor list`로 PSU·온도·암페어 수집
+② 방화벽 현황을 모니터링 대시보드로(그래프·도표) ③ 장비 선택 시 VPN 터널·정책
+개수·CPU/MEM/PSU/DISK 등 종합 정보.
+
+- `core/firewall/fortisensor.py` — `execute sensor list` 파서(SSH).
+  PSU/CPU/FAN/SYSTEM/POWER로 그룹핑, C·V·A·rpm 단위 분류.
+  **등급은 장비가 준 alarm 플래그를 따른다** — 전압 임계를 우리가 추측하면
+  12V 레일과 3.3V 레일이 같을 리 없어 오탐이 난다. 팬 0rpm만 추가로 경고.
+- `fortigate.py` — `_fetch_vpn()`(IPsec 터널·SSL VPN 접속자),
+  `_fetch_policy_stats()`(정책 총계·미사용·비활성). 터널은 **phase1 단위로 세고
+  phase2 하나라도 up이면 up** — proxyid를 개별로 세면 개수가 부풀고 지사 장애가
+  안 보인다. 정책 목록 자체는 저장하지 않는다(수천 개인 장비가 있다).
+- **`collector.save_firewall_result()` 신설 — 수집 저장을 한 곳으로.**
+  호출부가 셋(자동·수집버튼·일괄)인데 v6.16.0의 온도·지표가 자동 경로에만 붙어
+  **'수집' 버튼으로는 안 채워지고 있었다**(내가 만든 구멍). 셋 다 이 함수를 쓴다.
+- 대시보드: `#fw-dashboard`(KPI 카드 + 장비별 타일). 외부 차트 라이브러리 없이
+  CSS 막대로 그린다(폐쇄망이라 CDN 불가). 검색 필터 **적용 전** 목록으로 그려
+  검색 중에 KPI가 흔들리지 않게 한다.
+- 상세: `fwStatusHtml()` — 부하 막대, 펌웨어/업타임/세션/HA, HA 멤버별 부하,
+  VPN 터널 목록(끊긴 것 위로), 하드웨어 센서 목록(알람 위로).
+
+**미검증**: REST 엔드포인트(`monitor/vpn/ipsec`, `monitor/firewall/policy`)와
+sensor list 출력 형식은 문서·통상 형식 기준이며 실장비 확인이 필요하다.
+
+## v6.18.0 — FortiGate SNMP 상태 지표
 
 사용자 질문: FortiGate SNMP 연동이 가능한데 무엇을 모니터링할 수 있나.
 

@@ -290,6 +290,94 @@ def _fetch_ha(s, base, host):
         return None
 
 
+def parse_ipsec_tunnels(results):
+    """monitor/vpn/ipsec 결과 → [{name, status, incoming_bytes, outgoing_bytes, peer}].
+
+    한 phase1 아래 여러 phase2(proxyid)가 있고, **하나라도 살아 있으면 그 터널은
+    'up'**이다. proxyid를 개별 터널로 세면 실제보다 개수가 몇 배로 부풀고,
+    지사 하나가 내려간 것도 눈에 안 띈다.
+    """
+    out = []
+    for t in results or []:
+        if not isinstance(t, dict):
+            continue
+        prox = t.get("proxyid") or []
+        up = False
+        rx = tx = 0
+        for p in prox:
+            if not isinstance(p, dict):
+                continue
+            if p.get("status") == "up" or p.get("state") == "up":
+                up = True
+            rx += int(p.get("incoming_bytes") or 0)
+            tx += int(p.get("outgoing_bytes") or 0)
+        if not prox:
+            # phase2 정보가 없으면 phase1 자체 상태를 본다(펌웨어에 따라 다름)
+            up = bool(t.get("connection_count") or 0) or t.get("status") == "up"
+        out.append({"name": t.get("name") or "", "status": "up" if up else "down",
+                    "peer": t.get("rgwy") or t.get("remote_gw") or "",
+                    "phase2_count": len(prox),
+                    "incoming_bytes": rx, "outgoing_bytes": tx})
+    return out
+
+
+def _fetch_vpn(s, base, host):
+    """IPsec 터널 + SSL VPN 접속자. 실패하면 None(수집 흐름에 영향 없음)."""
+    out = {}
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/monitor/vpn/ipsec")
+        if r is not None and r.status_code == 200:
+            tun = parse_ipsec_tunnels(r.json().get("results"))
+            out["tunnels"] = tun
+            out["tunnel_total"] = len(tun)
+            out["tunnel_up"] = sum(1 for t in tun if t["status"] == "up")
+    except Exception:
+        pass
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/monitor/vpn/ssl")
+        if r is not None and r.status_code == 200:
+            res = r.json().get("results") or []
+            out["ssl_users"] = len(res) if isinstance(res, list) else 0
+    except Exception:
+        pass
+    if out:
+        logger.info("fortigate_vpn host=%s tunnels=%s up=%s",
+                    host, out.get("tunnel_total"), out.get("tunnel_up"))
+    return out or None
+
+
+def _fetch_policy_stats(s, base, host):
+    """방화벽 정책 개수 + 미사용(히트 0) 개수. 실패하면 None.
+
+    cmdb로 전체 개수를, monitor로 히트 카운트를 얻는다. 정책이 수천 개인 장비도
+    있어 목록 자체는 저장하지 않는다 — 화면에 필요한 건 총계와 미사용 수다.
+    """
+    out = {}
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/cmdb/firewall/policy")
+        if r is not None and r.status_code == 200:
+            res = r.json().get("results") or []
+            out["total"] = len(res)
+            out["disabled"] = sum(1 for p in res
+                                  if isinstance(p, dict) and p.get("status") == "disable")
+    except Exception:
+        pass
+    try:
+        r = _get_with_retry(s, f"{base}/api/v2/monitor/firewall/policy")
+        if r is not None and r.status_code == 200:
+            res = r.json().get("results") or []
+            hits = [p for p in res if isinstance(p, dict)]
+            if hits:
+                out["unused"] = sum(1 for p in hits
+                                    if not (p.get("hit_count") or p.get("bytes") or 0))
+    except Exception:
+        pass
+    if out:
+        logger.info("fortigate_policy host=%s total=%s unused=%s",
+                    host, out.get("total"), out.get("unused"))
+    return out or None
+
+
 def collect(host, port=443, token="", username="", password="", verify_ssl=False, source_ip=None):
     """인터페이스 + ARP + HA 구성을 '세션 1개'로 수집.
 
@@ -302,7 +390,11 @@ def collect(host, port=443, token="", username="", password="", verify_ssl=False
         interfaces = _fetch_interfaces(s, base, host)
         arp = _fetch_arp(s, base, host)
         ha = _fetch_ha(s, base, host)
-        return {"interfaces": interfaces, "arp": arp, "ha": ha}
+        # 대시보드용 부가 정보 — 실패해도 인터페이스/ARP 수집은 그대로 성공시킨다.
+        vpn = _fetch_vpn(s, base, host)
+        policy = _fetch_policy_stats(s, base, host)
+        return {"interfaces": interfaces, "arp": arp, "ha": ha,
+                "vpn": vpn, "policy": policy}
     finally:
         # requests.Session 연결 풀 정리(자동수집 반복 시 핸들 누수 방지)
         try:

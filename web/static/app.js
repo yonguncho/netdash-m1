@@ -1960,6 +1960,114 @@ function _applySwSearch(list) {
   });
 }
 
+// ── 방화벽 모니터링 대시보드 ────────────────────────────────────────
+// 외부 차트 라이브러리를 쓰지 않는다(폐쇄망이라 CDN 불가). 막대는 CSS로 그린다.
+function _lvlColor(lvl) {
+  return lvl === "critical" ? "#dc2626" : lvl === "warning" ? "#f59e0b" : "#16a34a";
+}
+function _pctLevel(p) {
+  if (p === null || p === undefined) return null;
+  return p >= 90 ? "critical" : p >= 80 ? "warning" : "normal";
+}
+
+// 사용률 막대 한 줄 — 값이 없으면 '-'로 두고 막대를 그리지 않는다(0%와 구분).
+function fwBar(label, pct, suffix) {
+  if (pct === null || pct === undefined) {
+    return "<div class='fw-tile__row'><b>" + escHtml(label) + "</b>" +
+      "<div class='fw-bar'></div><span class='fw-tile__val'>-</span></div>";
+  }
+  var p = Math.max(0, Math.min(100, pct));
+  return "<div class='fw-tile__row'><b>" + escHtml(label) + "</b>" +
+    "<div class='fw-bar'><div class='fw-bar__fill' style='width:" + p + "%;" +
+    "background:" + _lvlColor(_pctLevel(pct)) + "'></div></div>" +
+    "<span class='fw-tile__val'>" + escHtml(String(pct)) + (suffix || "%") + "</span></div>";
+}
+
+// 장비 하나의 종합 등급 — 부하·온도·센서 알람 중 가장 나쁜 것을 따른다.
+function _fwLevel(f) {
+  var order = { normal: 0, warning: 1, critical: 2 };
+  var worst = null;
+  [f.metrics_level, f.temp_level, f.sensor_level].forEach(function (l) {
+    if (!l) return;
+    if (worst === null || order[l] > order[worst]) worst = l;
+  });
+  return worst;
+}
+
+function renderFirewallDashboard(fws) {
+  var box = document.getElementById("fw-dashboard");
+  var kpi = document.getElementById("fw-kpi");
+  var tiles = document.getElementById("fw-tiles");
+  if (!box || !kpi || !tiles) return;
+  // 수집된 지표가 하나도 없으면 빈 대시보드를 띄우지 않는다 — 자리만 차지한다.
+  var withData = (fws || []).filter(function (f) { return _fwLevel(f) !== null; });
+  if (!withData.length) { box.style.display = "none"; return; }
+  box.style.display = "";
+
+  var counts = { normal: 0, warning: 0, critical: 0 };
+  var vpnUp = 0, vpnTotal = 0, polTotal = 0, sessions = 0;
+  withData.forEach(function (f) {
+    counts[_fwLevel(f)] += 1;
+    if (f.vpn_total) { vpnTotal += f.vpn_total; vpnUp += (f.vpn_up || 0); }
+    if (f.policy_total) polTotal += f.policy_total;
+    if (f.sessions) sessions += f.sessions;
+  });
+
+  function card(num, label, cls, title) {
+    return "<div class='fw-kpi__card " + (cls || "") + "'" +
+      (title ? " title='" + escHtml(title) + "'" : "") + ">" +
+      "<div class='fw-kpi__num'>" + escHtml(String(num)) + "</div>" +
+      "<div class='fw-kpi__label'>" + escHtml(label) + "</div></div>";
+  }
+  kpi.innerHTML =
+    card((fws || []).length, "등록 방화벽") +
+    card(counts.normal, "정상", "fw-kpi--ok") +
+    card(counts.warning, "주의", "fw-kpi--warn", "사용률 80% 이상 또는 팬 정지") +
+    card(counts.critical, "위험", "fw-kpi--crit", "사용률 90% 이상 또는 장비 센서 알람") +
+    (vpnTotal ? card(vpnUp + "/" + vpnTotal, "VPN 터널 연결",
+                     vpnUp < vpnTotal ? "fw-kpi--warn" : "fw-kpi--ok") : "") +
+    (polTotal ? card(polTotal.toLocaleString(), "방화벽 정책") : "") +
+    (sessions ? card(sessions.toLocaleString(), "동시 세션") : "");
+
+  tiles.innerHTML = withData.map(function (f) {
+    var lvl = _fwLevel(f) || "unknown";
+    var chips = [];
+    if (f.temp_c !== null && f.temp_c !== undefined) {
+      chips.push("<span class='fw-chip fw-chip--" +
+        (f.temp_level === "critical" ? "crit" : f.temp_level === "warning" ? "warn" : "ok") +
+        "'>" + escHtml(String(f.temp_c)) + "°C</span>");
+    }
+    if (f.psu_count) {
+      chips.push("<span class='fw-chip " + (f.sensor_level === "critical" ? "fw-chip--crit" : "fw-chip--ok") +
+        "' title='전원 공급 장치'>PSU " + escHtml(String(f.psu_count)) + "</span>");
+    }
+    if (f.sensor_alarms && f.sensor_alarms.length) {
+      chips.push("<span class='fw-chip fw-chip--crit' title='" +
+        escHtml(f.sensor_alarms.join(", ")) + "'>센서 알람 " + f.sensor_alarms.length + "</span>");
+    }
+    if (f.vpn_total) {
+      chips.push("<span class='fw-chip " + (f.vpn_up < f.vpn_total ? "fw-chip--warn" : "fw-chip--ok") +
+        "'>VPN " + f.vpn_up + "/" + f.vpn_total + "</span>");
+    }
+    if (f.policy_total) {
+      chips.push("<span class='fw-chip' title='전체 정책 수" +
+        (f.policy_unused ? " · 히트 0건 " + f.policy_unused + "개" : "") + "'>정책 " +
+        escHtml(String(f.policy_total)) + "</span>");
+    }
+    if (f.ha_mode && f.ha_mode !== "standalone") {
+      chips.push("<span class='fw-chip'>HA " + escHtml(f.ha_mode) + "</span>");
+    }
+    return "<div class='fw-tile fw-tile--" + lvl + "' data-action='detail-fw' data-id='" + f.id + "'>" +
+      "<div class='fw-tile__head'><span class='fw-tile__name'>" + escHtml(f.name || "-") + "</span>" +
+      "<span class='fw-tile__host'>" + escHtml(f.host || "") + "</span></div>" +
+      fwBar("CPU", f.cpu_pct === undefined ? null : f.cpu_pct) +
+      fwBar("MEM", f.mem_pct === undefined ? null : f.mem_pct) +
+      fwBar("DISK", f.disk_pct === undefined ? null : f.disk_pct) +
+      (chips.length ? "<div class='fw-tile__chips'>" + chips.join("") + "</div>" : "") +
+      "</div>";
+  }).join("");
+}
+
 // 방화벽 부하 셀 — SNMP(FORTINET-FORTIGATE-MIB)로 읽은 CPU·메모리·세션.
 function fwLoadCell(f) {
   var cpu = (f.cpu_pct === undefined || f.cpu_pct === null) ? null : f.cpu_pct;
@@ -2981,6 +3089,9 @@ function loadFirewalls() {
 function renderFirewalls(firewalls) {
   var tbody = document.getElementById("firewall-table-body");
   if (!tbody) return;
+  // 대시보드는 검색·필터와 무관하게 '전체' 기준으로 그린다 —
+  // 검색어를 치는 동안 KPI 숫자가 흔들리면 현황판으로서 못 쓴다.
+  renderFirewallDashboard(firewalls || []);
   // 검색 필터(이름·벤더·호스트·위치)
   var q = ((document.getElementById("fw-search") || {}).value || "").trim().toLowerCase();
   if (q) {
@@ -3099,6 +3210,7 @@ function showFirewallDetail(fid) {
       }
       var ifaces = data.interfaces || [];
       var arp = data.arp || [];
+      var envHtml = fwStatusHtml(data.firewall, data.env);
       var ifHtml = ifaces.length
         ? "<table class='data-table'><thead><tr><th>인터페이스</th><th>IP (Primary / Secondary)</th><th>Prefix</th><th>VDOM/Zone</th></tr></thead><tbody>" +
           ifaces.map(function(i) {
@@ -3127,10 +3239,117 @@ function showFirewallDetail(fid) {
           }).join("") + "</tbody></table>"
         : "<p style='color:#64748b'>ARP 정보 없음</p>";
       el.innerHTML = "<h3 style='margin:16px 0 8px'>" + escHtml(data.firewall.name) +
-        " — 인터페이스</h3>" + ifHtml +
+        " — 장비 상태</h3>" + envHtml +
+        "<h3 style='margin:16px 0 8px'>인터페이스</h3>" + ifHtml +
         "<h3 style='margin:16px 0 8px'>ARP (연결된 IP)</h3>" + arpHtml;
     })
     .catch(function(e) { console.error("firewall detail:", e); });
+}
+
+// 방화벽 상세의 '장비 상태' 블록 — 부하·VPN·정책·센서(PSU/전압/전류).
+function fwStatusHtml(fw, env) {
+  env = env || {};
+  var m = env.metrics || {};
+  if (!m.cpu_pct && !m.sessions && !m.vpn && !m.policy && !m.sensors && !env.max_temp_c) {
+    return "<p style='color:#64748b'>수집된 상태 정보가 없습니다. " +
+      "SNMP 커뮤니티(설정)와 SSH 계정을 지정한 뒤 이 방화벽을 수집하면 채워집니다.</p>";
+  }
+  var H = "";
+  // 부하
+  H += "<div style='max-width:420px'>" +
+    fwBar("CPU", m.cpu_pct === undefined ? null : m.cpu_pct) +
+    fwBar("MEM", m.mem_pct === undefined ? null : m.mem_pct) +
+    fwBar("DISK", m.disk_pct === undefined ? null : m.disk_pct) + "</div>";
+
+  var facts = [];
+  if (m.sessions !== undefined) facts.push(["동시 세션", Number(m.sessions).toLocaleString()]);
+  if (m.version) facts.push(["펌웨어", m.version]);
+  if (m.uptime_sec) facts.push(["업타임", Math.floor(m.uptime_sec / 86400) + "일"]);
+  if (m.ha_mode) facts.push(["HA", m.ha_mode + (m.ha_group ? " (" + m.ha_group + ")" : "")]);
+  var vpn = m.vpn || {};
+  if (vpn.tunnel_total !== undefined) {
+    facts.push(["VPN 터널", vpn.tunnel_up + " / " + vpn.tunnel_total + " 연결"]);
+  }
+  if (vpn.ssl_users !== undefined) facts.push(["SSL VPN 접속자", vpn.ssl_users]);
+  var pol = m.policy || {};
+  if (pol.total !== undefined) facts.push(["방화벽 정책", pol.total + "개"]);
+  if (pol.unused !== undefined) facts.push(["히트 0건 정책", pol.unused + "개"]);
+  if (pol.disabled !== undefined) facts.push(["비활성 정책", pol.disabled + "개"]);
+  if (facts.length) {
+    H += "<table class='data-table' style='margin-top:10px;max-width:520px'><tbody>" +
+      facts.map(function (f) {
+        return "<tr><td style='width:150px;color:#475569'>" + escHtml(f[0]) +
+          "</td><td><b>" + escHtml(String(f[1])) + "</b></td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  // HA 멤버별 부하
+  if (m.ha_members && m.ha_members.length) {
+    H += "<h4 style='margin:14px 0 6px'>HA 멤버</h4><table class='data-table'>" +
+      "<thead><tr><th>호스트네임</th><th>시리얼</th><th>CPU</th><th>MEM</th><th>세션</th></tr></thead><tbody>" +
+      m.ha_members.map(function (x) {
+        return "<tr><td>" + escHtml(x.hostname || "-") + "</td><td><code style='font-size:11px'>" +
+          escHtml(x.serial || "-") + "</code></td><td>" + escHtml(String(x.cpu_pct)) + "%</td><td>" +
+          escHtml(String(x.mem_pct)) + "%</td><td>" +
+          escHtml(String(x.sessions === null ? "-" : x.sessions)) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  // VPN 터널 목록 — 끊긴 것을 위로(현황판에서 먼저 봐야 할 것).
+  var tuns = (vpn.tunnels || []).slice().sort(function (a, b) {
+    return (a.status === "up") - (b.status === "up");
+  });
+  if (tuns.length) {
+    H += "<h4 style='margin:14px 0 6px'>VPN 터널 (" + vpn.tunnel_up + "/" + vpn.tunnel_total + ")</h4>" +
+      "<table class='data-table'><thead><tr><th>터널</th><th>상대</th><th>상태</th><th>수신</th><th>송신</th></tr></thead><tbody>" +
+      tuns.map(function (t) {
+        var badge = t.status === "up"
+          ? "<span class='status-badge status-badge--ok'>연결</span>"
+          : "<span class='status-badge status-badge--err'>끊김</span>";
+        return "<tr><td>" + escHtml(t.name) + "</td><td><code>" + escHtml(t.peer || "-") +
+          "</code></td><td>" + badge + "</td><td>" + escHtml(_fmtBytes(t.incoming_bytes)) +
+          "</td><td>" + escHtml(_fmtBytes(t.outgoing_bytes)) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  // 하드웨어 센서(execute sensor list) — 알람 걸린 것을 위로.
+  var sen = m.sensors || {};
+  var list = (sen.sensors || []).slice().sort(function (a, b) {
+    return (b.alarm ? 1 : 0) - (a.alarm ? 1 : 0);
+  });
+  if (list.length) {
+    H += "<h4 style='margin:14px 0 6px'>하드웨어 센서 (execute sensor list · " + list.length + "개)</h4>" +
+      "<table class='data-table'><thead><tr><th>부품</th><th>센서</th><th>값</th><th>상태</th></tr></thead><tbody>" +
+      list.map(function (s) {
+        var st = s.alarm
+          ? "<span class='status-badge status-badge--err'>알람</span>"
+          : "<span class='status-badge status-badge--ok'>정상</span>";
+        return "<tr><td>" + escHtml(s.group) + "</td><td>" + escHtml(s.name) + "</td><td><b>" +
+          escHtml(String(s.value)) + "</b> " + escHtml(s.unit || "") + "</td><td>" + st + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  } else if (env.sensors && env.sensors.length) {
+    // SSH 센서가 없으면 SNMP로 읽은 온도 센서라도 보여준다.
+    H += "<h4 style='margin:14px 0 6px'>환경 센서 (SNMP)</h4>" +
+      "<table class='data-table'><thead><tr><th>센서</th><th>값</th></tr></thead><tbody>" +
+      env.sensors.map(function (s) {
+        var unit = s.type === "celsius" ? "°C" : (s.type === "rpm" ? " RPM" : "");
+        return "<tr><td>" + escHtml(s.name) + "</td><td>" +
+          escHtml(s.value === null ? "-" : (s.value + unit)) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+  if (env.updated) {
+    H += "<p style='font-size:11px;color:#64748b;margin-top:6px'>수집: " +
+      escHtml(env.updated) + (env.source ? " (" + escHtml(env.source) + ")" : "") + "</p>";
+  }
+  return H;
+}
+
+function _fmtBytes(n) {
+  n = Number(n || 0);
+  if (!n) return "-";
+  var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : String(n)) + " " + u[i];
 }
 
 var _selectedFirewall = null;
