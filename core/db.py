@@ -315,6 +315,19 @@ CREATE TABLE IF NOT EXISTS device_env (
 )
 """
 
+# 서버실 랙 배치 스냅샷 — 장비 삭제·재등록으로 랙 위치가 사라지지 않게 하는 보관본.
+# 키는 (kind, ip): 재등록하면 id는 바뀌지만 IP는 대개 유지된다.
+CREATE_RACK_LAYOUT_TABLE = """
+CREATE TABLE IF NOT EXISTS rack_layout (
+    kind TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    name TEXT,
+    location TEXT,
+    updated TEXT,
+    PRIMARY KEY (kind, ip)
+)
+"""
+
 # 서버(리눅스/윈도우) 현황 — 스위치와 별도 수명주기.
 # 수집: 무자격(포트스캔+역DNS+스위치 ARP/MAC 대조) + SSH 상세(자격증명 시).
 # is_vm=0(물리) + location이 랙 형식(A09U27)이면 서버실 현황에 포함.
@@ -627,6 +640,7 @@ def init_schema(db_path):
                 CREATE_SWITCH_LOGS_TABLE,
                 CREATE_FACILITY_HOSTS_TABLE,
                 CREATE_DEVICE_ENV_TABLE,
+                CREATE_RACK_LAYOUT_TABLE,
                 CREATE_SERVERS_TABLE,
                 CREATE_PC_PROFILES_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,

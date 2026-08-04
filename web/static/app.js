@@ -1549,12 +1549,88 @@ function renderRoomRackView(switches, firewalls, servers) {
       return escHtml((d.o.name || "") + " (" + (d.o.location || "") + ")");
     }).join(", ") + "</div>";
 
+  // 보관본에만 있는 장비(유령) — 현황에서 삭제·재등록으로 사라진 장비를
+  // 조용히 없애지 않고 드러낸다. "여기 있었는데 지금 현황에 없다"를 알려야
+  // 사용자가 재등록 후 '업데이트'로 위치를 되살릴 수 있다.
+  var ghostHtml = !(_roomGhosts && _roomGhosts.length) ? "" :
+    "<div class='rack-conflicts' style='border-color:#94a3b8;color:#64748b'>" +
+    "<b>👻 보관된 배치에만 있는 장비 " + _roomGhosts.length + "대</b> — 현황에서 삭제됐거나 " +
+    "재등록 대기 중입니다. 같은 IP로 재등록하면 '🔄 업데이트'가 위치를 되살립니다: " +
+    _roomGhosts.map(function (g) {
+      return escHtml((g.name || g.ip) + " (" + (g.location || "") + ")");
+    }).join(", ") + "</div>";
+
   host.innerHTML = legend + Object.keys(rows).sort().map(function (letter) {
     var racksHtml = rows[letter].sort().map(_rackHtml).join("");
     return "<div class='rack-group'><div class='rack-group__title'>🗄 " + escHtml(letter) +
       " 열</div><div class='rack-row rack-row--frames'>" + racksHtml + "</div></div>";
-  }).join("") + conflictHtml;
+  }).join("") + conflictHtml + ghostHtml;
 }
+
+// ─── 랙 배치 저장/업데이트 ───────────────────────────────────────
+// 랙뷰는 각 장비의 location에서 파생되므로, 장비를 삭제·재등록하면 위치가 같이
+// 사라졌다("서버실이 자동 업데이트되며 삭제된다"). 배치를 스냅샷으로 보관하고
+// '업데이트'가 위치 빈 장비에 IP 기준으로 되살린다.
+var _roomGhosts = [];
+
+function _loadRoomLayoutInfo() {
+  fetch("/api/room/layout").then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!res.ok) return;
+      _roomGhosts = res.ghosts || [];
+      var el = document.getElementById("room-layout-info");
+      if (el) {
+        el.textContent = res.saved_at
+          ? ("보관된 배치: " + (res.layout || []).length + "대 (저장: " +
+             String(res.saved_at).slice(0, 16) + ")" +
+             (_roomGhosts.length ? " · 현황에 없는 장비 " + _roomGhosts.length + "대" : ""))
+          : "보관된 배치 없음 — '💾 배치 저장'을 누르면 장비 삭제·재등록에도 위치가 보존됩니다.";
+      }
+    }).catch(function () {});
+}
+
+(function () {
+  var save = document.getElementById("btn-room-save-layout");
+  if (save) save.addEventListener("click", function () {
+    save.disabled = true;
+    fetch("/api/room/layout/save", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        alert(res.ok ? ("현재 랙 배치 " + res.saved + "대를 보관했습니다.")
+                     : (res.error || "저장 실패"));
+        _loadRoomLayoutInfo();
+      })
+      .catch(function (e) { alert("저장 오류: " + e); })
+      .then(function () { save.disabled = false; });
+  });
+  var upd = document.getElementById("btn-room-update-layout");
+  if (upd) upd.addEventListener("click", function () {
+    upd.disabled = true;
+    fetch("/api/room/layout/restore", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) { alert(res.error || "업데이트 실패"); return; }
+        var msg = "현황에서 다시 불러왔습니다.\n";
+        msg += "· 위치 되살림: " + (res.applied || []).length + "대";
+        if ((res.applied || []).length) {
+          msg += " (" + res.applied.map(function (a) { return a.name || a.ip; }).join(", ") + ")";
+        }
+        msg += "\n· 이미 배치돼 있어 유지: " + (res.kept || 0) + "대";
+        if ((res.ghosts || []).length) {
+          msg += "\n· 현황에 없어 대기: " + res.ghosts.length + "대 (같은 IP로 재등록하면 복원됩니다)";
+        }
+        alert(msg);
+        // 최신 현황으로 다시 그리기 — 이 버튼이 곧 '현황에서 정보 불러오기'다.
+        if (typeof loadFirewalls === "function") loadFirewalls();
+        if (typeof loadServers === "function") loadServers();
+        pollState();
+        _loadRoomLayoutInfo();
+      })
+      .catch(function (e) { alert("업데이트 오류: " + e); })
+      .then(function () { upd.disabled = false; });
+  });
+  _loadRoomLayoutInfo();
+})();
 
 // ─── 랙 실장 높이(U) 드래그 조절 ─────────────────────────────────
 // 장비 아래 모서리 손잡이를 잡고 아래로 끌면 그만큼 유닛을 더 차지한다.
@@ -1565,6 +1641,47 @@ function _ruEndpoint(kind, id) {
   if (kind === "fw") return "/api/firewalls/" + id;
   if (kind === "srv") return "/api/servers/" + id;
   return "/api/switches/" + id;
+}
+
+// 랙 위치/높이 저장 PUT — 네트워크 단절 시 1회 자동 재시도.
+// "TypeError: Failed to fetch"는 서버가 거절한 게 아니라 요청이 도달하기 전에
+// 연결이 끊긴 것이다(순간 단절·서버 재시작·절전 복귀 등). location만 담은 PUT은
+// 멱등이라 재시도가 안전한데, 예전엔 한 번 실패하면 변경을 그냥 버리고
+// 원인 불명의 TypeError만 띄웠다.
+function _ruSavePut(kind, devId, loc, doneMsg) {
+  function attempt(retryLeft) {
+    return fetch(_ruEndpoint(kind, devId), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ location: loc }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; })
+        .then(function (b) { return { ok: r.ok, b: b }; });
+    }).catch(function (err) {
+      if (retryLeft > 0) {
+        // 1초 뒤 한 번만 재시도 — 서버 재시작 직후 대부분 이 안에 살아난다.
+        return new Promise(function (res) { setTimeout(res, 1000); })
+          .then(function () { return attempt(retryLeft - 1); });
+      }
+      throw err;
+    });
+  }
+  return attempt(1).then(function (res) {
+    if (!res.ok) alert((res.b && res.b.error) || (doneMsg + " 실패"));
+    // 성공·실패 모두 서버 상태로 다시 그린다(겹침 등은 서버 기준으로 확인)
+    if (typeof loadFirewalls === "function") loadFirewalls();
+    if (typeof loadServers === "function") loadServers();
+    pollState();
+  }).catch(function (err) {
+    console.error(err);
+    alert(doneMsg + " 오류 — 서버에 연결할 수 없습니다(재시도 1회 포함). " +
+      "잠시 후 다시 시도하세요. 지금 화면의 배치는 저장되지 않았습니다.\n" +
+      "(" + err + ")");
+    // 저장 안 된 배치를 화면에 남겨두면 저장된 걸로 오해한다 — 서버 상태로 복원.
+    if (typeof loadFirewalls === "function") loadFirewalls();
+    if (typeof loadServers === "function") loadServers();
+    pollState();
+  });
 }
 
 function _ruLocation(rack, unit, h) {
@@ -1626,22 +1743,7 @@ document.addEventListener("mousedown", function (e) {
     document.body.classList.remove("ru-resizing");
     if (curH === startH) return;                 // 변화 없음
     var loc = _ruLocation(rack, topU - curH + 1, curH);
-    fetch(_ruEndpoint(kind, devId), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ location: loc }),
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; })
-        .then(function (b) { return { ok: r.ok, b: b }; });
-    }).then(function (res) {
-      if (!res.ok) {
-        alert((res.b && res.b.error) || "높이 저장 실패");
-      }
-      // 성공·실패 모두 서버 상태로 다시 그린다(겹침 등은 서버 기준으로 확인)
-      if (typeof loadFirewalls === "function") loadFirewalls();
-      if (typeof loadServers === "function") loadServers();
-      pollState();
-    }).catch(function (err) { console.error(err); alert("높이 저장 오류: " + err); });
+    _ruSavePut(kind, devId, loc, "높이 저장");
   }
 
   document.addEventListener("mousemove", onMove);
@@ -1765,19 +1867,7 @@ document.addEventListener("mousedown", function (e) {
     if (!target) return;                      // 놓을 자리가 아님 — 원위치
     if (target.rack === fromRack && target.unit === fromUnit) return;
     var loc = _ruLocation(target.rack, target.unit, h);
-    fetch(_ruEndpoint(kind, devId), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ location: loc }),
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; })
-        .then(function (b) { return { ok: r.ok, b: b }; });
-    }).then(function (res) {
-      if (!res.ok) alert((res.b && res.b.error) || "위치 저장 실패");
-      if (typeof loadFirewalls === "function") loadFirewalls();
-      if (typeof loadServers === "function") loadServers();
-      pollState();
-    }).catch(function (err) { console.error(err); alert("위치 저장 오류: " + err); });
+    _ruSavePut(kind, devId, loc, "위치 저장");
   }
 
   document.addEventListener("mousemove", onMove);

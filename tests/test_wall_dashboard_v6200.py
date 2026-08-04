@@ -41,7 +41,9 @@ def test_switch_stats(temp_db):
     assert s["by_status"]["done"] == 2 and s["by_status"]["failed"] == 1
     assert s["ports"]["total"] == 5 and s["ports"]["up"] == 3
     assert s["ports"]["down"] == 2 and s["ports"]["pct"] == 60
-    assert {v["name"] for v in s["by_vendor"]} == {"cisco_nxos", "cisco_ios"}
+    # 제조사명으로 묶인다(드라이버 키 노출 금지 — v6.17.0 원칙).
+    # cisco_nxos 1대 + cisco_ios 2대 = Cisco 3대.
+    assert {(v["name"], v["count"]) for v in s["by_vendor"]} == {("Cisco", 3)}
 
 
 def test_port_status_covers_vendor_wording(temp_db):

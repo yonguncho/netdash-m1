@@ -33,9 +33,18 @@ def _switch_stats(conn, db_path):
     for r in rs:
         by_status[r["k"]] = r["c"]
         total += r["c"]
-    by_vendor = _counter(_rows(conn,
+    # 드라이버 키(cisco_ios)가 아니라 제조사(Cisco)로 묶는다 — v6.17.0과 같은 원칙.
+    # 같은 제조사의 다른 드라이버(cisco_ios/cisco_nxos)는 여기서 합쳐진다.
+    from . import manufacturer
+    vend_raw = _rows(conn,
         "SELECT IFNULL(vendor,'') AS k, COUNT(*) AS c "
-        "FROM switches WHERE IFNULL(device_type,'')<>'Server' GROUP BY k"))
+        "FROM switches WHERE IFNULL(device_type,'')<>'Server' GROUP BY k")
+    vend_map = {}
+    for r in vend_raw:
+        name = manufacturer.resolve(r["k"]) or (r["k"] or "미지정")
+        vend_map[name] = vend_map.get(name, 0) + r["c"]
+    by_vendor = sorted(({"name": k, "count": v} for k, v in vend_map.items()),
+                       key=lambda x: -x["count"])
     by_kind = _counter(_rows(conn,
         "SELECT IFNULL(device_type,'') AS k, COUNT(*) AS c "
         "FROM switches WHERE IFNULL(device_type,'')<>'Server' GROUP BY k"))
@@ -102,8 +111,15 @@ def _firewall_stats(conn, db_path):
                          "FROM firewalls GROUP BY k"):
         by_status[r["k"]] = r["c"]
         total += r["c"]
-    by_vendor = _counter(_rows(conn,
-        "SELECT IFNULL(vendor,'') AS k, COUNT(*) AS c FROM firewalls GROUP BY k"))
+    from . import manufacturer
+    fw_raw = _rows(conn,
+        "SELECT IFNULL(vendor,'') AS k, COUNT(*) AS c FROM firewalls GROUP BY k")
+    fw_map = {}
+    for r in fw_raw:
+        name = manufacturer.resolve(r["k"]) or (r["k"] or "미지정")
+        fw_map[name] = fw_map.get(name, 0) + r["c"]
+    by_vendor = sorted(({"name": k, "count": v} for k, v in fw_map.items()),
+                       key=lambda x: -x["count"])
 
     ifaces = {"total": 0}
     ir = _rows(conn, "SELECT COUNT(*) AS c FROM firewall_interfaces")

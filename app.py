@@ -3185,6 +3185,47 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/room/layout", methods=["GET"])
+    def room_layout_get():
+        """랙 배치 보관본 + 유령(보관본에는 있는데 현황에 없는 장비) 목록."""
+        try:
+            from core import racklayout
+            layout = racklayout.get_layout(db_path)
+            return jsonify({"ok": True, "layout": layout,
+                            "ghosts": racklayout.ghosts(db_path),
+                            "saved_at": max((e.get("updated") or "" for e in layout),
+                                            default=None)})
+        except Exception as e:
+            log_event("error", "room_layout_get_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
+    @app.route("/api/room/layout/save", methods=["POST"])
+    @rate_limit("room_layout_save", max_requests=30, window_seconds=60)
+    def room_layout_save():
+        """현재 랙 배치를 통째로 보관(장비 삭제·재등록에도 위치가 살아남게)."""
+        try:
+            from core import racklayout
+            n = racklayout.save_snapshot(db_path)
+            return jsonify({"ok": True, "saved": n})
+        except Exception as e:
+            log_event("error", "room_layout_save_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
+    @app.route("/api/room/layout/restore", methods=["POST"])
+    @rate_limit("room_layout_restore", max_requests=30, window_seconds=60)
+    def room_layout_restore():
+        """업데이트: 현황(스위치·방화벽·서버)을 다시 읽어 위치가 빈 장비에
+        보관본의 랙 위치를 되살린다(IP 대조). 이미 배치된 장비는 건드리지 않는다."""
+        try:
+            from core import racklayout
+            return jsonify(dict({"ok": True}, **racklayout.restore(db_path)))
+        except Exception as e:
+            log_event("error", "room_layout_restore_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
     @app.route("/api/wall/stats", methods=["GET"])
     def wall_stats():
         """관제 통합 대시보드 통계(스위치·방화벽·설비 탭 공용)."""

@@ -50,6 +50,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "audit_log",
         # 장비 환경 정보(온도·팬) — SNMP ENTITY-SENSOR-MIB. 스위치·방화벽·서버 공용
         "device_env",
+        # 서버실 랙 배치 스냅샷 — 장비 삭제·재등록에도 위치 보존(키: kind+ip)
+        "rack_layout",
     }
     assert expected == tables
 

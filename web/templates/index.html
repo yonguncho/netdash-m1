@@ -385,9 +385,12 @@
           <button id="btn-room-diagnose" class="btn btn--secondary" style="font-size:12px" title="서버실 장비의 도달성·계정 인증을 확인(스위치 전체 진단)">전체 진단</button>
           <button class="btn btn--secondary nd-export" data-export="serverroom" data-label="서버실 현황" style="font-size:12px" title="목록을 파일로 저장(CSV/TXT 선택)">⬇ 다운로드</button>
           <button id="btn-room-export" class="btn btn--secondary" style="font-size:12px" title="랙 배치도(엑셀) — 랙·U 그리드 형식">⬇ 랙배치(엑셀)</button>
+          <button id="btn-room-save-layout" class="btn btn--primary" style="font-size:12px" title="현재 랙 배치를 보관합니다. 장비를 삭제·재등록해도 위치가 사라지지 않게 하는 백업입니다">💾 배치 저장</button>
+          <button id="btn-room-update-layout" class="btn btn--secondary" style="font-size:12px" title="스위치·방화벽·서버 현황에서 정보를 다시 불러와 랙 정보를 갱신합니다. 위치가 빈 장비(재등록 등)에는 보관해 둔 위치를 IP 기준으로 되살립니다. 이미 배치된 장비는 건드리지 않습니다">🔄 업데이트</button>
         </div>
       </div>
       <div id="room-progress" style="margin:6px 0"></div>
+      <div id="room-layout-info" style="margin:4px 0;font-size:12px;color:#64748b"></div>
       <p style="margin:4px 0 10px;font-size:12px;color:#64748b">스위치 <b>위치(location)</b>를 <code>A09U27</code> 형식으로 기재하면 서버실 <b>A09 랙 U27</b>에 표시됩니다. (수정 → 위치 입력)</p>
       <div id="room-grid" class="switch-grid">
         <p class="placeholder">서버실 위치(A09U27 형식)가 지정된 장비가 없습니다.</p>
