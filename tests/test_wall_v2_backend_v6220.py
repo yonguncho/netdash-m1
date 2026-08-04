@@ -180,11 +180,12 @@ def test_wall_v2_ui_markers():
     root = Path(__file__).parent.parent
     js = (root / "web" / "static" / "wall.js").read_text(encoding="utf-8")
     css = (root / "web" / "static" / "wall.css").read_text(encoding="utf-8")
-    # Top10 클릭 → 본 화면 상세 딥링크
-    assert "data-swid" in js and '"/#switch=" + row.getAttribute' in js
+    # Top10 클릭 → 관제 안 팝업(v6.24.0에서 리디렉션 → 팝업으로 교체)
+    assert "data-swid" in js and "openWallSwitchModal" in js
     # 방화벽 장비 카드·수집상태·정책 표
     assert "renderFirewallTab" in js and "fw_status_list" in js and "policy_rows" in js
-    assert "tunnels_down" in js, "끊긴 터널 목록을 보여줘야 한다"
+    # v6.24.0: 터널 렌더는 vpn_rows(r.up/r.down) 한 곳 — 카드 중복 제거
+    assert "vpn_rows" in js and "tun--dn" in js, "끊긴 터널 목록을 보여줘야 한다"
     # 새 디자인 클래스
     for cls in (".wrank__no", ".fwc__hd", ".wmeter", ".wkpi__c", ".pulse--bad"):
         assert cls in css, cls
@@ -207,8 +208,8 @@ def test_fw_tab_v3_shows_connected_tunnels_too():
     """'연결'도 모니터링이다 — 끊김이 있을 때만 터널을 보여주면 안 된다."""
     from pathlib import Path
     js = (Path(__file__).parent.parent / "web" / "static" / "wall.js").read_text(encoding="utf-8")
-    assert "downs.length || ups.length" in js, \
-        "터널 섹션은 up만 있어도 나와야 한다(예전엔 down 있을 때만)"
+    # v6.24.0: 터널 목록은 모니터링 카드 한 곳으로 일원화 — up/down 모두 렌더
+    assert "(r.down || []).map" in js and "(r.up || []).map" in js,         "터널 섹션은 up만 있어도 나와야 한다(예전엔 down 있을 때만)"
     assert "tst--up" in js and "tst--dn" in js, "터널마다 연결/끊김 배지"
     assert "VPN 터널 모니터링" in js
     assert "vgrp__fw" in js, "방화벽별로 묶어 어느 방화벽의 터널인지 보여야 한다"
@@ -238,3 +239,56 @@ def test_snmp_probe_failure_tells_where_community_is(tmp_path, monkeypatch):
     src = (Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
     assert "⚙설정 → SNMP 커뮤니티" in src
     assert "커뮤니티가 틀리면 오류 없이 무응답" in src
+
+
+# --- v6.24.0: 일괄 수집 버그 · VPN 0 숨김 · 관제 팝업 · 카드 정돈 ------------
+
+def test_bulk_collect_has_no_duplicated_then():
+    """일괄 수집이 항상 '수집 오류'를 띄우던 원인 — .then 핸들러 중복.
+
+    두 번째 .then이 이미 파싱된 {ok,b} 객체에 다시 .json()을 불러 TypeError로
+    빠졌다(서버는 202로 수집을 시작했는데 화면만 오류). 같은 줄이 연달아 두 번
+    나오면 이 버그의 재발이다.
+    """
+    from pathlib import Path
+    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    lines = [l.strip() for l in js.splitlines()]
+    dup = [l for a, l in zip(lines, lines[1:])
+           if a == l and "r.json().then" in l]
+    assert not dup, "인접 중복 .then: %s" % dup[:1]
+    # _fwRunBulk 본문에는 json 파싱이 한 번만 있어야 한다
+    i = js.index("function _fwRunBulk")
+    body = js[i:js.index("window._fwRunBulk = _fwRunBulk", i)]
+    assert body.count("r.json()") == 1
+
+
+def test_fw_detail_hides_unconfigured_vpn():
+    """IPsec/SSL VPN 미설정 방화벽에 '0/0 연결'·'0명'을 보여주면 잡음이다."""
+    from pathlib import Path
+    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "if (vpn.tunnel_total) {" in js, "0이면 표기하지 않는다(!== undefined 금지)"
+    assert "if (vpn.ssl_users) facts" in js
+    assert "vpn.tunnel_total !== undefined" not in js
+
+
+def test_wall_switch_click_opens_popup_not_redirect():
+    """관제 Top10 클릭은 리디렉션이 아니라 관제 안 팝업이다."""
+    from pathlib import Path
+    root = Path(__file__).parent.parent
+    js = (root / "web" / "static" / "wall.js").read_text(encoding="utf-8")
+    html = (root / "web" / "templates" / "wall.html").read_text(encoding="utf-8")
+    assert "function openWallSwitchModal" in js
+    assert 'window.open("/#switch=' not in js, "리디렉션 코드가 남아 있다"
+    assert 'id="wsw-modal"' in html and 'id="wsw-body"' in html
+
+
+def test_fw_cards_are_fact_tables_without_tunnel_duplication():
+    """카드의 터널 목록은 'VPN 터널 모니터링' 카드로 일원화(정돈) —
+    카드는 FortiGate System Information처럼 라벨:값 표."""
+    from pathlib import Path
+    js = (Path(__file__).parent.parent / "web" / "static" / "wall.js").read_text(encoding="utf-8")
+    i = js.index("var cards = devs.map")
+    card_block = js[i:js.index("var vpnRows = f.vpn_rows", i)]
+    assert "fwc__tb" in card_block and "frow(" in card_block
+    assert "tunnels'>" not in card_block and "tun tun--dn" not in card_block, \
+        "카드 안 터널 목록은 제거됐어야 한다(모니터링 카드와 중복)"

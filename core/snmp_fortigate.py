@@ -31,6 +31,10 @@ _FG_DISK_USED = _FG + ".4.1.6.0"     # MB
 _FG_DISK_CAP = _FG + ".4.1.7.0"      # MB
 _FG_SESSIONS = _FG + ".4.1.8.0"
 
+# 코어별 CPU 테이블(fgProcessorUsage) — 일부 모델/펌웨어는 fgSysCpuUsage(스칼라)를
+# 주지 않고 이 테이블만 노출한다. 평균을 내어 폴백으로 쓴다.
+_FG_PROC_USAGE = _FG + ".4.4.2.1.2"
+
 # HA — fgHaSystemMode / fgHaStatsTable
 _FG_HA_MODE = _FG + ".13.1.1.0"
 _FG_HA_GROUP = _FG + ".13.1.7.0"
@@ -142,6 +146,16 @@ def collect_health(ip, community="public", timeout=2.0, budget=20.0):
         out["uptime_sec"] = up // 100          # sysUpTime은 1/100초 단위
 
     cpu = _num(g.get(_FG_CPU))
+    if cpu is None:
+        # 폴백: 코어별 사용률 평균 — fgSysCpuUsage를 안 주는 펌웨어가 있다
+        # (사용자 실장비에서 CPU만 비던 원인 후보).
+        try:
+            cores = [_num(v) for _o, v in sess.walk(_FG_PROC_USAGE, max_rows=128)]
+            cores = [c for c in cores if c is not None]
+            if cores:
+                cpu = round(sum(cores) / len(cores))
+        except Exception:
+            pass
     if cpu is not None:
         out["cpu_pct"] = cpu
     mem = _num(g.get(_FG_MEM))
@@ -158,6 +172,10 @@ def collect_health(ip, community="public", timeout=2.0, budget=20.0):
         out["disk_total_mb"] = d_cap
         if d_used is not None:
             out["disk_pct"] = round(d_used * 100.0 / d_cap)
+    elif d_cap == 0:
+        # 용량 0 = 로그 디스크가 없거나 비활성인 모델(흔하다). '수집 실패'가 아니라
+        # '디스크 없음'이므로 화면이 구분해 표기할 수 있게 표시한다.
+        out["disk_absent"] = True
 
     ses = _num(g.get(_FG_SESSIONS))
     if ses is not None:
@@ -211,6 +229,11 @@ def probe(ip, community="public", timeout=2.0, budget=25.0, max_rows=120):
     subtree = []
     try:
         for o, v in sess.walk(_FG + ".4.1", max_rows=max_rows):
+            subtree.append({"oid": o, "value": _text(v)[:200]})
+    except Exception:
+        pass
+    try:
+        for o, v in sess.walk(_FG_PROC_USAGE, max_rows=32):
             subtree.append({"oid": o, "value": _text(v)[:200]})
     except Exception:
         pass

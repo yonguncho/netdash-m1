@@ -38,6 +38,18 @@
   <section id="wtab-firewall" class="wall-pane"></section>
   <section id="wtab-facility" class="wall-pane"></section>
 
+  <!-- 스위치 요약 팝업 — Top10 클릭 시 리디렉션 대신 관제 화면 안에서 보여준다 -->
+  <div id="wsw-modal" class="wswm" style="display:none">
+    <div class="wswm__bg" data-close="1"></div>
+    <div class="wswm__box">
+      <div class="wswm__hd">
+        <div><div class="wswm__nm" id="wsw-name">-</div><div class="wswm__ip" id="wsw-sub">-</div></div>
+        <button class="wswm__x" data-close="1">&times;</button>
+      </div>
+      <div class="wswm__bd" id="wsw-body">불러오는 중...</div>
+    </div>
+  </div>
+
   <footer class="wall-ticker">
     <div id="wall-events" class="wall-ticker__inner"></div>
   </footer>

@@ -3349,7 +3349,10 @@ function fwStatusHtml(fw, env) {
   H += "<div style='max-width:420px'>" +
     fwBar("CPU", m.cpu_pct === undefined ? null : m.cpu_pct) +
     fwBar("MEM", m.mem_pct === undefined ? null : m.mem_pct) +
-    fwBar("DISK", m.disk_pct === undefined ? null : m.disk_pct) + "</div>";
+    (m.disk_absent
+      ? "<div class='fw-tile__row'><b>DISK</b><div class='fw-bar'></div>" +
+        "<span class='fw-tile__val' style='width:auto' title='이 모델은 로그 디스크가 없거나 비활성입니다 — 정상'>없음</span></div>"
+      : fwBar("DISK", m.disk_pct === undefined ? null : m.disk_pct)) + "</div>";
 
   var facts = [];
   if (m.sessions !== undefined) facts.push(["동시 세션", Number(m.sessions).toLocaleString()]);
@@ -3357,10 +3360,12 @@ function fwStatusHtml(fw, env) {
   if (m.uptime_sec) facts.push(["업타임", Math.floor(m.uptime_sec / 86400) + "일"]);
   if (m.ha_mode) facts.push(["HA", m.ha_mode + (m.ha_group ? " (" + m.ha_group + ")" : "")]);
   var vpn = m.vpn || {};
-  if (vpn.tunnel_total !== undefined) {
+  // IPsec/SSL VPN을 안 쓰는 방화벽이 많다 — 0/0, 0명을 보여주면 잡음이다.
+  // 설정이 있는(값이 0보다 큰) 장비에만 표기한다.
+  if (vpn.tunnel_total) {
     facts.push(["VPN 터널", vpn.tunnel_up + " / " + vpn.tunnel_total + " 연결"]);
   }
-  if (vpn.ssl_users !== undefined) facts.push(["SSL VPN 접속자", vpn.ssl_users]);
+  if (vpn.ssl_users) facts.push(["SSL VPN 접속자", vpn.ssl_users]);
   var pol = m.policy || {};
   if (pol.total !== undefined) facts.push(["방화벽 정책", pol.total + "개"]);
   if (pol.unused !== undefined) facts.push(["히트 0건 정책", pol.unused + "개"]);
@@ -5556,7 +5561,6 @@ function renderServers() {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body),
     })
-      .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (r) { return r.json().then(function (b) { return {ok: r.ok, b: b}; }); })
       .then(function (res) {
         if (!res.ok) { alert((res.b && res.b.error) || "일괄 수집 시작 실패"); return; }

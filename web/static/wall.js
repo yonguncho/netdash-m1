@@ -416,57 +416,49 @@ function renderFirewallTab(f) {
     return "지표 없음 — SNMP 커뮤니티(⚙설정) 또는 SSH 계정 지정 후 재수집";
   }
 
-  /* 장비별 카드 — 지표가 수집된 방화벽만 */
+  /* 장비별 카드 — 지표가 수집된 방화벽만.
+     FortiGate 대시보드의 System Information 위젯처럼 라벨:값 표로 정리한다.
+     터널 목록은 여기 두지 않는다 — 'VPN 터널 모니터링' 카드가 전담(중복 제거). */
   var cards = devs.map(function (d) {
     var lv = d.level || (d.alarms.length ? "critical" : "normal");
-    var chips = [];
-    if (d.policy_total !== null && d.policy_total !== undefined) {
-      chips.push("<span class='chip'>정책 " + _n(d.policy_total) + "</span>");
+    function frow(k, val, cls) {
+      return (val === null || val === undefined || val === "") ? "" :
+        "<tr><td class='fwc__k'>" + esc(k) + "</td><td" +
+        (cls ? " class='" + cls + "'" : "") + ">" + val + "</td></tr>";
     }
-    if (d.proxy_total !== null && d.proxy_total !== undefined) {
-      chips.push("<span class='chip'>Proxy " + _n(d.proxy_total) + "</span>");
-    }
-    if (d.psu_count) {
-      chips.push("<span class='chip " + (d.alarms.length ? "chip--rs" : "chip--em") + "'>PSU " +
-        d.psu_count + (d.alarms.length ? "" : " 정상") + "</span>");
-    }
-    d.alarms.forEach(function (al) {
-      chips.push("<span class='chip chip--rs'>⚠ " + esc(al) + "</span>");
-    });
-    if (d.temp_c !== null && d.temp_c !== undefined) {
-      chips.push("<span class='chip" + (d.temp_c >= 60 ? " chip--am" : "") + "'>" + d.temp_c + "°C</span>");
-    }
-    if (d.ha_mode && d.ha_mode !== "standalone") {
-      chips.push("<span class='chip'>HA " + esc(d.ha_mode) + "</span>");
-    }
-    /* 터널 — 있으면 항상 전부 보여준다(끊김 우선). '연결됨' 확인도 모니터링이다. */
-    var tun = "";
-    var downs = d.tunnels_down || [], ups = d.tunnels_up || [];
-    if (downs.length || ups.length) {
-      tun = "<div class='tunnels'><h4>VPN 터널 " +
-        (d.vpn_up !== undefined ? "(" + d.vpn_up + "/" + d.vpn_total + " 연결)" : "") + "</h4>" +
-        downs.map(function (t) {
-          return "<div class='tun tun--dn'><i></i>" + esc(t.name || "-") +
-            " <span class='tst tst--dn'>끊김</span><span class='peer'>" + esc(t.peer || "") + "</span></div>";
-        }).join("") +
-        ups.map(function (nm) {
-          return "<div class='tun tun--up'><i></i>" + esc(nm) +
-            " <span class='tst tst--up'>연결</span></div>";
-        }).join("") + "</div>";
-    }
-    var sub = [d.host, d.version ? "v" + String(d.version).replace(/^v/, "") : "",
-               d.uptime_sec ? Math.floor(d.uptime_sec / 86400) + "일 가동" : ""]
-      .filter(Boolean).join(" · ");
+    var facts =
+      frow("펌웨어", d.version ? esc("v" + String(d.version).replace(/^v/, "")) : null) +
+      frow("가동 시간", d.uptime_sec ? Math.floor(d.uptime_sec / 86400) + "일" : null) +
+      frow("HA", d.ha_mode && d.ha_mode !== "standalone" ? esc(d.ha_mode) : null) +
+      frow("온도", d.temp_c !== null && d.temp_c !== undefined
+        ? "<span" + (d.temp_c >= 60 ? " class='wam'" : "") + ">" + d.temp_c + "°C</span>" : null) +
+      frow("PSU", d.psu_count
+        ? (d.alarms.length ? "<span class='wbad'>" + d.psu_count + "개 — 알람</span>"
+                           : d.psu_count + "개 정상") : null) +
+      (d.alarms.length
+        ? frow("센서 알람", "<span class='wbad'>" + d.alarms.map(esc).join(", ") + "</span>") : "") +
+      frow("정책", d.policy_total !== null && d.policy_total !== undefined
+        ? _n(d.policy_total) + (d.proxy_total ? " <span class='wdim'>(Proxy " + _n(d.proxy_total) + ")</span>" : "")
+        : null) +
+      // VPN을 안 쓰는 방화벽이 많다 — 설정된(터널>0) 장비에만 표기
+      (d.vpn_total
+        ? frow("VPN 터널", (d.vpn_up < d.vpn_total
+            ? "<span class='wbad'>" + d.vpn_up + "/" + d.vpn_total + " 연결 — 끊김 " +
+              (d.vpn_total - d.vpn_up) + "</span>"
+            : d.vpn_up + "/" + d.vpn_total + " 연결")) : "");
+    var sub = d.host || "";
     return "<div class='fwc fwc--" + (lv === "critical" ? "crit" : lv === "warning" ? "warn" : "ok") + "'>" +
       "<div class='fwc__hd'><div><div class='fwc__nm'>" + esc(d.name || "-") + "</div>" +
       "<div class='fwc__ip'>" + esc(sub) + "</div></div>" +
       "<span class='pulse pulse--" + (lv === "critical" ? "bad" : "ok") + "'></span></div>" +
       "<div class='fwc__bd'>" +
-      meter("CPU", d.cpu) + meter("MEM", d.mem) + meter("DISK", d.disk) +
+      meter("CPU", d.cpu) + meter("MEM", d.mem) +
+      (d.disk === null || d.disk === undefined
+        ? "" : meter("DISK", d.disk)) +
       meter("세션", d.sessions !== null && d.sessions !== undefined
         ? Math.min(100, Math.round((d.sessions || 0) / 2000)) : null, _n(d.sessions)) +
-      (chips.length ? "<div class='fwc__facts'>" + chips.join("") + "</div>" : "") +
-      tun + "</div></div>";
+      (facts ? "<table class='fwc__tb'>" + facts + "</table>" : "") +
+      "</div></div>";
   }).join("");
 
   /* VPN 터널 모니터링 — 도넛 + 방화벽별 전체 터널 목록(도표·목록 한 카드) */
@@ -632,11 +624,64 @@ function refreshStats() {
     .catch(function (e) { console.error("wall stats:", e); });
 }
 
-/* Top10 클릭 → 본 화면(/)의 스위치 상세를 새 탭으로 */
+/* Top10 클릭 → 관제 화면 안 요약 팝업(리디렉션하지 않는다 — 관제는 관제에 머문다) */
+function openWallSwitchModal(id) {
+  var modal = document.getElementById("wsw-modal");
+  var body = document.getElementById("wsw-body");
+  if (!modal || !body) return;
+  modal.style.display = "";
+  document.getElementById("wsw-name").textContent = "불러오는 중...";
+  document.getElementById("wsw-sub").textContent = "";
+  body.innerHTML = "<p class='wnone'>불러오는 중...</p>";
+  fetch("/api/switches/" + id + "/detail")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var sw = d.switch || {};
+      document.getElementById("wsw-name").textContent = sw.name || "-";
+      document.getElementById("wsw-sub").textContent =
+        (sw.ip || "") + (sw.hostname ? " · " + sw.hostname : "");
+      var ports = d.ports || [];
+      var up = ports.filter(function (p) {
+        var st = (p.status || "").toLowerCase();
+        return st === "up" || st === "connected";
+      }).length;
+      var pct = ports.length ? Math.round(up * 100 / ports.length) : 0;
+      var env = d.env || {};
+      function row(k, v) {
+        return (v === null || v === undefined || v === "") ? "" :
+          "<tr><td class='wswm__k'>" + esc(k) + "</td><td>" + esc(String(v)) + "</td></tr>";
+      }
+      /* FortiGate System Information 위젯처럼 — 라벨:값 표 하나로 정리 */
+      body.innerHTML =
+        "<table class='wswm__tb'>" +
+        row("호스트네임", sw.hostname) +
+        row("제조사 / 모델", [sw.manufacturer, sw.model].filter(Boolean).join(" / ")) +
+        row("펌웨어", sw.os_version) +
+        row("시리얼", sw.serial) +
+        row("위치", sw.tps_location || sw.location) +
+        row("상태", sw.status === "done" ? "정상 수집" : sw.status) +
+        row("온도", env.max_temp_c !== null && env.max_temp_c !== undefined
+              ? env.max_temp_c + "°C" : null) +
+        row("마지막 수집", (sw.last_collected || "").toString().slice(0, 16)) +
+        "</table>" +
+        "<h4 class='wswm__h4'>포트 사용</h4>" +
+        "<div class='wmeter'><b style='width:70px'>" + up + "/" + ports.length + "</b>" +
+        "<span class='wmeter__t'><span class='wmeter__f " +
+        (pct >= 90 ? "mf-crit" : pct >= 80 ? "mf-warn" : "mf-ok") +
+        "' style='width:" + pct + "%'></span></span>" +
+        "<span class='wmeter__v'>" + pct + "%</span></div>" +
+        "<p class='wswm__foot'>세부 포트·MAC·ARP는 본 화면(스위치 현황 → 상세보기)에서 확인하세요.</p>";
+    })
+    .catch(function () { body.innerHTML = "<p class='wnone'>정보를 불러오지 못했습니다.</p>"; });
+}
 document.addEventListener("click", function (e) {
   var row = e.target.closest && e.target.closest("[data-swid]");
-  if (!row) return;
-  window.open("/#switch=" + row.getAttribute("data-swid"), "_blank");
+  if (row) { openWallSwitchModal(row.getAttribute("data-swid")); return; }
+  var x = e.target.closest && e.target.closest("[data-close]");
+  if (x) {
+    var m = document.getElementById("wsw-modal");
+    if (m) m.style.display = "none";
+  }
 });
 
 (function initWallTabs() {

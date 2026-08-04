@@ -241,3 +241,32 @@ def test_firewall_ui_shows_load_and_probe():
     assert "function fwLoadCell" in js and "fwLoadCell(f)" in js
     assert "snmp-probe-fw" in js and "function snmpProbeFirewall" in js
     assert ">부하</th>" in html
+
+
+# --- v6.24.0: CPU 코어 폴백 · 디스크 없음 구분 -------------------------------
+
+def test_cpu_falls_back_to_per_core_average(monkeypatch):
+    """fgSysCpuUsage를 안 주는 펌웨어 — 코어별 테이블 평균으로 폴백.
+
+    실장비에서 'MEM만 나오고 CPU가 빈' 신고의 원인 후보다.
+    """
+    s = dict(_HEALTHY)
+    del s[fg._FG_CPU]
+    sess = FakeSession(scalars=s, tables={
+        fg._FG_PROC_USAGE: [("1", 10), ("2", 20), ("3", 30), ("4", 20)]})
+    _patch(monkeypatch, sess)
+    assert fg.collect_health("10.0.0.1")["cpu_pct"] == 20
+
+
+def test_cpu_scalar_wins_over_core_table(monkeypatch):
+    _patch(monkeypatch, FakeSession(scalars=_HEALTHY, tables={
+        fg._FG_PROC_USAGE: [("1", 99)]}))
+    assert fg.collect_health("10.0.0.1")["cpu_pct"] == 12
+
+
+def test_disk_capacity_zero_means_absent_not_missing(monkeypatch):
+    """로그 디스크 없는 모델(용량 0)은 '수집 실패'가 아니라 '디스크 없음'이다."""
+    s = dict(_HEALTHY, **{fg._FG_DISK_USED: 0, fg._FG_DISK_CAP: 0})
+    _patch(monkeypatch, FakeSession(scalars=s))
+    h = fg.collect_health("10.0.0.1")
+    assert h.get("disk_absent") is True and "disk_pct" not in h

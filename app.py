@@ -4760,6 +4760,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             if _info:
                 switch["tps_location"] = _info["label"]
 
+            # 관제 팝업이 제조사를 표기한다 — 드라이버 키 노출 금지(v6.17.0 원칙)
+            from core import manufacturer
+            manufacturer.annotate([switch])
             env = db.get_device_env(db_path, "switch", switch_id)
             ports = db.get_ports_by_switch(db_path, switch_id)
             macs = db.get_mac_entries_by_switch(db_path, switch_id)

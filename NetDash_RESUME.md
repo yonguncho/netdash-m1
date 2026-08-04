@@ -10,7 +10,23 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
-## 작업 중 (v6.23.0) — 방화벽 탭 v3 (사용자 지적 반영) + SNMP 안내
+## 작업 중 (v6.24.0) — 사용자 지적 5건: 일괄수집 버그·SNMP CPU/DISK·정돈·팝업
+
+- **일괄 수집 "수집 오류" 버그** — app.js `_fwRunBulk`의 `.then` 핸들러가 **중복**
+  돼 있었다(5559-5560행). 두 번째가 파싱된 객체에 다시 `.json()` → TypeError →
+  catch. **서버는 202로 수집을 시작했는데 화면만 항상 오류**. 중복 줄 삭제 +
+  인접 중복 .then 회귀 테스트.
+- **SNMP에서 MEM만 나오던 건**: ① CPU — `fgSysCpuUsage`를 안 주는 펌웨어가 있어
+  코어별 `fgProcessorUsage`(.4.4.2.1.2) 평균 폴백 추가(probe에도 노출).
+  ② DISK — 용량 0 = 로그 디스크 없는 모델(흔함). `disk_absent` 플래그로 구분,
+  상세 미터에 '없음'(정상) 표기.
+- **상세의 VPN 0/0·SSL 0명 잡음** — 설정된(>0) 장비에만 표기.
+- **관제 Top10 클릭** — 리디렉션 제거, 관제 안 `wsw-modal` 팝업(System
+  Information식 라벨:값 표 + 포트 사용 미터). detail API에 manufacturer 주입.
+- **방화벽 탭 정돈** — 카드의 터널 목록 제거(모니터링 카드로 일원화), 칩 →
+  FortiGate System Information식 라벨:값 표(`fwc__tb`).
+
+## v6.23.0 — 방화벽 탭 v3 (사용자 지적 반영) + SNMP 안내
 
 사용자 지적: ① 어느 방화벽의 어느 터널이 끊겼는지/연결됐는지 모니터링 불가
 ② 정책·부하 표에 방화벽 2대만 나옴(이유 불명) ③ 도표는 목록과 짝이어야
