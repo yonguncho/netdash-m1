@@ -70,13 +70,13 @@ def _switch_stats(conn, db_path):
     # 포트를 많이 쓰는 스위치 상위 — 증설 판단에 쓰인다.
     top = []
     for r in _rows(conn,
-        "SELECT s.name AS name, COUNT(p.id) AS total, "
+        "SELECT s.id AS sid, s.name AS name, COUNT(p.id) AS total, "
         "SUM(CASE WHEN LOWER(IFNULL(p.status,'')) IN ('up','connected') THEN 1 ELSE 0 END) AS up "
         "FROM ports p JOIN switches s ON s.id=p.switch_id "
         "WHERE p.snapshot_id IN (SELECT MAX(snapshot_id) FROM ports GROUP BY switch_id) "
-        "GROUP BY s.id HAVING total>0 ORDER BY (1.0*up/total) DESC LIMIT 8"):
+        "GROUP BY s.id HAVING total>0 ORDER BY (1.0*up/total) DESC LIMIT 10"):
         t, u = r["total"] or 0, r["up"] or 0
-        top.append({"name": r["name"], "total": t, "up": u,
+        top.append({"id": r["sid"], "name": r["name"], "total": t, "up": u,
                     "pct": round(u * 100.0 / t) if t else 0})
 
     reach = {"up": 0, "down": 0}
@@ -169,7 +169,7 @@ def _firewall_stats(conn, db_path):
 
     # 장비별 상세 목록 — "어느 방화벽이"에 답하기 위한 재료.
     # 수집 상태(실패 사유 포함) / 정책 수(Firewall·Proxy) / VPN 터널 이름별 상태.
-    fw_status_list, policy_rows, vpn_rows = [], [], []
+    fw_status_list, policy_rows, vpn_rows, devices = [], [], [], []
     try:
         env_map = db.get_device_env_map(db_path, "firewall") or {}
         for f in db.list_firewalls(db_path):
@@ -179,6 +179,25 @@ def _firewall_stats(conn, db_path):
                 "last_error": (f.get("last_error") or "")[:120],
                 "last_collected": f.get("last_collected")})
             m = (env_map.get(f["id"]) or {}).get("metrics") or {}
+            _e = env_map.get(f["id"]) or {}
+            _v, _p, _s = m.get("vpn") or {}, m.get("policy") or {}, m.get("sensors") or {}
+            if m:      # 지표가 있는 장비만 카드로(빈 카드 금지 — 사용자 요구)
+                _tuns = _v.get("tunnels") or []
+                devices.append({
+                    "id": f["id"], "name": f.get("name"), "host": f.get("host"),
+                    "cpu": m.get("cpu_pct"), "mem": m.get("mem_pct"),
+                    "disk": m.get("disk_pct"), "sessions": m.get("sessions"),
+                    "level": m.get("level"), "version": m.get("version"),
+                    "uptime_sec": m.get("uptime_sec"), "ha_mode": m.get("ha_mode"),
+                    "temp_c": _e.get("max_temp_c") or _s.get("max_temp_c"),
+                    "psu_count": _s.get("psu_count"),
+                    "alarms": _s.get("alarms") or [],
+                    "vpn_total": _v.get("tunnel_total"), "vpn_up": _v.get("tunnel_up"),
+                    "tunnels_down": [{"name": t.get("name"), "peer": t.get("peer")}
+                                     for t in _tuns if t.get("status") != "up"][:12],
+                    "tunnels_up": [t.get("name") for t in _tuns
+                                   if t.get("status") == "up"][:12],
+                    "policy_total": _p.get("total"), "proxy_total": _p.get("proxy_total")})
             p = m.get("policy") or {}
             if p.get("total") is not None:
                 policy_rows.append({
@@ -201,7 +220,7 @@ def _firewall_stats(conn, db_path):
             "reach": reach, "interfaces": ifaces, "vpn": vpn, "policy": policy,
             "sensors": sensors, "load": load, "temps": temps[:8],
             "fw_status_list": fw_status_list, "policy_rows": policy_rows,
-            "vpn_rows": vpn_rows}
+            "vpn_rows": vpn_rows, "devices": devices}
 
 
 def _facility_stats(conn):
@@ -237,6 +256,16 @@ def _facility_stats(conn):
                       "  AND ts >= datetime('now','localtime','-1 day')")
     if r24:
         offline_24h = r24[0]["c"] or 0
+    # 이름 → 스위치 id (클릭→상세 연동). 같은 이름이 여럿이면 특정 불가라 뺀다.
+    name_ids = {}
+    for r in _rows(conn, "SELECT name, MIN(id) AS id, COUNT(*) AS c FROM switches GROUP BY name"):
+        if (r["c"] or 0) == 1:
+            name_ids[r["name"]] = r["id"]
+    for lst in (by_switch, offline_by_switch):
+        for e in lst:
+            sid = name_ids.get(e["name"])
+            if sid:
+                e["id"] = sid
     return {"total": total, "online": online, "offline": max(0, total - online),
             "direct": direct, "indirect": max(0, total - direct),
             "by_subnet": by_subnet, "by_switch": by_switch,

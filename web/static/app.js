@@ -5782,6 +5782,21 @@ function _renderAlerts(events) {
 })();
 
 // ─── 폴링 ────────────────────────────────────────────────────────
+// 관제 대시보드에서 스위치를 클릭하면 /#switch=<id> 로 열린다 — 목록이 로드된 뒤
+// 한 번만 해당 스위치의 상세 패널을 연다(해시는 지워 새로고침 시 재열림 방지).
+var _hashDetailDone = false;
+function _openHashDetail() {
+  if (_hashDetailDone) return;
+  var m = (location.hash || "").match(/^#switch=(\d+)$/);
+  if (!m) { _hashDetailDone = true; return; }
+  var id = parseInt(m[1], 10);
+  var sw = (_switches || []).find(function (s) { return s.id === id; });
+  if (!sw) return;                        // 아직 로드 전이면 다음 폴링에서 재시도
+  _hashDetailDone = true;
+  try { history.replaceState(null, "", location.pathname); } catch (e) {}
+  openDetailPanel(sw);
+}
+
 function pollState() {
   fetch("/api/state")
     .then(function(r) { return r.json(); })
@@ -5796,6 +5811,7 @@ function pollState() {
       renderSwitchTable(_switches);
       if (_viewMode === "rack") renderRackView(_switches);
       renderRoom(_switches);
+      _openHashDetail();      // 관제 Top10 클릭 등 #switch=<id> 딥링크 처리
 
       if (_currentSwitchId) {
         var sw = _switches.find(function(s) { return s.id === _currentSwitchId; });

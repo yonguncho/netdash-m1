@@ -234,217 +234,318 @@ clock();
 setInterval(refresh, 10000);
 setInterval(clock, 1000);
 
-/* ── 통합 대시보드 (스위치 / 방화벽 / 설비 탭) ────────────────────────
-   외부 차트 라이브러리를 쓰지 않는다 — 폐쇄망이라 CDN을 못 쓴다.
-   도넛은 인라인 SVG(stroke-dasharray), 막대는 CSS로 그린다. */
+/* ── 통합 대시보드 v2 (스위치 / 방화벽 / 설비 탭) ─────────────────────
+   목업(build/wall_mockup.html) 승인본. 외부 차트 라이브러리 없이
+   SVG 도넛(그라데이션+글로우) + CSS 막대. 폐쇄망 = CDN 불가. */
 
 var _WSTAT = null;
 var _wtab = "summary";
-
-var PALETTE = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed",
-               "#0891b2", "#db2777", "#65a30d"];
+var _gid = 0;   // SVG 그라데이션 id 충돌 방지(도넛마다 고유 defs)
 
 function lvlColor(l) {
-  return l === "critical" ? "#dc2626" : l === "warning" ? "#f59e0b" : "#16a34a";
+  return l === "critical" ? "#fb7185" : l === "warning" ? "#fbbf24" : "#34d399";
+}
+function pctLv(p) {
+  if (p === null || p === undefined) return null;
+  return p >= 90 ? "critical" : p >= 80 ? "warning" : "normal";
+}
+function _n(v) { return (v === null || v === undefined) ? "-" : Number(v).toLocaleString(); }
+
+/* KPI 카드 — {num, label, detail, color} */
+function kpiRow(cards) {
+  return "<div class='wkpi'>" + cards.map(function (c) {
+    return "<div class='wkpi__c' style='--ac:" + (c.color || "#60a5fa") + "'>" +
+      "<div class='wkpi__n'>" + c.num + "</div>" +
+      "<div class='wkpi__l'>" + esc(c.label) + "</div>" +
+      (c.detail ? "<div class='wkpi__d'>" + esc(c.detail) + "</div>" : "") +
+      "</div>";
+  }).join("") + "</div>";
 }
 
-/* 도넛 차트 — segs=[{label, value, color}] */
-function donut(segs, centerNum, centerLabel) {
+/* 도넛 — segs=[{label, value, c0, c1}] (그라데이션 양끝색) */
+function donut(segs, centerTop, centerBottom) {
   segs = (segs || []).filter(function (s) { return s.value > 0; });
   var total = segs.reduce(function (a, s) { return a + s.value; }, 0);
-  var R = 54, C = 2 * Math.PI * R, off = 0;
-  var arcs = "";
+  var R = 54, C = 2 * Math.PI * R, off = 0, gbase = "wg" + (++_gid) + "_";
+  var defs = "", arcs = "";
   if (!total) {
-    arcs = "<circle cx='70' cy='70' r='" + R + "' fill='none' stroke='#e2e8f0' stroke-width='18'/>";
+    arcs = "<circle cx='70' cy='70' r='" + R + "' fill='none' stroke='rgba(148,163,184,.12)' stroke-width='14'/>";
   } else {
+    arcs = "<circle cx='70' cy='70' r='" + R + "' fill='none' stroke='rgba(148,163,184,.1)' stroke-width='14'/>";
     segs.forEach(function (s, i) {
+      var gid = gbase + i;
+      defs += "<linearGradient id='" + gid + "' x1='0' y1='0' x2='1' y2='1'>" +
+        "<stop offset='0' stop-color='" + s.c0 + "'/><stop offset='1' stop-color='" + s.c1 + "'/></linearGradient>";
       var len = C * (s.value / total);
-      arcs += "<circle cx='70' cy='70' r='" + R + "' fill='none' stroke='" +
-        (s.color || PALETTE[i % PALETTE.length]) + "' stroke-width='18' " +
-        "stroke-dasharray='" + len.toFixed(2) + " " + (C - len).toFixed(2) + "' " +
+      // 아주 작은 조각도 보이게 최소 길이 확보(단, 100% 단독이면 그대로)
+      arcs += "<circle cx='70' cy='70' r='" + R + "' fill='none' stroke='url(#" + gid + ")' " +
+        "stroke-width='14'" + (segs.length > 1 ? " stroke-linecap='round'" : "") +
+        " stroke-dasharray='" + Math.max(len, 3).toFixed(2) + " " + C.toFixed(2) + "' " +
         "stroke-dashoffset='" + (-off).toFixed(2) + "' transform='rotate(-90 70 70)'/>";
       off += len;
     });
   }
-  var legend = segs.map(function (s, i) {
-    return "<div class='wl-item'><span class='wl-dot' style='background:" +
-      (s.color || PALETTE[i % PALETTE.length]) + "'></span>" + esc(s.label) +
-      " <b>" + esc(String(s.value)) + "</b></div>";
+  var legend = segs.map(function (s) {
+    return "<span class='wl-item'><i style='background:" + s.c1 + "'></i>" +
+      esc(s.label) + " <b>" + _n(s.value) + "</b></span>";
   }).join("");
-  return "<div class='wchart'><svg viewBox='0 0 140 140' class='wdonut'>" + arcs +
-    "<text x='70' y='68' text-anchor='middle' class='wdonut__num'>" +
-    esc(String(centerNum == null ? total : centerNum)) + "</text>" +
-    "<text x='70' y='86' text-anchor='middle' class='wdonut__lbl'>" +
-    esc(centerLabel || "") + "</text></svg>" +
+  return "<div class='wchart'><svg class='dsvg' viewBox='0 0 140 140'><defs>" + defs + "</defs>" + arcs +
+    "<text x='70' y='66' text-anchor='middle' class='dnum'>" + esc(String(centerTop)) + "</text>" +
+    "<text x='70' y='86' text-anchor='middle' class='dlbl'>" + esc(centerBottom || "") + "</text></svg>" +
     "<div class='wlegend'>" + legend + "</div></div>";
 }
 
-/* 가로 막대 목록 — items=[{name, count}] 또는 {name, pct, up, total} */
-function barList(items, opts) {
+/* Top N 랭킹 — items=[{name, id?, v(막대 기준값), d(표시값)}] */
+function rankList(items, opts) {
   opts = opts || {};
   items = items || [];
   if (!items.length) return "<p class='wnone'>데이터 없음</p>";
-  var max = Math.max.apply(null, items.map(function (i) {
-    return opts.pct ? 100 : (i.count || 0);
-  })) || 1;
-  return "<div class='wbars'>" + items.map(function (i) {
-    var v = opts.pct ? (i.pct || 0) : (i.count || 0);
-    var w = Math.max(2, Math.round(v * 100 / max));
-    var color = opts.color ? opts.color(i) : "#2563eb";
-    var right = opts.pct ? (v + "%" + (i.total ? " (" + i.up + "/" + i.total + ")" : ""))
-                         : String(v);
-    return "<div class='wbar'><span class='wbar__name' title='" + esc(i.name) + "'>" +
-      esc(i.name) + "</span>" +
-      "<span class='wbar__track'><span class='wbar__fill' style='width:" + w +
-      "%;background:" + color + "'></span></span>" +
-      "<span class='wbar__val'>" + esc(right) + "</span></div>";
+  var max = opts.max || Math.max.apply(null, items.map(function (i) { return i.v || 0; })) || 1;
+  return "<div class='wrank'>" + items.map(function (i, idx) {
+    var pct = Math.max(2, Math.round((i.v || 0) * 100 / max));
+    var click = (opts.link && i.id)
+      ? " data-swid='" + i.id + "' title='클릭 → 스위치 상세'" : "";
+    return "<div class='wrank__row" + (opts.link && i.id ? " wrank__row--link" : "") + "'" + click + ">" +
+      "<span class='wrank__no'>" + (idx + 1) + "</span>" +
+      "<span class='wrank__name' title='" + esc(i.name) + "'>" + esc(i.name) + "</span>" +
+      "<span class='wrank__bar'><span class='wrank__fill' style='--f0:" + (opts.c0 || "#0891b2") +
+      ";--f1:" + (opts.c1 || "#22d3ee") + ";width:" + pct + "%'></span></span>" +
+      "<span class='wrank__val'>" + (i.d || _n(i.v)) + "</span></div>";
   }).join("") + "</div>";
 }
 
-function wcard(title, body, wide) {
-  return "<div class='wcard" + (wide ? " wcard--wide" : "") + "'>" +
-    "<h3 class='wcard__t'>" + esc(title) + "</h3>" + body + "</div>";
-}
-
-function kpiRow(cards) {
-  return "<div class='wkpi'>" + cards.map(function (c) {
-    return "<div class='wkpi__c'><div class='wkpi__n' style='color:" +
-      (c.color || "#0f172a") + "'>" + esc(String(c.num)) + "</div>" +
-      "<div class='wkpi__l'>" + esc(c.label) + "</div></div>";
-  }).join("") + "</div>";
+function wcard(title, hint, body, cls) {
+  return "<div class='wcard " + (cls || "") + "'><h3>" + esc(title) +
+    (hint ? "<span class='hint'>" + esc(hint) + "</span>" : "") + "</h3>" + body + "</div>";
 }
 
 var STATUS_KO = { done: "정상", failed: "수집 실패", collecting: "수집 중", new: "미수집" };
-var STATUS_COLOR = { done: "#16a34a", failed: "#dc2626", collecting: "#f59e0b", new: "#94a3b8" };
-
 function statusSegs(by) {
+  var C = { done: ["#059669", "#34d399"], failed: ["#e11d48", "#fb7185"],
+            collecting: ["#d97706", "#fbbf24"], new: ["#334155", "#64748b"] };
   return Object.keys(by || {}).map(function (k) {
-    return { label: STATUS_KO[k] || k, value: by[k], color: STATUS_COLOR[k] || "#64748b" };
+    var c = C[k] || ["#334155", "#64748b"];
+    return { label: STATUS_KO[k] || k, value: by[k], c0: c[0], c1: c[1] };
   });
 }
 
+/* 사용률 미터 한 줄(방화벽 카드) */
+function meter(label, pct, disp) {
+  if (pct === null || pct === undefined) {
+    return "<div class='wmeter'><b>" + esc(label) + "</b><span class='wmeter__t'></span>" +
+      "<span class='wmeter__v wdim'>-</span></div>";
+  }
+  var lv = pctLv(pct) || "normal";
+  var cls = lv === "critical" ? "mf-crit" : lv === "warning" ? "mf-warn" : "mf-ok";
+  return "<div class='wmeter'><b>" + esc(label) + "</b>" +
+    "<span class='wmeter__t'><span class='wmeter__f " + cls + "' style='width:" +
+    Math.min(100, pct) + "%'></span></span>" +
+    "<span class='wmeter__v'>" + esc(disp || (pct + "%")) + "</span></div>";
+}
+
+/* ── 스위치 탭 ── */
 function renderSwitchTab(s) {
   var el = document.getElementById("wtab-switch");
   if (!el) return;
   if (!s || !s.total) { el.innerHTML = "<p class='wnone'>등록된 스위치가 없습니다.</p>"; return; }
   var p = s.ports || {}, a = s.alerts || {}, r = s.reach || {};
+  var kinds = (s.by_kind || []).filter(function (k) { return k.name !== "미지정"; })
+    .map(function (k) { return k.name.replace(" Switch", "") + " " + k.count; }).join(" · ");
+  var maxT = (s.temps || [])[0];
   el.innerHTML =
     kpiRow([
-      { num: s.total, label: "등록 스위치" },
-      { num: (s.by_status || {}).done || 0, label: "정상", color: "#16a34a" },
-      { num: r.down || 0, label: "도달 불가", color: "#dc2626" },
-      { num: (a.flapping || 0) + (a.looping || 0), label: "경보(FLAP/LOOP)", color: "#f59e0b" },
-      { num: p.total || 0, label: "전체 포트" },
-      { num: (p.pct || 0) + "%", label: "포트 사용률",
-        color: p.pct >= 90 ? "#dc2626" : p.pct >= 80 ? "#f59e0b" : "#16a34a" }
+      { num: _n(s.total), label: "등록 스위치", detail: kinds, color: "#60a5fa" },
+      { num: _n((s.by_status || {}).done || 0), label: "정상 수집", color: "#34d399" },
+      { num: _n(r.down || 0), label: "도달 불가", color: r.down ? "#fb7185" : "#34d399" },
+      { num: _n((a.flapping || 0) + (a.looping || 0)), label: "경보 FLAP/LOOP",
+        color: (a.flapping || a.looping) ? "#fbbf24" : "#34d399" },
+      { num: _n(p.up) + "<small>/" + _n(p.total) + "</small>",
+        label: "포트 사용 (" + (p.pct || 0) + "%)",
+        detail: "여유 " + _n(p.down) + "포트",
+        color: p.pct >= 90 ? "#fb7185" : p.pct >= 80 ? "#fbbf24" : "#22d3ee" },
+      maxT ? { num: maxT.temp_c + "°C", label: "최고 온도", detail: maxT.name, color: "#a78bfa" }
+           : { num: "-", label: "최고 온도", detail: "SNMP 환경정보 없음", color: "#64748b" }
     ]) +
     "<div class='wgrid'>" +
-    wcard("수집 상태", donut(statusSegs(s.by_status), s.total, "대")) +
-    wcard("포트 사용", donut([
-      { label: "사용(Up)", value: p.up || 0, color: "#16a34a" },
-      { label: "미사용", value: p.down || 0, color: "#cbd5e1" }
-    ], (p.pct || 0) + "%", "사용률")) +
-    wcard("제조사별", barList(s.by_vendor)) +
-    wcard("계층별", barList(s.by_kind)) +
-    wcard("포트 사용률 상위", barList(s.top_ports, {
-      pct: true,
-      color: function (i) { return i.pct >= 90 ? "#dc2626" : i.pct >= 80 ? "#f59e0b" : "#2563eb"; }
-    }), true) +
-    (s.temps && s.temps.length
-      ? wcard("온도 상위", barList(s.temps.map(function (t) {
-          return { name: t.name, count: t.temp_c };
-        }), { color: function () { return "#f97316"; } }))
+    wcard("포트 사용률 TOP 10", "클릭 → 스위치 상세보기",
+      rankList((s.top_ports || []).map(function (t) {
+        return { id: t.id, name: t.name, v: t.pct,
+                 d: t.pct + "% <small>(" + t.up + "/" + t.total + ")</small>" };
+      }), { link: true, max: 100, c0: "#0891b2", c1: "#22d3ee" }), "wcard--8") +
+    "<div class='wcard wcard--4'><h3>수집 상태</h3>" +
+      donut(statusSegs(s.by_status),
+            Math.round(((s.by_status || {}).done || 0) * 100 / s.total) + "%", "정상 수집률") +
+      "<h3 style='margin-top:16px'>제조사</h3>" +
+      rankList((s.by_vendor || []).map(function (v) {
+        return { name: v.name, v: v.count, d: _n(v.count) + " <small>대</small>" };
+      }), { c0: "#2563eb", c1: "#60a5fa" }) + "</div>" +
+    ((s.temps || []).length
+      ? wcard("온도 상위", "SNMP ENTITY-SENSOR-MIB",
+          rankList(s.temps.map(function (t) {
+            return { name: t.name, v: t.temp_c, d: t.temp_c + "°C" };
+          }), { c0: "#c2410c", c1: "#fb923c" }), "wcard--6")
       : "") +
     "</div>";
 }
 
+/* ── 방화벽 탭 ── */
 function renderFirewallTab(f) {
   var el = document.getElementById("wtab-firewall");
   if (!el) return;
   if (!f || !f.total) { el.innerHTML = "<p class='wnone'>등록된 방화벽이 없습니다.</p>"; return; }
   var v = f.vpn || {}, pol = f.policy || {}, sen = f.sensors || {}, r = f.reach || {};
-  var load = f.load || [];
-  var loadTable = load.length
-    ? "<table class='wtable'><thead><tr><th>방화벽</th><th>CPU</th><th>MEM</th><th>DISK</th><th>세션</th></tr></thead><tbody>" +
-      load.map(function (x) {
-        function cell(pv) {
-          if (pv === null || pv === undefined) return "<td class='wdim'>-</td>";
-          return "<td><span class='wmini'><span class='wmini__f' style='width:" +
-            Math.min(100, pv) + "%;background:" +
-            lvlColor(pv >= 90 ? "critical" : pv >= 80 ? "warning" : "normal") +
-            "'></span></span> " + esc(String(pv)) + "%</td>";
-        }
-        return "<tr><td><b>" + esc(x.name) + "</b><div class='wdim'>" + esc(x.host || "") +
-          "</div></td>" + cell(x.cpu) + cell(x.mem) + cell(x.disk) +
-          "<td>" + esc(x.sessions == null ? "-" : Number(x.sessions).toLocaleString()) + "</td></tr>";
-      }).join("") + "</tbody></table>"
-    : "<p class='wnone'>수집된 부하 정보가 없습니다. SNMP 커뮤니티를 지정하고 수집하세요.</p>";
+  var st = f.by_status || {};
+  var sess = (f.devices || []).reduce(function (a, d) { return a + (d.sessions || 0); }, 0);
+  var failedNames = (f.fw_status_list || []).filter(function (x) { return x.status === "failed"; })
+    .map(function (x) { return x.name; });
+
+  /* 장비별 카드 — 지표가 수집된 방화벽만(빈 카드 금지) */
+  var cards = (f.devices || []).map(function (d) {
+    var lv = d.level || (d.alarms.length ? "critical" : "normal");
+    var chips = [];
+    if (d.vpn_total) {
+      chips.push("<span class='chip " + (d.vpn_up < d.vpn_total ? "chip--rs" : "chip--em") + "'>VPN " +
+        d.vpn_up + "/" + d.vpn_total +
+        (d.vpn_up < d.vpn_total ? " — 끊김 " + (d.vpn_total - d.vpn_up) : "") + "</span>");
+    }
+    if (d.policy_total !== null && d.policy_total !== undefined) {
+      chips.push("<span class='chip'>정책 " + _n(d.policy_total) + "</span>");
+    }
+    if (d.proxy_total !== null && d.proxy_total !== undefined) {
+      chips.push("<span class='chip'>Proxy " + _n(d.proxy_total) + "</span>");
+    }
+    if (d.psu_count) {
+      chips.push("<span class='chip " + (d.alarms.length ? "chip--rs" : "chip--em") + "'>PSU " +
+        d.psu_count + (d.alarms.length ? "" : " 정상") + "</span>");
+    }
+    d.alarms.forEach(function (al) {
+      chips.push("<span class='chip chip--rs'>⚠ " + esc(al) + "</span>");
+    });
+    if (d.temp_c !== null && d.temp_c !== undefined) {
+      chips.push("<span class='chip" + (d.temp_c >= 60 ? " chip--am" : "") + "'>" + d.temp_c + "°C</span>");
+    }
+    if (d.ha_mode && d.ha_mode !== "standalone") {
+      chips.push("<span class='chip'>HA " + esc(d.ha_mode) + "</span>");
+    }
+    var tun = "";
+    if ((d.tunnels_down || []).length) {
+      tun = "<div class='tunnels'><h4>VPN 터널 — 끊김 우선</h4>" +
+        d.tunnels_down.map(function (t) {
+          return "<div class='tun tun--dn'><i></i>" + esc(t.name || "-") +
+            "<span class='peer'>" + esc(t.peer || "") + "</span></div>";
+        }).join("") +
+        (d.tunnels_up || []).slice(0, 4).map(function (nm) {
+          return "<div class='tun tun--up'><i></i>" + esc(nm) + "</div>";
+        }).join("") +
+        ((d.tunnels_up || []).length > 4
+          ? "<div class='tun tun--up'><i></i>외 " + (d.tunnels_up.length - 4) + "개 연결됨</div>" : "") +
+        "</div>";
+    }
+    var sub = [d.host, d.version ? "v" + d.version.replace(/^v/, "") : "",
+               d.uptime_sec ? Math.floor(d.uptime_sec / 86400) + "일 가동" : ""]
+      .filter(Boolean).join(" · ");
+    return "<div class='fwc fwc--" + (lv === "critical" ? "crit" : lv === "warning" ? "warn" : "ok") + "'>" +
+      "<div class='fwc__hd'><div><div class='fwc__nm'>" + esc(d.name || "-") + "</div>" +
+      "<div class='fwc__ip'>" + esc(sub) + "</div></div>" +
+      "<span class='pulse pulse--" + (lv === "critical" ? "bad" : "ok") + "'></span></div>" +
+      "<div class='fwc__bd'>" +
+      meter("CPU", d.cpu) + meter("MEM", d.mem) + meter("DISK", d.disk) +
+      meter("세션", d.sessions !== null && d.sessions !== undefined
+        ? Math.min(100, Math.round((d.sessions || 0) / 2000)) : null, _n(d.sessions)) +
+      (chips.length ? "<div class='fwc__facts'>" + chips.join("") + "</div>" : "") +
+      tun + "</div></div>";
+  }).join("");
+
+  /* 수집 상태 표 — 어떤 장비가 왜 실패했는지 */
+  var stTable = "<table class='wtable'><thead><tr><th>방화벽</th><th>IP</th><th>상태</th><th>마지막 수집</th></tr></thead><tbody>" +
+    (f.fw_status_list || []).map(function (x) {
+      var badge = x.status === "done" ? "<span class='wst wst--ok'>정상</span>"
+        : x.status === "failed" ? "<span class='wst wst--bad'>실패" +
+            (x.last_error ? " — " + esc(x.last_error.slice(0, 40)) : "") + "</span>"
+        : x.status === "collecting" ? "<span class='wst'>수집 중</span>"
+        : "<span class='wst'>미수집</span>";
+      return "<tr><td><b>" + esc(x.name || "-") + "</b></td><td>" + esc(x.host || "-") +
+        "</td><td>" + badge + "</td><td>" +
+        esc((x.last_collected || "-").toString().slice(5, 16)) + "</td></tr>";
+    }).join("") + "</tbody></table>";
+
+  /* 정책 표 — 방화벽별 Firewall/Proxy 정책 수(수집된 장비만) + 합계 */
+  var polTable = (f.policy_rows || []).length
+    ? "<table class='wtable'><thead><tr><th>방화벽</th><th>Firewall 정책</th><th>Proxy 정책</th><th>히트 0건</th><th>비활성</th></tr></thead><tbody>" +
+      f.policy_rows.map(function (x) {
+        return "<tr><td><b>" + esc(x.name) + "</b></td><td><b>" + _n(x.total) + "</b></td><td>" +
+          _n(x.proxy_total) + "</td><td class='wam'>" + _n(x.unused) + "</td><td>" +
+          _n(x.disabled) + "</td></tr>";
+      }).join("") +
+      "<tr class='wsum'><td>합계</td><td><b>" + _n(pol.total) + "</b></td><td><b>" +
+      _n(pol.proxy_total) + "</b></td><td>" + _n(pol.unused) + "</td><td>" +
+      _n(pol.disabled) + "</td></tr></tbody></table>"
+    : "<p class='wnone'>정책 정보가 수집된 방화벽이 없습니다. REST 토큰/계정을 지정하고 수집하세요.</p>";
 
   el.innerHTML =
     kpiRow([
-      { num: f.total, label: "등록 방화벽" },
-      { num: r.down || 0, label: "도달 불가", color: "#dc2626" },
-      { num: (v.up || 0) + "/" + (v.tunnels || 0), label: "VPN 터널 연결",
-        color: v.down ? "#f59e0b" : "#16a34a" },
-      { num: (pol.total || 0).toLocaleString(), label: "방화벽 정책" },
-      { num: pol.unused || 0, label: "히트 0건 정책", color: pol.unused ? "#f59e0b" : "#16a34a" },
-      { num: sen.alarms || 0, label: "센서 알람", color: sen.alarms ? "#dc2626" : "#16a34a" }
+      { num: _n(f.total), label: "등록 방화벽", color: "#60a5fa" },
+      { num: _n(st.done || 0), label: "수집 정상", color: "#34d399" },
+      { num: _n(st.failed || 0), label: "수집 실패",
+        detail: failedNames.slice(0, 2).join(", "),
+        color: st.failed ? "#fb7185" : "#34d399" },
+      { num: _n(v.up) + "<small>/" + _n(v.tunnels) + "</small>", label: "VPN 터널 연결",
+        detail: v.down ? "끊김 " + v.down + " ⚠" : "",
+        color: v.down ? "#fbbf24" : "#34d399" },
+      { num: _n(pol.total), label: "총 방화벽 정책",
+        detail: pol.proxy_total ? "Proxy 정책 " + _n(pol.proxy_total) : "", color: "#a78bfa" },
+      { num: _n(sess), label: "동시 세션 합계", color: "#fbbf24" }
     ]) +
+    (cards ? "<div class='fwrow'>" + cards + "</div>" : "") +
     "<div class='wgrid'>" +
-    wcard("VPN 터널 상태", donut([
-      { label: "연결", value: v.up || 0, color: "#16a34a" },
-      { label: "끊김", value: v.down || 0, color: "#dc2626" }
-    ], (v.tunnels || 0), "터널")) +
-    wcard("수집 상태", donut(statusSegs(f.by_status), f.total, "대")) +
-    wcard("정책 구성", donut([
-      { label: "사용 중",
-        value: Math.max(0, (pol.total || 0) - (pol.unused || 0) - (pol.disabled || 0)),
-        color: "#2563eb" },
-      { label: "히트 0건", value: pol.unused || 0, color: "#f59e0b" },
-      { label: "비활성", value: pol.disabled || 0, color: "#94a3b8" }
-    ], (pol.total || 0), "정책")) +
-    wcard("장비별 부하", loadTable, true) +
-    (f.temps && f.temps.length
-      ? wcard("온도", barList(f.temps.map(function (t) {
-          return { name: t.name, count: t.temp_c };
-        }), { color: function () { return "#f97316"; } }))
+    wcard("수집 상태", "어떤 장비가 왜 실패했는지", stTable, "wcard--6") +
+    wcard("정책 구성", "방화벽별 Firewall / Proxy 정책 수", polTable, "wcard--6") +
+    ((v.tunnels || 0) > 0
+      ? wcard("VPN 터널", "",
+          donut([{ label: "연결", value: v.up || 0, c0: "#059669", c1: "#34d399" },
+                 { label: "끊김", value: v.down || 0, c0: "#e11d48", c1: "#fb7185" }],
+                _n(v.tunnels), "터널"), "wcard--4")
       : "") +
     "</div>";
 }
 
+/* ── 설비 탭 ── */
 function renderFacilityTab(c) {
   var el = document.getElementById("wtab-facility");
   if (!el) return;
   if (!c || !c.total) { el.innerHTML = "<p class='wnone'>수집된 설비가 없습니다.</p>"; return; }
-  var subnets = (c.by_subnet || []).map(function (s) {
-    return { name: s.name, count: s.count, up: s.online, total: s.count,
-             pct: s.count ? Math.round(s.online * 100 / s.count) : 0 };
-  });
+  var onlinePct = c.total ? Math.round(c.online * 1000 / c.total) / 10 : 0;
   el.innerHTML =
     kpiRow([
-      { num: c.total.toLocaleString(), label: "전체 설비" },
-      { num: c.online.toLocaleString(), label: "온라인", color: "#16a34a" },
-      { num: c.offline.toLocaleString(), label: "연결 실패",
-        color: c.offline ? "#dc2626" : "#16a34a" },
-      { num: c.direct.toLocaleString(), label: "연결 지점 확인" },
-      { num: c.indirect.toLocaleString(), label: "미확인",
-        color: c.indirect ? "#f59e0b" : "#16a34a" }
+      { num: _n(c.total), label: "전체 설비",
+        detail: "대역 " + (c.by_subnet || []).length + "개", color: "#60a5fa" },
+      { num: _n(c.online), label: "온라인 (" + onlinePct + "%)", color: "#34d399" },
+      { num: _n(c.offline), label: "연결 실패",
+        detail: c.offline_24h ? "24시간 내 +" + c.offline_24h : "",
+        color: c.offline ? "#fb7185" : "#34d399" },
+      { num: _n(c.direct), label: "연결 지점 확인", color: "#22d3ee" },
+      { num: _n(c.indirect), label: "미확인", detail: "액세스 스위치 미수집",
+        color: c.indirect ? "#fbbf24" : "#34d399" }
     ]) +
     "<div class='wgrid'>" +
-    wcard("연결 상태", donut([
-      { label: "온라인", value: c.online, color: "#16a34a" },
-      { label: "연결 실패", value: c.offline, color: "#dc2626" }
-    ], c.total, "대")) +
-    wcard("연결 지점 파악", donut([
-      { label: "확인", value: c.direct, color: "#2563eb" },
-      { label: "미확인", value: c.indirect, color: "#f59e0b" }
-    ], c.total, "대")) +
-    wcard("대역별 온라인 비율", barList(subnets, {
-      pct: true,
-      color: function (i) { return i.pct >= 90 ? "#16a34a" : i.pct >= 70 ? "#f59e0b" : "#dc2626"; }
-    }), true) +
-    wcard("연결 스위치별 설비 수", barList(c.by_switch), true) +
-    "</div>";
+    wcard("설비 최다 연결 스위치 TOP 10", "클릭 → 스위치 상세",
+      rankList((c.by_switch || []).map(function (x) {
+        return { id: x.id, name: x.name, v: x.count, d: _n(x.count) + " <small>대</small>" };
+      }), { link: true, c0: "#7c3aed", c1: "#a78bfa" }), "wcard--6") +
+    "<div class='wcard wcard--6'>" +
+      "<h3>최근 7일 연결 실패 다발 스위치<span class='hint'>이 스위치 아래 설비가 자주 끊긴다 — 스위치·포트·전원 의심</span></h3>" +
+      ((c.offline_by_switch || []).length
+        ? rankList(c.offline_by_switch.map(function (x) {
+            return { id: x.id, name: x.name, v: x.count, d: _n(x.count) + " <small>건</small>" };
+          }), { link: true, c0: "#e11d48", c1: "#fb7185" })
+        : "<p class='wnone'>최근 7일 연결 실패 이벤트 없음 ✓</p>") +
+      "<h3 style='margin-top:14px'>대역별 수집 IP<span class='hint'>온라인/전체</span></h3>" +
+      rankList((c.by_subnet || []).map(function (x) {
+        var pct = x.count ? Math.round(x.online * 100 / x.count) : 0;
+        return { name: x.name, v: x.count,
+                 d: _n(x.online) + "/" + _n(x.count) + " <small>(" + pct + "%)</small>" };
+      }), { c0: "#059669", c1: "#34d399" }) +
+    "</div></div>";
 }
 
 function renderStats() {
@@ -459,6 +560,13 @@ function refreshStats() {
     .then(function (d) { _WSTAT = d; renderStats(); })
     .catch(function (e) { console.error("wall stats:", e); });
 }
+
+/* Top10 클릭 → 본 화면(/)의 스위치 상세를 새 탭으로 */
+document.addEventListener("click", function (e) {
+  var row = e.target.closest && e.target.closest("[data-swid]");
+  if (!row) return;
+  window.open("/#switch=" + row.getAttribute("data-swid"), "_blank");
+});
 
 (function initWallTabs() {
   var nav = document.getElementById("wall-tabs");

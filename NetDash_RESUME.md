@@ -33,8 +33,16 @@ get sys perf status로 CPU·MEM·세션 / 설비 실패다발 스위치·대역 
   지표 없는 방화벽은 목록에서 제외 — 빈 줄 금지), facility.offline_by_switch
   (최근 7일 device_offline을 설비 연결 스위치로 대조), offline_24h.
 
-**다음 단계**: 사용자 목업 승인 → wall.js/wall.css 새 디자인 적용(3탭),
-Top10 클릭 → 본 화면 상세 연동(관제는 읽기전용이라 /로 이동+해시 or 새 탭).
+**목업 승인됨("진행해") → UI 적용 완료**:
+- wall.js 대시보드 블록 전면 교체(rankList 금은동 배지·그라데이션 글로우 막대·
+  SVG 그라데이션 도넛·방화벽 장비 카드+터널 목록+미터·수집상태/정책 표).
+- wall.css 대시보드 블록 교체 + 배경 라디얼 글로우 그라데이션.
+- Top10 클릭 → `/#switch=<id>` 새 탭 → app.js `_openHashDetail()`이 폴링 후
+  상세 패널 자동 오픈(해시는 지워 새로고침 재열림 방지).
+- wallstats: top_ports/by_switch/offline_by_switch에 스위치 id(이름 유일할 때만),
+  방화벽 `devices`(카드용 종합 — 지표 있는 장비만, 빈 카드 금지).
+- Playwright 실화면 재검증: 3탭 모두 신디자인 렌더 확인(build/wall_verify/*.png).
+- GitHub Pages 목업 공유: raw.githack.com 링크 + yonguncho.github.io 재빌드.
 
 ## v6.21.0 — 랙 배치 저장/업데이트 + 높이 저장 하드닝 + 대시보드 검증
 

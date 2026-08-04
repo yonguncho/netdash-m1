@@ -109,9 +109,9 @@ def test_wall_page_has_tabs_and_charts():
     css = (root / "web" / "static" / "wall.css").read_text(encoding="utf-8")
     for t in ("wtab-switch", "wtab-firewall", "wtab-facility", "wall-tabs"):
         assert t in html, t
-    assert "function donut" in js and "function barList" in js
+    assert "function donut" in js and "function rankList" in js  # v6.22.0: barList → rankList
     assert "renderSwitchTab" in js and "renderFirewallTab" in js and "renderFacilityTab" in js
-    assert ".wall-tab" in css and ".wdonut" in css
+    assert ".wall-tab" in css and ".dsvg" in css  # v6.22.0: .wdonut → .dsvg
     # 폐쇄망이라 외부 차트 라이브러리를 끌어오면 안 된다
     assert "cdn." not in js and "http://" not in js
 

@@ -137,3 +137,65 @@ def test_facility_offline_by_switch_last7days(temp_db):
     top = {x["name"]: x["count"] for x in c["offline_by_switch"]}
     assert top == {"TPS-01": 3, "TPS-02": 1}
     assert c["offline_24h"] == 4
+
+
+# --- v2 화면 (목업 승인본 적용) ----------------------------------------------
+
+def test_stats_carry_ids_for_click_through(temp_db):
+    """Top10 클릭→상세 연동에는 스위치 id가 필요하다."""
+    sw = db.save_switch(temp_db, "SW-TOP", "10.0.0.1", "cisco_ios")
+    snap = db.save_snapshot(temp_db, sw)
+    db.save_ports(temp_db, snap, sw, [
+        {"switch_id": sw, "name": "Gi1/0/1", "status": "connected", "vlan": 1,
+         "speed": "1000", "description": ""}])
+    db.save_facility_hosts(temp_db, [
+        {"subnet": "10.1.0.0/24", "ip": "10.1.0.5", "mac": "aa:01",
+         "online": 1, "direct": 1, "switch_name": "SW-TOP", "port": "Gi1/0/1"}])
+    st = wallstats.build(temp_db)
+    assert st["switches"]["top_ports"][0]["id"] == sw
+    assert st["facility"]["by_switch"][0]["id"] == sw
+
+
+def test_devices_list_only_firewalls_with_metrics(temp_db):
+    """장비 카드는 지표가 수집된 방화벽만 — 빈 카드 금지(사용자 요구)."""
+    a = _fw(temp_db, "FW-A", "10.0.0.1")
+    _fw(temp_db, "FW-EMPTY", "10.0.0.9")
+    db.save_device_metrics(temp_db, "firewall", a, {
+        "cpu_pct": 30, "mem_pct": 50, "version": "v7.2.5",
+        "vpn": {"tunnel_total": 2, "tunnel_up": 1, "tunnels": [
+            {"name": "T-UP", "status": "up", "peer": "1.1.1.1"},
+            {"name": "T-DN", "status": "down", "peer": "2.2.2.2"}]},
+        "policy": {"total": 100, "proxy_total": 5}})
+    devs = wallstats.build(temp_db)["firewalls"]["devices"]
+    assert len(devs) == 1
+    d = devs[0]
+    assert d["name"] == "FW-A" and d["cpu"] == 30
+    assert d["tunnels_down"] == [{"name": "T-DN", "peer": "2.2.2.2"}]
+    assert d["tunnels_up"] == ["T-UP"]
+    assert d["policy_total"] == 100 and d["proxy_total"] == 5
+
+
+def test_wall_v2_ui_markers():
+    from pathlib import Path
+    root = Path(__file__).parent.parent
+    js = (root / "web" / "static" / "wall.js").read_text(encoding="utf-8")
+    css = (root / "web" / "static" / "wall.css").read_text(encoding="utf-8")
+    # Top10 클릭 → 본 화면 상세 딥링크
+    assert "data-swid" in js and '"/#switch=" + row.getAttribute' in js
+    # 방화벽 장비 카드·수집상태·정책 표
+    assert "renderFirewallTab" in js and "fw_status_list" in js and "policy_rows" in js
+    assert "tunnels_down" in js, "끊긴 터널 목록을 보여줘야 한다"
+    # 새 디자인 클래스
+    for cls in (".wrank__no", ".fwc__hd", ".wmeter", ".wkpi__c", ".pulse--bad"):
+        assert cls in css, cls
+    # 폐쇄망 — 외부 리소스 금지
+    assert "cdn." not in css and "https://" not in css
+
+
+def test_main_page_opens_detail_from_hash():
+    """/#switch=<id> 로 열면 본 화면이 해당 스위치 상세를 연다."""
+    from pathlib import Path
+    js = (Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "function _openHashDetail" in js
+    assert "#switch=(" in js.replace("\\", "") or "switch=(" in js
+    assert "_openHashDetail()" in js, "폴링 후 호출돼야 한다(목록 로드 전이면 재시도)"
