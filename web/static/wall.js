@@ -25,6 +25,34 @@ function esc(s) {
   });
 }
 
+/* 벤더 NMS 톤의 라인 아이콘(stroke=currentColor, 1em 크기) — 이모지는 OS·폰트마다
+   다르게 그려져 관제 화면 톤을 깬다(사용자 지적: "이런 아이콘 말고 세련되게"). */
+var _ICO = {
+  check: "<polyline points='20 6 9 17 4 12'/>",
+  refresh: "<polyline points='23 4 23 10 17 10'/><path d='M20.49 15a9 9 0 1 1-2.12-9.36L23 10'/>",
+  x: "<line x1='18' y1='6' x2='6' y2='18'/><line x1='6' y1='6' x2='18' y2='18'/>",
+  port: "<rect x='2' y='7' width='20' height='10' rx='2'/><line x1='7' y1='11' x2='7' y2='13'/>" +
+        "<line x1='12' y1='11' x2='12' y2='13'/><line x1='17' y1='11' x2='17' y2='13'/>",
+  sliders: "<line x1='4' y1='21' x2='4' y2='14'/><line x1='4' y1='10' x2='4' y2='3'/>" +
+           "<line x1='12' y1='21' x2='12' y2='12'/><line x1='12' y1='8' x2='12' y2='3'/>" +
+           "<line x1='20' y1='21' x2='20' y2='16'/><line x1='20' y1='12' x2='20' y2='3'/>" +
+           "<line x1='1' y1='14' x2='7' y2='14'/><line x1='9' y1='8' x2='15' y2='8'/>" +
+           "<line x1='17' y1='16' x2='23' y2='16'/>",
+  monitor: "<rect x='2' y='3' width='20' height='14' rx='2'/>" +
+           "<line x1='8' y1='21' x2='16' y2='21'/><line x1='12' y1='17' x2='12' y2='21'/>",
+  expand: "<polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/>" +
+          "<line x1='21' y1='3' x2='14' y2='10'/><line x1='3' y1='21' x2='10' y2='14'/>",
+  eye: "<path d='M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z'/><circle cx='12' cy='12' r='3'/>",
+  eyeoff: "<path d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 " +
+          "5.06-5.94'/><path d='M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1 " +
+          "-2.16 3.19'/><line x1='1' y1='1' x2='23' y2='23'/>",
+};
+function ico(name) {
+  return "<svg class='ico' viewBox='0 0 24 24' fill='none' stroke='currentColor' " +
+    "stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>" +
+    (_ICO[name] || "") + "</svg>";
+}
+
 var KIND_KO = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
   port_down: "포트 다운", port_up: "포트 복구",
@@ -54,7 +82,7 @@ function renderProblems() {
   if (!host || !d) return;
   var cats = (d.categories || []).filter(function (c) { return (c.items || []).length > 0; });
   if (!cats.length) {
-    host.innerHTML = "<div class='wall-ok'>✓ 이상 없음<small>모든 장비 정상 · " +
+    host.innerHTML = "<div class='wall-ok'>" + ico("check") + " 이상 없음<small>모든 장비 정상 · " +
       (d.total_switches || 0) + "대 감시 중</small></div>";
     return;
   }
@@ -67,7 +95,7 @@ function renderProblems() {
           var sw = s.switch || "미확인";
           var active = (isFac && wallFacFilter === sw) ? " wall-sumchip--active" : "";
           var attr = isFac ? " data-fswitch='" + esc(sw) + "'" : "";
-          return "<span class='wall-sumchip" + (isFac ? " wall-sumchip--click" : "") + active + "'" + attr + ">🔌 " +
+          return "<span class='wall-sumchip" + (isFac ? " wall-sumchip--click" : "") + active + "'" + attr + ">" + ico("port") + " " +
             esc(sw) + (s.location ? " <i>(" + esc(s.location) + ")</i>" : "") +
             " <b>" + s.count + "</b></span>";
         }).join("") + "</div>"
@@ -77,8 +105,8 @@ function renderProblems() {
     var filterBar = "";
     if (isFac && wallFacFilter) {
       items = items.filter(function (p) { return (p.switch || "미확인") === wallFacFilter; });
-      filterBar = "<div class='wall-cat__filter'>필터: 🔌 " + esc(wallFacFilter) +
-        " (" + items.length + ") <button class='wall-filter-clear'>✕ 전체 보기</button></div>";
+      filterBar = "<div class='wall-cat__filter'>필터: " + ico("port") + " " + esc(wallFacFilter) +
+        " (" + items.length + ") <button class='wall-filter-clear'>전체 보기</button></div>";
     }
     // '외 N건' 안내: 서버가 잘라 보낸 경우 항상 표시(설비 필터 중에도 유지),
     // 다른 카테고리(도달 불가/수집 실패)도 total이 있으면 동일하게 안내.
@@ -89,12 +117,12 @@ function renderProblems() {
     // 설비는 칩 필터가 걸려 있으면 그 스위치 몫만 일괄 재수집한다.
     var bulkHtml = "";
     if (count > 0 && (c.key === "unreach" || c.key === "failed")) {
-      bulkHtml = "<button class='wall-cat__bulk' data-bulk-cat='" + c.key + "'>⟳ 전체 재수집 (" +
+      bulkHtml = "<button class='wall-cat__bulk' data-bulk-cat='" + c.key + "'>" + ico("refresh") + " 전체 재수집 (" +
         count + ")</button>";
     } else if (isFac && items.length > 0) {
       bulkHtml = "<button class='wall-cat__bulk' data-bulk-cat='facility'" +
         (wallFacFilter ? " data-bulk-switch='" + esc(wallFacFilter) + "'" : "") +
-        ">⟳ 전체 재수집 (" + items.length + (wallFacFilter ? "" : "/" + count) + ")</button>";
+        ">" + ico("refresh") + " 전체 재수집 (" + items.length + (wallFacFilter ? "" : "/" + count) + ")</button>";
     }
     return "<div class='wall-cat wall-cat--" + esc(c.severity || "warn") + "'>" +
       "<div class='wall-cat__title'>" + esc(c.title) +
@@ -434,7 +462,7 @@ function renderFirewallTab(f) {
     if (x.status === "failed") return "수집 실패" + (x.last_error ? " — " + x.last_error.slice(0, 30) : "");
     if (x.status === "new") return "미수집 — '수집'을 눌러 첫 수집을 하세요";
     if (x.status === "collecting") return "수집 중...";
-    return "지표 없음 — SNMP 커뮤니티(⚙설정) 또는 SSH 계정 지정 후 재수집";
+    return "지표 없음 — SNMP 커뮤니티(설정 메뉴) 또는 SSH 계정 지정 후 재수집";
   }
 
   /* 장비별 카드 — 지표가 수집된 방화벽만.
@@ -680,7 +708,7 @@ function renderFacilityTab(c) {
         ? rankList(c.offline_by_switch.map(function (x) {
             return { id: x.id, name: x.name, v: x.count, d: _n(x.count) + " <small>건</small>" };
           }), { link: true, c0: "#e11d48", c1: "#fb7185" })
-        : "<p class='wnone'>최근 7일 연결 실패 이벤트 없음 ✓</p>") +
+        : "<p class='wnone'>최근 7일 연결 실패 이벤트 없음</p>") +
       "<h3 style='margin-top:14px'>대역별 수집 IP<span class='hint'>온라인/전체</span></h3>" +
       rankList((c.by_subnet || []).map(function (x) {
         var pct = x.count ? Math.round(x.online * 100 / x.count) : 0;
@@ -1023,7 +1051,7 @@ function refreshSeries() {
 }
 
 /* ── 대시보드 커스터마이즈 ─────────────────────────────────────
-   사용자가 직접 꾸민다: ① 장비 칩으로 보일 방화벽 선택 ② 🛠 위젯 편집에서
+   사용자가 직접 꾸민다: ① 장비 칩으로 보일 방화벽 선택 ② 위젯 편집에서
    카드 숨기기/크기(S·M·L·XL). 브라우저 localStorage에 저장(관제 PC별). */
 
 function _fwDevSel() {
@@ -1098,9 +1126,9 @@ function applyLayout() {
         span.className = "wtools";
         span.innerHTML =
           "<button class='wtool' data-wact='size' data-wkey='" + esc(key) +
-          "' title='크기 변경(S→M→L→XL)'>◱</button>" +
+          "' title='크기 변경(S→M→L→XL)'>" + ico("expand") + "</button>" +
           "<button class='wtool' data-wact='hide' data-wkey='" + esc(key) + "'>" +
-          (st.hidden ? "표시" : "숨김") + "</button>";
+          (st.hidden ? ico("eye") + " 표시" : ico("eyeoff") + " 숨김") + "</button>";
         h.appendChild(span);
       }
     });
@@ -1131,7 +1159,7 @@ document.addEventListener("click", function (e) {
   var b = document.createElement("button");
   b.id = "wall-edit-btn";
   b.className = "wall-tab wall-tab--edit";
-  b.textContent = "🛠 위젯 편집";
+  b.innerHTML = ico("sliders") + " 위젯 편집";
   b.title = "카드 드래그 순서·숨기기·크기 조절 — 이 PC 브라우저에 저장됩니다";
   b.addEventListener("click", function () {
     _editMode = !_editMode;
@@ -1251,7 +1279,7 @@ document.addEventListener("click", function (e) {
   var b = document.createElement("button");
   b.id = "wall-tv-btn";
   b.className = "wall-tab wall-tab--edit";
-  b.textContent = "📺 TV 모드";
+  b.innerHTML = ico("monitor") + " TV 모드";
   b.title = "탭 자동 로테이션(30초) + 알람 발생 시 해당 탭 자동 전환";
   function apply() { b.classList.toggle("wall-tab--editing", _tvOn); }
   b.addEventListener("click", function () {

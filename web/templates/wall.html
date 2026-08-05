@@ -8,8 +8,18 @@
 </head>
 <body>
   <header class="wall-header">
-    <span class="wall-logo">NetDash 관제</span>
-    <span id="wall-clock" class="wall-clock"></span>
+    <span class="wall-logo">
+      <svg class="wall-logo__mark" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2" y="2" width="9" height="9" rx="2"/><rect x="13" y="2" width="9" height="9" rx="2"/>
+        <rect x="2" y="13" width="9" height="9" rx="2"/><path d="M17.5 13v9M13 17.5h9"/>
+      </svg>
+      NetDash 관제<em class="wall-logo__sub">Network Operations</em>
+    </span>
+    <span class="wall-header__right">
+      <span class="wall-live"><i></i>LIVE</span>
+      <span id="wall-clock" class="wall-clock"></span>
+    </span>
   </header>
 
   <section class="wall-tiles">
