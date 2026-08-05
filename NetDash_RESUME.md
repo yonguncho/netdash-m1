@@ -1,7 +1,39 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.27.0 릴리스 완료 (커밋 4158bfb) + 셀프체크 게이트(bfea460)
-**상태**: 관제 개편 로드맵 전체 완료 — 다음 지시 대기
+**현재 버전**: v6.28.0 릴리스 완료 (게이트: pytest 1693 PASS + selfcheck PASS + 스크린샷 검토)
+**직전 릴리스**: v6.27.0 (4158bfb)
+
+## v6.28.0 — 10분 상태 감시: 포트 DOWN·설비 끊김
+
+사용자 지적 확인 결과: 포트 상태는 자동 수집(하루 2회) 때만, 설비 온라인은
+자동 스캔(하루 1회) 때만 갱신. 60초 `monitor_known_hosts`는 MAC 테이블 기반이라
+MAC이 수집 때만 갱신되는 한 무력. 장비 자체 다운만 1분 감시(reachability).
+
+`core/status_monitor.py` (⚙설정 `status_poll_minutes` 기본 10, 0=끔, 데모 제외):
+- **포트**: SNMP IF-MIB ifOperStatus+ifName walk → up↔down 전이 시
+  port_down(warning)/port_up(info) 이벤트(알람 벨·이메일·관제 티커 자동 연동).
+  기준선은 `port_state` 테이블(재시작 오탐 방지 — 첫 관측은 기준만).
+  물리 포트만(Vlan/Po/Lo 등 논리 제외). SNMP 안 되는 스위치는 조용히 스킵.
+- **설비**: PC 직접 ICMP 동시 ping(40 workers). 연속 2회(2주기) 무응답 확정
+  (디바운스), 복구 즉시. **대역 전멸 가드**: 온라인이던 대역이 통째로 무응답이면
+  'PC 라우팅 불가'로 스킵 — 직접 ping 불가 VLAN에서 무더기 허위 알람 방지
+  (그런 대역은 기존 게이트웨이 스캔 담당). Windows ping은 rc=0이어도
+  unreachable이 있어 TTL= 문자열까지 확인.
+- 관제 티커 KIND_KO에 port_down/port_up 추가.
+
+## 같은 릴리스에 포함 — 관제 방화벽 탭 v4 (사용자 추가 지적 5건)
+
+- **HA 불일치 원인**: 카드가 SNMP HA만 봄 → 폴백 2단(REST `ha_info` JSON →
+  같은 host(VIP) 공유 쌍 = "이중화(VIP 공유)").
+- **라이선스 카드 → 장비 카드 통합**: 별도 카드 제거, 카드 fact 행에
+  만료(빨강)/임박(주황)만 상세 + "정상 N건" 요약. KPI 만료·임박은 유지.
+- **VPN 박스 여백**: `.wgrid{align-items:start}` — 카드가 행 높이로 늘어나며
+  생기던 빈 공간 제거(전 카드 공통).
+- **장비별 추이**: MEM 추이 차트 추가(세션·CPU·MEM 3개), **장비 선택 칩**
+  (전체/개별 토글, localStorage `wall_fw_devsel`) — 칩이 카드·추이 모두 필터.
+- **위젯 편집 모드**: 🛠 버튼 → 카드마다 크기(S/M/L/XL 순환)·숨김/표시.
+  localStorage `wall_layout_v1`, 키 = 탭+카드제목. 렌더 후처리(applyLayout)
+  방식이라 렌더러 수정 없음. selfcheck에 편집·칩 클릭 단계 추가.
 **주의**: 이 헤더는 릴리스마다 갱신할 것 — v6.14 이후 섹션만 쌓고 헤더를 안 고쳐
 재개 시 오독 위험이 있었다.
 

@@ -303,3 +303,19 @@ body {
 .wrange__b:hover { color:#e6edf7; }
 .wrange__b--on { background:rgba(34,211,238,.14); border-color:rgba(34,211,238,.45);
   color:#a5f3fc; }
+
+/* v6.28 — 여백 정리·장비 칩·위젯 편집 */
+.wgrid { align-items:start; }              /* 카드가 행 높이에 늘어나며 생기던 빈 공간 제거 */
+.wchips { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 0; }
+.wchip { font-size:12px; padding:4px 12px; border-radius:16px; cursor:pointer;
+  border:1px solid rgba(148,163,184,.2); color:#5b6f8c; background:rgba(255,255,255,.02); }
+.wchip:hover { color:#e6edf7; }
+.wchip--on { background:rgba(34,211,238,.13); border-color:rgba(34,211,238,.45); color:#a5f3fc; }
+.wall-tab--edit { margin-left:auto; font-size:12px; }
+.wall-tab--editing { background:rgba(251,191,36,.15); border-color:rgba(251,191,36,.5);
+  color:#fcd34d; }
+.wtools { margin-left:auto; display:inline-flex; gap:4px; }
+.wtool { background:rgba(255,255,255,.06); border:1px solid rgba(148,163,184,.25);
+  color:#b9c7da; font-size:10.5px; padding:1px 8px; border-radius:6px; cursor:pointer; }
+.wtool:hover { color:#fff; border-color:#94a3b8; }
+.wcard--dim { opacity:.35; }

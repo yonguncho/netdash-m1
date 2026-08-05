@@ -123,11 +123,12 @@ def test_wallstats_license_levels(temp_db):
     assert f["objects_rows"][0]["total"] == 171 and f["objects_rows"][0]["fw"] == "FW-A"
 
 
-def test_wall_ui_license_card_and_object_column():
+def test_wall_ui_license_and_object_column():
+    """v6.28: 라이선스는 별도 카드가 아니라 장비 카드 fact 행으로 통합
+    (사용자 지적 — CPU/MEM 있는 박스에서 같이). KPI·객체 열은 유지."""
     js = (ROOT / "web" / "static" / "wall.js").read_text(encoding="utf-8")
-    assert "라이선스" in js and "license_rows" in js
     assert "라이선스 만료·임박" in js, "KPI 카드"
+    assert "d.license" in js, "장비 카드에 라이선스 fact"
     assert "objects_rows" in js and ">객체</th>" in js
-    # 상세(app.js)에도 라이선스·객체
     app = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "m.license" in app and "m.objects" in app

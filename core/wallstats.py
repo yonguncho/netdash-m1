@@ -170,6 +170,18 @@ def _firewall_stats(conn, db_path):
     # 장비별 상세 목록 — "어느 방화벽이"에 답하기 위한 재료.
     # 수집 상태(실패 사유 포함) / 정책 수(Firewall·Proxy) / VPN 터널 이름별 상태.
     fw_status_list, policy_rows, vpn_rows, devices = [], [], [], []
+    # HA 폴백 재료 — SNMP가 HA를 못 준 장비도 ① REST ha_info(JSON)
+    # ② 같은 호스트(VIP)를 공유하는 쌍이면 이중화로 표기한다.
+    # (사용자 지적: 어떤 장비만 HA가 보임 — SNMP 유무에 따라 갈리던 것)
+    import json as _json
+    _host_count = {}
+    try:
+        for _f in db.list_firewalls(db_path):
+            _h = (_f.get("host") or "").strip()
+            if _h:
+                _host_count[_h] = _host_count.get(_h, 0) + 1
+    except Exception:
+        pass
     license_rows, objects_rows = [], []
     import datetime as _dt
     _today = _dt.date.today()
@@ -207,12 +219,27 @@ def _firewall_stats(conn, db_path):
                         _lc = fortilifecycle.lookup(m.get("model"), m.get("version"))
                     except Exception:
                         _lc = None
+                _ha = m.get("ha_mode")
+                if not _ha or _ha == "standalone":
+                    try:
+                        _hi = _json.loads(f.get("ha_info") or "null")
+                        if isinstance(_hi, dict) and _hi.get("mode"):
+                            _ha = _hi["mode"]
+                    except (ValueError, TypeError):
+                        pass
+                if (not _ha or _ha == "standalone") and                         _host_count.get((f.get("host") or "").strip(), 0) > 1:
+                    _ha = "이중화(VIP 공유)"
+                _dev_lic = [{"name": x.get("name"), "expires": x.get("expires"),
+                             "level": _lic_level(x.get("expires"), x.get("status"))}
+                            for x in (m.get("license") or [])]
                 devices.append({
                     "id": f["id"], "name": f.get("name"), "host": f.get("host"),
+                    "license": _dev_lic,
                     "cpu": m.get("cpu_pct"), "mem": m.get("mem_pct"),
                     "disk": m.get("disk_pct"), "sessions": m.get("sessions"),
                     "level": m.get("level"), "version": m.get("version"),
                     "model": m.get("model"), "lifecycle": _lc,
+                    "ha": _ha if (_ha and _ha != "standalone") else None,
                     "uptime_sec": m.get("uptime_sec"), "ha_mode": m.get("ha_mode"),
                     "temp_c": _e.get("max_temp_c") or _s.get("max_temp_c"),
                     "psu_count": _s.get("psu_count"),

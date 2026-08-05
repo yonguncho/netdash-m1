@@ -27,6 +27,7 @@ function esc(s) {
 
 var KIND_KO = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
+  port_down: "포트 다운", port_up: "포트 복구",
   device_moved: "설비 이동", config_changed: "설정 변경",
   switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
   firewall_unreachable: "방화벽 연결 실패", firewall_recovered: "방화벽 복구",
@@ -411,7 +412,10 @@ function renderFirewallTab(f) {
   if (!el) return;
   if (!f || !f.total) { el.innerHTML = "<p class='wnone'>등록된 방화벽이 없습니다.</p>"; return; }
   var v = f.vpn || {}, pol = f.policy || {}, st = f.by_status || {};
-  var devs = f.devices || [], stList = f.fw_status_list || [];
+  var devsAll = f.devices || [], stList = f.fw_status_list || [];
+  // 장비 선택(사용자 커스터마이즈) — 칩으로 고른 장비만 카드·추이에 표시.
+  var sel = _fwDevSel();
+  var devs = sel ? devsAll.filter(function (d) { return sel.has(String(d.id)); }) : devsAll;
   var devById = {};
   devs.forEach(function (d) { devById[d.id] = d; });
   var sess = devs.reduce(function (a, d) { return a + (d.sessions || 0); }, 0);
@@ -447,7 +451,7 @@ function renderFirewallTab(f) {
       frow("펌웨어", d.version
         ? esc("v" + String(d.version).replace(/^v/, "")) + lcTxt(lc.os) : null) +
       frow("가동 시간", d.uptime_sec ? Math.floor(d.uptime_sec / 86400) + "일" : null) +
-      frow("HA", d.ha_mode && d.ha_mode !== "standalone" ? esc(d.ha_mode) : null) +
+      frow("HA", d.ha ? esc(d.ha) : null) +
       frow("온도", d.temp_c !== null && d.temp_c !== undefined
         ? "<span" + (d.temp_c >= 60 ? " class='wam'" : "") + ">" + d.temp_c + "°C</span>" : null) +
       frow("PSU", d.psu_count
@@ -458,6 +462,24 @@ function renderFirewallTab(f) {
       frow("정책", d.policy_total !== null && d.policy_total !== undefined
         ? _n(d.policy_total) + (d.proxy_total ? " <span class='wdim'>(Proxy " + _n(d.proxy_total) + ")</span>" : "")
         : null) +
+      // 라이선스 — 별도 카드 대신 장비 카드에 통합(사용자 지적: 한 박스에서).
+      // 문제(만료·임박)만 강조하고 정상은 개수로 요약해 카드 비대화를 막는다.
+      (function () {
+        var lic = d.license || [];
+        if (!lic.length) return "";
+        var bad = lic.filter(function (l) { return l.level !== "ok"; });
+        var txt = bad.length
+          ? bad.map(function (l) {
+              var cls = l.level === "expired" ? "wbad" : "wam";
+              var word = l.level === "expired" ? "만료" : "임박";
+              return "<span class='" + cls + "'>" + esc(l.name) + " " + word +
+                (l.expires ? "(" + esc(String(l.expires).slice(5)) + ")" : "") + "</span>";
+            }).join(" · ") +
+            (lic.length > bad.length
+              ? " <span class='wdim'>· 정상 " + (lic.length - bad.length) + "</span>" : "")
+          : "정상 " + lic.length + "건";
+        return frow("라이선스", txt);
+      })() +
       // VPN을 안 쓰는 방화벽이 많다 — 설정된(터널>0) 장비에만 표기
       (d.vpn_total
         ? frow("VPN 터널", (d.vpn_up < d.vpn_total
@@ -551,23 +573,6 @@ function renderFirewallTab(f) {
         _n(pol.disabled) + "</td><td>" +
         _n((f.objects_rows || []).reduce(function (a, o) { return a + (o.total || 0); }, 0)) +
         "</td></tr>" : "") + "</tbody></table>";
-  /* 라이선스 — 만료·임박 우선 정렬 목록(전 방화벽 합본) */
-  var licRows = f.license_rows || [];
-  var licTable = licRows.length
-    ? "<table class='wtable'><thead><tr><th>방화벽</th><th>구독</th><th>만료일</th><th>상태</th></tr></thead><tbody>" +
-      licRows.map(function (l) {
-        var badge = l.level === "expired"
-          ? "<span class='wst wst--bad'>만료</span>"
-          : l.level === "imminent"
-            ? "<span class='wst' style='background:rgba(251,191,36,.15);color:#fcd34d'>임박</span>"
-            : "<span class='wst wst--ok'>정상</span>";
-        return "<tr><td><b>" + esc(l.fw || "-") + "</b></td><td>" + esc(l.name || "-") +
-          "</td><td>" + esc(l.expires || "-") + "</td><td>" + badge + "</td></tr>";
-      }).join("") + "</tbody></table>"
-    : "<p class='wnone'>라이선스 정보가 수집된 방화벽이 없습니다. REST 토큰/계정으로 재수집하면 채워집니다.</p>";
-  var licCard = "<div class='wcard wcard--6'><h3>라이선스" +
-    "<span class='hint'>FortiGuard 구독·지원계약 — 만료·임박 우선</span></h3>" + licTable + "</div>";
-
   var polCard = "<div class='wcard wcard--6'><h3>정책 구성" +
     "<span class='hint'>방화벽별 Firewall / Proxy 정책 수</span></h3>" +
     ((pol.total || 0) > 0
@@ -618,15 +623,25 @@ function renderFirewallTab(f) {
       { num: _n(f.license_bad || 0), label: "라이선스 만료·임박",
         color: f.license_bad ? "#fb7185" : "#34d399" }
     ]) +
+    "<div class='wchips' id='fw-dev-chips'>" +
+      "<span class='wchip" + (!sel ? " wchip--on" : "") + "' data-fwdev='all'>전체</span>" +
+      devsAll.map(function (d) {
+        var on = !sel || sel.has(String(d.id));
+        return "<span class='wchip" + (on ? " wchip--on" : "") + "' data-fwdev='" +
+          d.id + "'>" + esc(d.name || d.host || ("#" + d.id)) + "</span>";
+      }).join("") + "</div>" +
     "<div class='wgrid'>" +
-    "<div class='wcard wcard--6'><h3>세션 추이" + rangeBtns() +
+    "<div class='wcard wcard--4'><h3>세션 추이" + rangeBtns() +
       "</h3><div id='ch-fw-sess' class='wchartbox'></div></div>" +
-    "<div class='wcard wcard--6'><h3>CPU 추이" +
-      "<span class='hint'>방화벽별 · " + (_seriesHours >= 168 ? "7일" : _seriesHours + "시간") +
+    "<div class='wcard wcard--4'><h3>CPU 추이" +
+      "<span class='hint'>" + (_seriesHours >= 168 ? "7일" : _seriesHours + "시간") +
       "</span></h3><div id='ch-fw-cpu' class='wchartbox'></div></div>" +
+    "<div class='wcard wcard--4'><h3>MEM 추이" +
+      "<span class='hint'>" + (_seriesHours >= 168 ? "7일" : _seriesHours + "시간") +
+      "</span></h3><div id='ch-fw-mem' class='wchartbox'></div></div>" +
     "</div>" +
     (cards ? "<div class='fwrow'>" + cards + "</div>" : "") +
-    "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + licCard + "</div>";
+    "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + "</div>";
 }
 
 /* ── 설비 탭 ── */
@@ -679,6 +694,7 @@ function renderStats() {
   renderFacilityTab(_WSTAT.facility);
   // 탭 HTML을 다시 그리면 차트 컨테이너도 비워진다 — 통계 갱신(30초)마다
   // 차트를 다시 그리지 않으면 처음 1분 안에 그래프가 사라진다(실화면에서 재현).
+  if (typeof applyLayout === "function") applyLayout();   // 차트보다 먼저(숨김 반영)
   if (typeof renderSeriesCharts === "function" && _SERIES) renderSeriesCharts();
 }
 
@@ -881,13 +897,23 @@ function _destroyPlots() {
   _plots = [];
 }
 
+function _fwSeriesFiltered() {
+  var sel = _fwDevSel();
+  if (!sel) return _SERIES.firewalls || {};
+  var out = {};
+  Object.keys(_SERIES.firewalls || {}).forEach(function (id) {
+    if (sel.has(String(id))) out[id] = _SERIES.firewalls[id];
+  });
+  return out;
+}
+
 function renderSeriesCharts() {
   if (!_SERIES) return;
   _destroyPlots();
-  chartMulti("ch-fw-sess", _SERIES.firewalls,
-             function (pt) { return pt[3]; }, "");
-  chartMulti("ch-fw-cpu", _SERIES.firewalls,
-             function (pt) { return pt[1]; }, "%");
+  var fwS = _fwSeriesFiltered();
+  chartMulti("ch-fw-sess", fwS, function (pt) { return pt[3]; }, "");
+  chartMulti("ch-fw-cpu", fwS, function (pt) { return pt[1]; }, "%");
+  chartMulti("ch-fw-mem", fwS, function (pt) { return pt[2]; }, "%");
   chartMulti("ch-sw-temp", _SERIES.switches,
              function (pt) { return pt[4]; }, "°C");
   chartTotal("ch-ports", _SERIES.ports, "사용 중 포트", "#22d3ee");
@@ -900,6 +926,122 @@ function refreshSeries() {
     .then(function (d) { _SERIES = d; renderStats(); })
     .catch(function (e) { console.error("wall series:", e); });
 }
+
+/* ── 대시보드 커스터마이즈 ─────────────────────────────────────
+   사용자가 직접 꾸민다: ① 장비 칩으로 보일 방화벽 선택 ② 🛠 위젯 편집에서
+   카드 숨기기/크기(S·M·L·XL). 브라우저 localStorage에 저장(관제 PC별). */
+
+function _fwDevSel() {
+  try {
+    var raw = localStorage.getItem("wall_fw_devsel");
+    if (!raw) return null;                 // null = 전체
+    var arr = JSON.parse(raw);
+    return (arr && arr.length) ? new Set(arr.map(String)) : null;
+  } catch (e) { return null; }
+}
+
+document.addEventListener("click", function (e) {
+  var chip = e.target.closest && e.target.closest("[data-fwdev]");
+  if (!chip) return;
+  var id = chip.getAttribute("data-fwdev");
+  var sel = _fwDevSel();
+  var all = Array.prototype.map.call(
+    document.querySelectorAll("[data-fwdev]:not([data-fwdev='all'])"),
+    function (c) { return c.getAttribute("data-fwdev"); });
+  if (id === "all") {
+    localStorage.removeItem("wall_fw_devsel");
+  } else {
+    var cur = sel ? Array.from(sel) : all.slice();
+    var i2 = cur.indexOf(id);
+    if (i2 >= 0) cur.splice(i2, 1); else cur.push(id);
+    if (!cur.length || cur.length === all.length) localStorage.removeItem("wall_fw_devsel");
+    else localStorage.setItem("wall_fw_devsel", JSON.stringify(cur));
+  }
+  renderStats();
+});
+
+var _editMode = false;
+function _wl() {
+  try { return JSON.parse(localStorage.getItem("wall_layout_v1") || "{}"); }
+  catch (e) { return {}; }
+}
+function _wlSave(m) { localStorage.setItem("wall_layout_v1", JSON.stringify(m)); }
+
+var _SIZES = ["wcard--4", "wcard--6", "wcard--8", "wcard--12"];
+function _cardKey(tab, card) {
+  var h = card.querySelector("h3");
+  var t = h ? (h.childNodes[0] ? String(h.childNodes[0].textContent || "").trim() : "") : "";
+  return tab + ":" + t;
+}
+
+/* 렌더 후처리 — 카드 제목을 키로 저장된 크기/숨김을 적용하고,
+   편집 모드면 카드마다 조절 버튼을 붙인다(렌더러 수정 없이 후처리로 통일). */
+function applyLayout() {
+  var layout = _wl();
+  ["switch", "firewall", "facility"].forEach(function (tab) {
+    var pane = document.getElementById("wtab-" + tab);
+    if (!pane) return;
+    pane.querySelectorAll(".wcard").forEach(function (card) {
+      var key = _cardKey(tab, card);
+      var st = layout[key] || {};
+      if (st.size && _SIZES.indexOf(st.size) >= 0) {
+        _SIZES.forEach(function (c) { card.classList.remove(c); });
+        card.classList.add(st.size);
+      }
+      if (st.hidden && !_editMode) { card.style.display = "none"; return; }
+      card.style.display = "";
+      card.classList.toggle("wcard--dim", !!st.hidden && _editMode);
+      var h = card.querySelector("h3");
+      if (!h) return;
+      var old = h.querySelector(".wtools");
+      if (old) old.remove();
+      if (_editMode) {
+        var span = document.createElement("span");
+        span.className = "wtools";
+        span.innerHTML =
+          "<button class='wtool' data-wact='size' data-wkey='" + esc(key) +
+          "' title='크기 변경(S→M→L→XL)'>◱</button>" +
+          "<button class='wtool' data-wact='hide' data-wkey='" + esc(key) + "'>" +
+          (st.hidden ? "표시" : "숨김") + "</button>";
+        h.appendChild(span);
+      }
+    });
+  });
+}
+
+document.addEventListener("click", function (e) {
+  var b = e.target.closest && e.target.closest("[data-wact]");
+  if (!b) return;
+  var key = b.getAttribute("data-wkey");
+  var layout = _wl();
+  var st = layout[key] || {};
+  if (b.getAttribute("data-wact") === "hide") {
+    st.hidden = !st.hidden;
+  } else {
+    var card = b.closest(".wcard");
+    var cur = _SIZES.filter(function (c) { return card.classList.contains(c); })[0] || "wcard--6";
+    st.size = _SIZES[(_SIZES.indexOf(cur) + 1) % _SIZES.length];
+  }
+  layout[key] = st;
+  _wlSave(layout);
+  renderStats();
+});
+
+(function initEditBtn() {
+  var nav = document.getElementById("wall-tabs");
+  if (!nav) return;
+  var b = document.createElement("button");
+  b.id = "wall-edit-btn";
+  b.className = "wall-tab wall-tab--edit";
+  b.textContent = "🛠 위젯 편집";
+  b.title = "카드 숨기기·크기 조절 — 이 PC 브라우저에 저장됩니다";
+  b.addEventListener("click", function () {
+    _editMode = !_editMode;
+    b.classList.toggle("wall-tab--editing", _editMode);
+    renderStats();
+  });
+  nav.appendChild(b);
+})();
 
 refreshSeries();
 // 5분 격자 데이터라 1분 갱신이면 충분(가장 최근 점 반영)

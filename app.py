@@ -791,6 +791,14 @@ def _start_primary_services(config, db_path):
         metrics_poller.start(db_path, demo_mode=bool(config.app.get("demo_mode")))
     except Exception as e:
         log_event("warning", "metrics_poller_start_failed", error=str(e))
+    # 상태 감시 폴러(기본 10분) — 포트 DOWN·설비 끊김을 수집 주기와 무관하게 감지.
+    # 데모 모드는 제외(가짜 IP에 SNMP/ping을 쏘면 타임아웃만 쌓인다).
+    if not config.app.get("demo_mode"):
+        try:
+            from core import status_monitor
+            status_monitor.start(db_path)
+        except Exception as e:
+            log_event("warning", "status_monitor_start_failed", error=str(e))
     # 스위치 도달성 감시(TCP-22, 부하 없는 1분 내 끊김 감지 — 설정으로 on/off)
     if not config.app.get("demo_mode"):
         try:
@@ -4210,6 +4218,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 # 자격증명이므로 내려주지 않고 '설정됨' 여부만 알린다.
                 "snmp_enabled": db.get_setting(db_path, "snmp_enabled", "1") != "0",
                 "metrics_poll_minutes": db.get_setting(db_path, "metrics_poll_minutes", "5"),
+                "status_poll_minutes": db.get_setting(db_path, "status_poll_minutes", "10"),
                 "snmp_has_community": bool(
                     db.get_setting(db_path, "snmp_community_blob", "")),
             })
@@ -4268,6 +4277,13 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 try:
                     _mp = max(0, min(1440, int(data.get("metrics_poll_minutes"))))
                     db.set_setting(db_path, "metrics_poll_minutes", str(_mp))
+                except (TypeError, ValueError):
+                    pass
+            # 상태 감시 주기(분) — 포트 DOWN·설비 끊김 감지. 0=끔.
+            if "status_poll_minutes" in data:
+                try:
+                    _sp = max(0, min(1440, int(data.get("status_poll_minutes"))))
+                    db.set_setting(db_path, "status_poll_minutes", str(_sp))
                 except (TypeError, ValueError):
                     pass
             # 빈 값은 '변경 없음'이다 — 화면이 저장된 커뮤니티를 되돌려주지 않으므로

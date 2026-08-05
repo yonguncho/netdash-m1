@@ -201,6 +201,42 @@ def main():
                 ok("기간 전환(7일)")
             else:
                 fail("기간 전환 버튼 없음")
+            # 위젯 편집(v6.28): 토글 → 크기 변경 → 숨김 → 표시 복원
+            pg.click("[data-wtab='firewall']")
+            pg.wait_for_timeout(500)
+            pg.click("#wall-edit-btn")
+            pg.wait_for_timeout(600)
+            tool = pg.query_selector("#wtab-firewall .wtool[data-wact='size']")
+            if not tool:
+                fail("편집 모드에서 크기 버튼이 안 보임")
+            else:
+                key = tool.get_attribute("data-wkey")
+                tool.click()
+                pg.wait_for_timeout(600)
+                ok("위젯 크기 변경: " + (key or ""))
+                hide = pg.query_selector("#wtab-firewall .wtool[data-wact='hide']")
+                if hide:
+                    hide.click()
+                    pg.wait_for_timeout(600)
+                    shown = pg.query_selector("#wtab-firewall .wtool[data-wact='hide']")
+                    if shown and "표시" in (shown.inner_text() or ""):
+                        shown.click()          # 복원
+                        pg.wait_for_timeout(400)
+                        ok("위젯 숨김/복원")
+                    else:
+                        fail("숨김 후 '표시' 버튼이 없음")
+            pg.click("#wall-edit-btn")         # 편집 종료
+            pg.wait_for_timeout(400)
+            # 장비 칩 토글(전체 ↔ 개별)
+            chip = pg.query_selector("[data-fwdev]:not([data-fwdev='all'])")
+            if chip:
+                chip.click()
+                pg.wait_for_timeout(600)
+                pg.click("[data-fwdev='all']")
+                pg.wait_for_timeout(400)
+                ok("장비 선택 칩 토글")
+            pg.click("[data-wtab='switch']")
+            pg.wait_for_timeout(400)
             row = pg.query_selector("[data-swid]")
             if row:
                 row.click()

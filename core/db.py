@@ -315,6 +315,17 @@ CREATE TABLE IF NOT EXISTS device_env (
 )
 """
 
+# 포트 상태 기준선(상태 감시 폴러) — up/down 전이를 재시작 후에도 이어 판정.
+CREATE_PORT_STATE_TABLE = """
+CREATE TABLE IF NOT EXISTS port_state (
+    switch_id INTEGER NOT NULL,
+    port TEXT NOT NULL,
+    oper INTEGER,
+    updated TEXT,
+    PRIMARY KEY (switch_id, port)
+)
+"""
+
 # 지표 이력 — 시계열 그래프의 재료. 폴러가 5분(설정 가능)마다 한 점씩 기록한다.
 # kind: firewall(장비별 cpu/mem/sessions/temp) / switch(temp) /
 #       facility(전체 online/total, device_id=0) / ports(전체 up/total, device_id=0)
@@ -660,6 +671,7 @@ def init_schema(db_path):
                 CREATE_DEVICE_ENV_TABLE,
                 CREATE_RACK_LAYOUT_TABLE,
                 CREATE_METRICS_HISTORY_TABLE,
+                CREATE_PORT_STATE_TABLE,
                 CREATE_SERVERS_TABLE,
                 CREATE_PC_PROFILES_TABLE,
                 CREATE_PORT_CHANNELS_TABLE,
@@ -2060,6 +2072,45 @@ def delete_device_env(db_path, kind, device_id):
                              (kind, int(device_id)))
             except Exception:
                 pass
+
+
+def get_port_state(db_path, switch_id):
+    """상태 감시 기준선 {포트: 1|2}."""
+    with get_db(db_path) as conn:
+        try:
+            return {r["port"]: r["oper"] for r in conn.execute(
+                "SELECT port, oper FROM port_state WHERE switch_id=?",
+                (int(switch_id),)).fetchall()}
+        except Exception:
+            return {}
+
+
+def save_port_state(db_path, switch_id, states):
+    """상태 감시 기준선 교체(스위치 단위 — 사라진 포트는 기준에서도 제거)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute("DELETE FROM port_state WHERE switch_id=?",
+                             (int(switch_id),))
+                conn.executemany(
+                    "INSERT INTO port_state (switch_id, port, oper, updated) "
+                    "VALUES (?,?,?, datetime('now','localtime'))",
+                    [(int(switch_id), p, o) for p, o in (states or {}).items()])
+            except Exception as e:
+                log_event("warning", "save_port_state_skipped", error=str(e)[:120])
+
+
+def set_facility_online(db_path, subnet, ip, online):
+    """설비 1대의 온라인 상태만 갱신(상태 감시 폴러용 — 다른 컬럼 불변)."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.execute(
+                    "UPDATE facility_hosts SET online=?, "
+                    "updated=datetime('now','localtime') WHERE subnet=? AND ip=?",
+                    (1 if online else 0, subnet, ip))
+            except Exception as e:
+                log_event("warning", "set_facility_online_skipped", error=str(e)[:120])
 
 
 def save_metrics_point(db_path, kind, device_id=0, cpu=None, mem=None,

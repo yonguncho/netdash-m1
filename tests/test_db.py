@@ -54,6 +54,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "rack_layout",
         # 지표 이력(시계열 그래프) — 폴러가 5분마다 기록, 30일 보존
         "metrics_history",
+        # 포트 상태 기준선(상태 감시 폴러 — up/down 전이 판정)
+        "port_state",
     }
     assert expected == tables
 
