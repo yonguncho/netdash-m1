@@ -3967,7 +3967,7 @@ function doSearch() {
 // 사람이 배치(팔레트 드래그·연결) + 툴이 정보 자동 채움(IP→hostname, 선→포트).
 var _tdiag = { nodes: [], edges: [] };   // {nodes:[{id,kind,ip,name,x,y,subnets,...}], edges}
 var _tEditMode = false;                   // 편집 모드(끄면 보기 전용 — 실수 클릭 방지)
-var _tLinkFrom = null;                    // 연결 시작 노드(🔗 손잡이 클릭)
+var _tLinkFrom = null;                    // 연결 시작 노드(연결 손잡이 클릭)
 var _tEditId = null;                      // 편집 중 노드 id
 var _tSelId = null;                       // 마지막 클릭 노드(단일 선택)
 var _tSel = {};                           // 다중 선택 집합 {id:true} — 드래그 영역/Shift 클릭
@@ -4020,6 +4020,12 @@ function _tSelIds() {
   return ks.length ? ks : (_tSelId ? [_tSelId] : []);
 }
 function _tIsSel(id) { return !!_tSel[id] || _tSelId === id; }
+
+// 도구 버튼용 라인 아이콘(툴바 인라인 SVG와 동일 문법) — JS가 라벨을 갱신하는 버튼용
+var _TICO = {
+  pencil: "<svg class='ticon' viewBox='0 0 24 24'><path d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/></svg>",
+  save: "<svg class='ticon' viewBox='0 0 24 24'><path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z'/><path d='M17 21v-8H7v8M7 3v5h8'/></svg>",
+};
 
 // 각 장비 종류 → 전용 SVG 심볼(_deviceSymbol) + 색 + 팔레트 라벨
 var _TOPO_KIND = {
@@ -4124,7 +4130,7 @@ function _buildPalette() {
     b.innerHTML = "<svg width='22' height='22' viewBox='0 0 22 22' style='flex-shrink:0'>" +
       "<path d='" + ln[2] + "' fill='none' stroke='#22c55e' stroke-width='2'" + (ln[1].dash ? " stroke-dasharray='3 2'" : "") + "/></svg><span>" + ln[0] + "</span>";
     b.addEventListener("click", function () {
-      if (!_tEditMode) { alert("먼저 '✏️ 편집 모드'를 켜세요."); return; }
+      if (!_tEditMode) { alert("먼저 '편집 모드'를 켜세요."); return; }
       _tLineStyle = (JSON.stringify(_tLineStyle) === b.dataset.style) ? null : JSON.parse(b.dataset.style);
       _tLinkFrom = null;
       _tHighlightLineBtn();
@@ -4142,7 +4148,7 @@ function _tHighlightLineBtn() {
 }
 
 function _addNode(kind) {
-  if (!_tEditMode) { alert("먼저 '✏️ 편집 모드'를 켜세요."); return; }
+  if (!_tEditMode) { alert("먼저 '편집 모드'를 켜세요."); return; }
   var id = "n" + (_tSeq++);
   var meta = _TOPO_KIND[kind] || _TOPO_KIND.l2;
   var node = { id: id, kind: kind, ip: "", name: kind === "internet" ? "Internet" : (meta.pal || kind),
@@ -4217,6 +4223,33 @@ function _renderEditor() {
     // 넓은 투명 히트 영역(가는 선도 쉽게 호버) + data-tip(그 선의 포트)
     svg.push("<path d='" + pathD + "' fill='none' stroke='transparent' stroke-width='14'" +
       " data-tip=\"" + escHtml(tip) + "\" style='cursor:help'/>");
+    // 선 양끝 인터페이스 도트 — 각 도트에 그 장비의 포트만 툴팁으로(사용자 요청:
+    // 선 하나의 합본 툴팁만으로는 어느 장비의 어느 포트인지 구분이 어렵다).
+    // 꺾은선은 끝 구간의 진행 방향이 다르므로 끝별로 안쪽 방향을 따로 계산한다.
+    var INSET = 27;                        // 노드 아이콘(반경 ~24) 바로 바깥
+    var aIn, bIn;                          // 각 끝에서 선 안쪽으로 향하는 단위벡터
+    if (e.style === "elbow") {
+      if (Math.abs(dx) >= Math.abs(dy)) {  // A에서 수평 출발 → B로 수직 도착
+        aIn = [dx >= 0 ? 1 : -1, 0];
+        bIn = [0, by >= ay ? -1 : 1];
+      } else {
+        aIn = [0, dy >= 0 ? 1 : -1];
+        bIn = [bx >= ax ? -1 : 1, 0];
+      }
+    } else {
+      aIn = [dx / len, dy / len];
+      bIn = [-dx / len, -dy / len];
+    }
+    [[ax + aIn[0] * INSET, ay + aIn[1] * INSET, a, e.a_port],
+     [bx + bIn[0] * INSET, by + bIn[1] * INSET, b, e.b_port]].forEach(function (d) {
+      var known = !!d[3];
+      var dtip = (d[2].name || d[2].ip || "장비") + " 인터페이스: " + (d[3] || "미확인");
+      svg.push("<g class='tport-dot' data-tip=\"" + escHtml(dtip) + "\">" +
+        "<circle cx='" + d[0] + "' cy='" + d[1] + "' r='4.5' fill='" +
+        (known ? "#22c55e" : "#334155") + "' fill-opacity='" + (known ? "0.95" : "0.9") +
+        "' stroke='" + (known ? "#bbf7d0" : "#64748b") + "' stroke-width='1.3'/>" +
+        "<circle cx='" + d[0] + "' cy='" + d[1] + "' r='10' fill='transparent'/></g>");
+    });
   });
   // 노드(존 박스는 위에서 배경으로 이미 그림 → 제외)
   _tdiag.nodes.forEach(function (n) {
@@ -4260,12 +4293,14 @@ function _renderEditor() {
         });
       }
     }
-    // 편집 모드: 연결 손잡이(🔗)
+    // 편집 모드: 연결 손잡이(링크 아이콘)
     if (_tEditMode) {
       var hxo = meta.box ? 78 : 16, hyo = meta.box ? -18 : -16;
       svg.push("<g class='tlink-handle' data-id='" + escHtml(n.id) + "' style='cursor:crosshair'>" +
         "<circle cx='" + (n.x + hxo) + "' cy='" + (n.y + hyo) + "' r='8' fill='#0f172a' stroke='#38bdf8' stroke-width='1.5'/>" +
-        "<text x='" + (n.x + hxo) + "' y='" + (n.y + hyo + 4) + "' font-size='9' text-anchor='middle'>🔗</text></g>");
+        "<g transform='translate(" + (n.x + hxo - 5) + "," + (n.y + hyo - 5) + ") scale(0.42)' " +
+        "fill='none' stroke='#38bdf8' stroke-width='2.4' stroke-linecap='round'>" +
+        "<path d='M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8'/></g></g>");
     }
     svg.push("</g>");
   });
@@ -4300,7 +4335,7 @@ function _tBindEditor(host, W, H) {
       window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
     });
   });
-  // 연결 손잡이(🔗): 시작 노드 지정 → 다음 노드 클릭으로 완성
+  // 연결 손잡이: 시작 노드 지정 → 다음 노드 클릭으로 완성
   host.querySelectorAll(".tlink-handle").forEach(function (h) {
     h.addEventListener("mousedown", function (e) { e.stopPropagation(); });
     h.addEventListener("click", function (e) {
@@ -4711,7 +4746,7 @@ function _topoWinClear() {
   if (b) b.addEventListener("click", function () {
     if (!_tdiag.nodes.length && !_tdiag.edges.length) return;
     if (!confirm("캔버스를 모두 비울까요? (모든 아이콘·선 삭제 — 처음부터 다시 그립니다)\n" +
-                 "[↩ 되돌리기]로 복원할 수 있습니다.")) return;
+                 "[되돌리기]로 복원할 수 있습니다.")) return;
     _tSnapshotForUndo();
     _tdiag = { nodes: [], edges: [] };
     _tSel = {}; _tSelId = null; _tLinkFrom = null; _tLineStyle = null; _tHighlightLineBtn();
@@ -4735,7 +4770,7 @@ function _topoWinClear() {
     _tEditMode = !_tEditMode; _tLinkFrom = null;
     edit.className = "btn " + (_tEditMode ? "btn--primary" : "btn--secondary");
     edit.style.fontSize = "12px";
-    edit.textContent = _tEditMode ? "✏️ 편집 모드 (켜짐)" : "✏️ 편집 모드";
+    edit.innerHTML = _TICO.pencil + (_tEditMode ? "편집 모드 (켜짐)" : "편집 모드");
     _renderEditor();
   });
   // 저장
@@ -4743,7 +4778,7 @@ function _topoWinClear() {
   if (save) save.addEventListener("click", function () {
     fetch("/api/topology/diagram", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(_tdiag) }).then(function (r) { return r.json(); }).then(function (res) {
-        if (res.ok) { save.textContent = "💾 저장됨"; setTimeout(function () { save.textContent = "💾 저장"; }, 1500); }
+        if (res.ok) { save.innerHTML = _TICO.save + "저장됨"; setTimeout(function () { save.innerHTML = _TICO.save + "저장"; }, 1500); }
         else alert(res.error || "저장 실패");
       }).catch(function () { alert("저장 오류"); });
   });
@@ -4753,7 +4788,7 @@ function _topoWinClear() {
     if (_tdiag.nodes.length && !confirm(
         "현재 구성도를 서버실 장비로 다시 채웁니다.\n" +
         "저장된 구성도(배치·연결선·존/대역 박스)도 함께 바뀝니다.\n" +
-        "바꾼 뒤에는 [↩ 되돌리기]로 복원할 수 있습니다.\n계속할까요?")) return;
+        "바꾼 뒤에는 [되돌리기]로 복원할 수 있습니다.\n계속할까요?")) return;
     _tSnapshotForUndo();
     fetch("/api/topology/serverroom").then(function (r) { return r.json(); }).then(function (d) {
       // 종류별 행(y) + 순서(x)로 정렬 배치 → 사용자가 골라서 이동

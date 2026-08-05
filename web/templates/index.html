@@ -568,15 +568,16 @@
       <div class="pane-toolbar">
         <span class="pane-toolbar__title">네트워크 구성도 (편집기)</span>
         <div class="pane-toolbar__actions">
-          <button id="btn-topo-edit" class="btn btn--secondary" style="font-size:12px" title="편집 모드: 켜면 아이콘 추가·이동·연결 가능. 끄면 보기 전용(실수 클릭 방지). 연결은 노드의 🔗 손잡이를 누른 뒤 상대 장비 클릭. 단축키: 노드 선택 후 Ctrl+C 복사 / Ctrl+V 붙여넣기 / Delete 삭제">✏️ 편집 모드</button>
-          <button id="btn-topo-draft" class="btn btn--secondary" style="font-size:12px" title="서버실 현황에 등록된 장비를 아이콘·정보가 채워진 상태로 캔버스에 불러옵니다(배치만 하면 됨)">🏢 서버실 현황 불러오기</button>
+          <!-- 도구 아이콘은 라인 SVG(1em·currentColor) — 이모지는 OS 폰트마다 달라 톤이 깨진다 -->
+          <button id="btn-topo-edit" class="btn btn--secondary" style="font-size:12px" title="편집 모드: 켜면 아이콘 추가·이동·연결 가능. 끄면 보기 전용(실수 클릭 방지). 연결은 노드의 연결 손잡이를 누른 뒤 상대 장비 클릭. 단축키: 노드 선택 후 Ctrl+C 복사 / Ctrl+V 붙여넣기 / Delete 삭제"><svg class="ticon" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>편집 모드</button>
+          <button id="btn-topo-draft" class="btn btn--secondary" style="font-size:12px" title="서버실 현황에 등록된 장비를 아이콘·정보가 채워진 상태로 캔버스에 불러옵니다(배치만 하면 됨)"><svg class="ticon" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M8 10h.01M16 10h.01M12 10h.01M8 14h.01M16 14h.01M12 14h.01"/></svg>서버실 현황 불러오기</button>
           <select id="topo-subnet" style="font-size:12px;padding:4px" title="네트워크 대역 선택 후 '스위치 현황 불러오기'"><option value="">대역 선택…</option></select>
-          <button id="btn-topo-switches" class="btn btn--secondary" style="font-size:12px" title="선택한 대역에 속한 스위치(TPS 등)를 캔버스에 추가">🔀 스위치 현황 불러오기</button>
-          <button id="btn-topo-fit" class="btn btn--secondary" style="font-size:12px" title="전체가 보이도록 화면에 맞춤">⤢ 화면 맞춤</button>
-          <button id="btn-pptx-report" class="btn btn--secondary" style="font-size:12px" title="네트워크 구성도를 PPTX로 자동 생성(고객 전달용)">📊 구성도 PPTX</button>
-          <button id="btn-topo-save" class="btn btn--primary" style="font-size:12px" title="배치·연결·대역을 저장(재시작·다른 PC에서도 유지)">💾 저장</button>
-          <button id="btn-topo-undo" class="btn btn--secondary hidden" style="font-size:12px" title="직전의 '서버실 불러오기' 또는 '초기화'를 되돌립니다">↩ 되돌리기</button>
-          <button id="btn-topo-clear" class="btn btn--secondary" style="font-size:12px" title="캔버스를 비웁니다(모든 아이콘·선 삭제). 처음부터 다시 그릴 때 사용">🗑 초기화</button>
+          <button id="btn-topo-switches" class="btn btn--secondary" style="font-size:12px" title="선택한 대역에 속한 스위치(TPS 등)를 캔버스에 추가"><svg class="ticon" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M7 11v2M12 11v2M17 11v2"/></svg>스위치 현황 불러오기</button>
+          <button id="btn-topo-fit" class="btn btn--secondary" style="font-size:12px" title="전체가 보이도록 화면에 맞춤"><svg class="ticon" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>화면 맞춤</button>
+          <button id="btn-pptx-report" class="btn btn--secondary" style="font-size:12px" title="네트워크 구성도를 PPTX로 자동 생성(고객 전달용)"><svg class="ticon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M10 12v5M14 14v3M7 15v2"/></svg>구성도 PPTX</button>
+          <button id="btn-topo-save" class="btn btn--primary" style="font-size:12px" title="배치·연결·대역을 저장(재시작·다른 PC에서도 유지)"><svg class="ticon" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>저장</button>
+          <button id="btn-topo-undo" class="btn btn--secondary hidden" style="font-size:12px" title="직전의 '서버실 불러오기' 또는 '초기화'를 되돌립니다"><svg class="ticon" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>되돌리기</button>
+          <button id="btn-topo-clear" class="btn btn--secondary" style="font-size:12px" title="캔버스를 비웁니다(모든 아이콘·선 삭제). 처음부터 다시 그릴 때 사용"><svg class="ticon" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>초기화</button>
         </div>
       </div>
       <div style="display:flex;gap:8px;height:calc(100vh - 170px);min-height:520px">

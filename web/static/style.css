@@ -959,3 +959,10 @@ body.ru-moving, body.ru-moving * { cursor: grabbing !important; user-select: non
 .fw-chip--ok { background:#dcfce7; color:#166534; }
 .fw-chip--warn { background:#fef3c7; color:#b45309; }
 .fw-chip--crit { background:#fee2e2; color:#b91c1c; }
+
+/* v6.31 — 토폴로지 도구 라인 아이콘(이모지 대체). stroke=currentColor라 버튼 글자색을 따른다 */
+.ticon { width:13px; height:13px; margin-right:5px; vertical-align:-2px; flex-shrink:0;
+  fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+/* 선 끝 인터페이스 도트 — 호버로 그 장비의 포트 확인 */
+.tport-dot { cursor:help; }
+.tport-dot:hover circle { stroke-width:2.5; }
