@@ -2786,6 +2786,26 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             log_event("error", "topo_diagram_save_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/topology/autolink", methods=["POST"])
+    @rate_limit("topo_autolink", max_requests=30, window_seconds=60)
+    def topology_autolink():
+        """캔버스에 올려진 장비 IP들 사이의 실제 인접(CDP/LLDP·ARP+MAC) 링크 추론.
+
+        body: {ips: [...]} → {links: [{a_ip, b_ip, a_port, b_port, basis}]}
+        올려진 쌍만 보므로 코어(방화벽·백본·L3)만 그린 구성도가 어지럽지 않다."""
+        try:
+            from core import topology
+            data = request.get_json(silent=True) or {}
+            ips = data.get("ips")
+            if not isinstance(ips, list) or len(ips) > 500:
+                return jsonify({"error": "ips must be a list (max 500)"}), 400
+            links = topology.autolink(db_path, [str(x)[:64] for x in ips])
+            return jsonify({"links": links})
+        except Exception as e:
+            log_event("error", "topo_autolink_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/topology/lookup", methods=["GET"])
     def topology_lookup():
         """IP로 등록 장비 조회(hostname·모델·상태 자동 채움)."""

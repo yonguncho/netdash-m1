@@ -1,7 +1,20 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.31.0 릴리스 완료 (eca4e63 — pytest 1714 PASS + selfcheck PASS + 스모크 200)
-**직전 릴리스**: v6.30.0 (c44e989)
+**현재 버전**: v6.32.0 작업 완료 — 게이트 통과 후 릴리스 예정
+**직전 릴리스**: v6.31.0 (eca4e63)
+
+## v6.32.0 — 토폴로지 코어 초안·자동 연결·자동 정렬·검색
+
+사용자 방향: 전체 자동 배치 폐기(장비 과다) → 코어만 + **올려진 장비끼리만** 자동 연결.
+- `core/topology.py autolink(db_path, ips)`: ① neighbors(remote_ip 또는 `_al_norm`
+  이름 매칭, 양방향 행 포트 병합 `_put`) ② ARP(`_ip_macs`: arp_entries→firewall_arp)
+  +`get_mac_last_seen`(via_uplink=True 제외). 올려진 쌍만. basis=neighbor|mac.
+- `POST /api/topology/autolink` {ips:[...]} (rate limit 30/60s, max 500).
+- app.js: `_tAutoLink`(기존 선 존중·결과 alert), `_tAutoArrange`(계층 행,
+  행 내 x 순서 존중), 코어 초안 버튼(serverroom 필터 CORE={firewall,backbone,l3,l4}
+  → autolink quiet → arrange), `#topo-search` Enter 줌+선택.
+- selfcheck [4.5] 단계: seed에 neighbors 시드(멱등) → 자동 연결 1건·정렬 행 2개·
+  검색 포커스 검증. 테스트 8건 `tests/test_topo_autolink_v6320.py`.
 
 ## v6.31.0 — 토폴로지 아이콘 SVG화 + 선 양끝 인터페이스 도트
 

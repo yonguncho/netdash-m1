@@ -84,6 +84,12 @@ def seed(dbp):
                     "VALUES (?, 'Gi1/0/48', datetime('now','localtime', ?), ?, ?)",
                     (sid, "-%d minutes" % (i * 5),
                      40_000_000 + i * 1_000_000, 8_000_000 + i * 300_000))
+    # 토폴로지 자동 연결(v6.32) — 데모 스위치 1↔2 인접 시드(스위치별 교체라 멱등)
+    sws2 = db.get_switches(dbp)
+    if len(sws2) >= 2:
+        db.save_neighbors(dbp, sws2[0]["id"], [
+            {"local_port": "Te1/1/1", "remote_name": sws2[1]["name"],
+             "remote_port": "Te2/1/1", "remote_ip": sws2[1]["ip"]}])
     # 설비 + 서버(랙) — 서버실·설비 흐름용
     db.save_facility_hosts(dbp, [
         {"subnet": "10.99.1.0/24", "ip": "10.99.1.%d" % i, "mac": "sc:%02x" % i,
@@ -200,6 +206,51 @@ def main():
                 pg.wait_for_timeout(900)
             ok("배치 저장/업데이트 클릭")
             text_problems(pg, "서버실")
+
+            # ── 토폴로지: 자동 연결·자동 정렬·검색(v6.32) ──
+            print("[4.5] 토폴로지 자동 연결·정렬·검색")
+            pg.click(".tab-nav__btn[data-tab='topology']")
+            pg.wait_for_timeout(1000)
+            # 시드된 인접 쌍(데모 스위치 1↔2)을 캔버스에 올린다
+            ips = pg.evaluate("""() =>
+                fetch('/api/switches').then(r => r.json()).then(d =>
+                    (d.switches || d || []).slice(0, 2).map(s => [s.ip, s.name]))""")
+            if ips and len(ips) >= 2:
+                pg.evaluate("""(pair) => {
+                    _tdiag = { nodes: [
+                      {id:'sca', kind:'backbone', ip:pair[0][0], name:pair[0][1], x:300, y:400, subnets:[]},
+                      {id:'scb', kind:'l3', ip:pair[1][0], name:pair[1][1], x:700, y:150, subnets:[]},
+                    ], edges: [] }; _tLoaded = true; _renderEditor();
+                }""", ips)
+                if not pg.evaluate("() => _tEditMode"):
+                    pg.click("#btn-topo-edit")
+                    pg.wait_for_timeout(400)
+                pg.click("#btn-topo-autolink")
+                pg.wait_for_timeout(1200)
+                ecount = pg.evaluate("() => _tdiag.edges.length")
+                if ecount >= 1:
+                    ok("토폴로지 자동 연결(%d건)" % ecount)
+                else:
+                    fail("자동 연결이 시드된 인접을 잇지 못함")
+                pg.click("#btn-topo-arrange")
+                pg.wait_for_timeout(500)
+                rows = pg.evaluate("() => new Set(_tdiag.nodes.map(n => n.y)).size")
+                if rows >= 2:
+                    ok("토폴로지 자동 정렬(행 %d개)" % rows)
+                else:
+                    fail("자동 정렬 후 행 분리가 안 됨")
+                pg.fill("#topo-search", ips[1][1][:5])
+                pg.press("#topo-search", "Enter")
+                pg.wait_for_timeout(400)
+                if pg.evaluate("() => _tSelId"):
+                    ok("토폴로지 검색 포커스")
+                else:
+                    fail("검색이 장비를 선택하지 못함")
+                pg.click("#btn-topo-edit")   # 편집 종료(자동 저장 방지)
+                pg.wait_for_timeout(300)
+            else:
+                fail("토폴로지 검증용 스위치 목록을 얻지 못함")
+            pg.screenshot(path=str(OUT / "topology.png"), full_page=True)
 
             # ── 관제: 4탭 + 기간 전환 + Top10 팝업 ──
             print("[5] 관제 탭·차트·팝업")

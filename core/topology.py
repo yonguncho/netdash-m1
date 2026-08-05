@@ -911,3 +911,127 @@ def resolve_link_ports(db_path, a_ip, b_ip):
     return {"a_port": a_port, "a_members": a_res["members"], "a_ports": a_res["ports"],
             "b_port": b_port, "b_members": b_res["members"], "b_ports": b_res["ports"],
             "method": method}
+
+
+# ── 자동 연결(v6.32) — 캔버스에 올려진 장비 사이의 실제 인접 추론 ──────────
+
+def _al_norm(name):
+    """이웃 이름 정규화 — CDP device-id의 (시리얼)·FQDN 꼬리 제거."""
+    n = re.sub(r"\(.*?\)", "", name or "").split(".")[0].strip().lower()
+    return n
+
+
+def _ip_macs(db_path, ips):
+    """{ip: mac} — 스위치 ARP 우선, 방화벽 ARP 보충(뒤 관측이 이기도록 id 순)."""
+    out = {}
+    if not ips:
+        return out
+    ph = ",".join("?" * len(ips))
+    with db.get_db(db_path) as conn:
+        for table in ("arp_entries", "firewall_arp"):
+            try:
+                for r in conn.execute(
+                        "SELECT ip, mac FROM %s WHERE ip IN (%s) ORDER BY id" % (table, ph),
+                        list(ips)).fetchall():
+                    if r["mac"] and r["ip"] not in out:
+                        out[r["ip"]] = r["mac"]
+            except Exception:
+                continue
+    return out
+
+
+def autolink(db_path, ips):
+    """올려진 장비 IP들 사이에서 '수집으로 확인된' 인접만 링크로 반환.
+
+    사용자 요청: 장비를 올려놓고 IP만 등록하면 선을 하나하나 긋지 않아도
+    실제 연결대로 이어지게. 전체 자동 배치는 장비가 너무 많아져 폐기 —
+    **캔버스에 올려진 쌍만** 본다(그래서 코어만 그린 구성도가 어지럽지 않다).
+
+    근거(확실한 순, 같은 쌍은 ①이 ②를 이긴다):
+      ① CDP/LLDP 이웃 — remote_ip 또는 정규화된 remote_name이 상대 장비와 일치.
+         양쪽 포트(local_port/remote_port)까지 확보.
+      ② ARP+MAC 학습 — 비스위치 장비(방화벽·서버 등)의 MAC이 올려진 스위치의
+         액세스 포트에서 학습됨(업링크 관측은 직결이 아니므로 제외).
+         스위치 쪽 포트만 확보.
+    반환: [{a_ip, b_ip, a_port, b_port, basis}]
+    """
+    ipset = {str(i).strip() for i in (ips or []) if str(i or "").strip()}
+    if len(ipset) < 2:
+        return []
+    switches = db.get_switches(db_path)
+    sw_ip_by_id = {s["id"]: s.get("ip") for s in switches}
+    sw_ips = {s.get("ip") for s in switches if s.get("ip") in ipset}
+    sw_ip_by_name = {s.get("name"): s.get("ip") for s in switches
+                     if s.get("ip") in ipset}
+
+    # 이름 → IP (올려진 장비 전부 — 이웃 테이블에 IP가 없고 이름만 있는 경우 대비)
+    name_ip = {}
+    for s in switches:
+        if s.get("ip") in ipset:
+            for k in (s.get("name"), s.get("hostname")):
+                if _al_norm(k):
+                    name_ip[_al_norm(k)] = s["ip"]
+    try:
+        for f in db.list_firewalls(db_path):
+            if f.get("host") in ipset and _al_norm(f.get("name")):
+                name_ip[_al_norm(f["name"])] = f["host"]
+    except Exception:
+        pass
+    try:
+        for sv in db.list_servers(db_path):
+            if sv.get("ip") in ipset:
+                for k in (sv.get("name"), sv.get("hostname")):
+                    if _al_norm(k):
+                        name_ip[_al_norm(k)] = sv["ip"]
+    except Exception:
+        pass
+
+    links = {}                            # (ip소트쌍) → link dict
+
+    def _put(a_ip, b_ip, a_port, b_port, basis):
+        key = tuple(sorted((a_ip, b_ip)))
+        cur = links.get(key)
+        if cur is None:
+            links[key] = {"a_ip": a_ip, "b_ip": b_ip, "a_port": a_port or "",
+                          "b_port": b_port or "", "basis": basis}
+            return
+        # 양방향 이웃 행 병합 — 비어 있는 쪽 포트만 보충
+        for ip_, port in ((a_ip, a_port), (b_ip, b_port)):
+            if not port:
+                continue
+            if cur["a_ip"] == ip_ and not cur["a_port"]:
+                cur["a_port"] = port
+            elif cur["b_ip"] == ip_ and not cur["b_port"]:
+                cur["b_port"] = port
+
+    # ① CDP/LLDP 이웃
+    for row in db.get_all_neighbors(db_path):
+        sip = sw_ip_by_id.get(row.get("switch_id"))
+        if sip not in ipset:
+            continue
+        rip = (row.get("remote_ip") or "").strip()
+        if rip not in ipset:
+            rip = name_ip.get(_al_norm(row.get("remote_name")), "")
+        if not rip or rip == sip:
+            continue
+        _put(sip, rip, row.get("local_port"), row.get("remote_port"), "neighbor")
+
+    # ② ARP+MAC — 비스위치 장비를 올려진 스위치의 액세스 포트에
+    non_sw = [ip for ip in ipset if ip not in sw_ips]
+    if non_sw and sw_ip_by_name:
+        macs = _ip_macs(db_path, non_sw)
+        loc = db.get_mac_last_seen(db_path, list(macs.values()))
+        for ip, mac in macs.items():
+            h = re.sub(r"[^0-9a-f]", "", (mac or "").lower())
+            info = loc.get(h)
+            if not info or info.get("via_uplink"):
+                continue                  # 업링크 관측 = 직결 아님
+            sip = sw_ip_by_name.get(info.get("switch_name"))
+            if not sip or sip == ip:
+                continue
+            key = tuple(sorted((sip, ip)))
+            if key not in links:
+                links[key] = {"a_ip": sip, "b_ip": ip,
+                              "a_port": info.get("port") or "", "b_port": "",
+                              "basis": "mac"}
+    return list(links.values())

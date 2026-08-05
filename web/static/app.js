@@ -4826,6 +4826,131 @@ function _topoWinClear() {
       }).catch(function () { alert("스위치 현황 불러오기 오류"); });
   });
 
+  // ── v6.32: 자동 연결·자동 정렬·코어 초안·검색 ──
+  // 방향(사용자): 전체 자동 배치는 장비가 너무 많아 폐기. 코어(방화벽·백본·L3)만
+  // 그리고, "올려진 장비끼리"만 수집 근거(CDP/LLDP·ARP+MAC)로 선을 자동으로 긋는다.
+
+  // 계층 행 정렬 — 그려진 노드를 종류별 행으로(행 안에서는 현재 x 순서 유지)
+  function _tAutoArrange() {
+    var ROW = { internet: 0, firewall: 1, backbone: 2, l4: 3, l3: 4, l2: 5,
+                ap: 6, server: 7, pc: 7, facility: 8 };
+    var rows = {};
+    _tdiag.nodes.forEach(function (n) {
+      var meta = _TOPO_KIND[n.kind] || {};
+      if (meta.zone) return;                       // 존 박스는 배경 — 그대로 둔다
+      var r = meta.box ? 9 : (ROW[n.kind] !== undefined ? ROW[n.kind] : 5);
+      (rows[r] = rows[r] || []).push(n);
+    });
+    Object.keys(rows).forEach(function (r) {
+      rows[r].sort(function (a, b) { return a.x - b.x; })   // 좌우 순서는 존중
+        .forEach(function (n, i) { n.x = 150 + i * 185; n.y = 100 + r * 150; });
+    });
+    _tView = null;
+    _renderEditor();
+  }
+
+  // 자동 연결 — 올려진 장비 IP들로 서버에 인접 조회, 없는 선만 추가(포트 자동 기입)
+  function _tAutoLink(opts) {
+    opts = opts || {};
+    var ips = _tdiag.nodes.filter(function (n) {
+      var m = _TOPO_KIND[n.kind] || {};
+      return n.ip && !m.box && !m.zone;
+    }).map(function (n) { return n.ip; });
+    if (ips.length < 2) {
+      if (!opts.quiet) alert("IP가 등록된 장비가 2대 이상 있어야 자동 연결할 수 있습니다.\n(장비 더블클릭 → IP 입력)");
+      if (opts.done) opts.done(0);
+      return;
+    }
+    fetch("/api/topology/autolink", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ips: ips }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var byIp = {};
+        _tdiag.nodes.forEach(function (n) { if (n.ip && !byIp[n.ip]) byIp[n.ip] = n; });
+        var have = {};
+        _tdiag.edges.forEach(function (e) { have[[e.a, e.b].sort().join("|")] = true; });
+        var added = 0, dup = 0;
+        (d.links || []).forEach(function (l) {
+          var a = byIp[l.a_ip], b = byIp[l.b_ip];
+          if (!a || !b) return;
+          var k = [a.id, b.id].sort().join("|");
+          if (have[k]) { dup++; return; }         // 이미 그린 선은 존중(평행 링크 오해 방지)
+          have[k] = true;
+          _tdiag.edges.push({ a: a.id, b: b.id, a_port: l.a_port || "", b_port: l.b_port || "" });
+          added++;
+        });
+        _renderEditor();
+        if (!opts.quiet) {
+          alert(added
+            ? "자동 연결: " + added + "건 추가" + (dup ? " (이미 연결된 " + dup + "건 제외)" : "")
+            : (dup ? "추가할 선 없음 — 찾은 인접 " + dup + "건은 이미 연결돼 있습니다."
+                   : "수집된 인접 근거(CDP/LLDP·ARP+MAC)가 없습니다.\n장비 수집을 먼저 실행했는지 확인하세요."));
+        }
+        if (opts.done) opts.done(added);
+      })
+      .catch(function () { if (!opts.quiet) alert("자동 연결 오류"); if (opts.done) opts.done(0); });
+  }
+
+  var alBtn = document.getElementById("btn-topo-autolink");
+  if (alBtn) alBtn.addEventListener("click", function () {
+    if (!_tEditMode) { alert("먼저 '편집 모드'를 켜세요."); return; }
+    _tAutoLink({});
+  });
+
+  var arBtn = document.getElementById("btn-topo-arrange");
+  if (arBtn) arBtn.addEventListener("click", function () {
+    if (!_tEditMode) { alert("먼저 '편집 모드'를 켜세요."); return; }
+    _tSnapshotForUndo();
+    _tAutoArrange();
+  });
+
+  // 코어 초안 — 서버실 장비 중 방화벽·백본·L3/L4만 → 자동 연결 → 자동 정렬
+  var coreBtn = document.getElementById("btn-topo-core");
+  if (coreBtn) coreBtn.addEventListener("click", function () {
+    if (_tdiag.nodes.length && !confirm(
+        "현재 구성도를 코어 초안(방화벽·백본·L3/L4)으로 다시 채웁니다.\n" +
+        "수집된 인접 정보로 선까지 자동 연결한 뒤 계층 정렬합니다.\n" +
+        "바꾼 뒤에는 [되돌리기]로 복원할 수 있습니다.\n계속할까요?")) return;
+    _tSnapshotForUndo();
+    fetch("/api/topology/serverroom").then(function (r) { return r.json(); }).then(function (d) {
+      var CORE = { firewall: 1, backbone: 1, l3: 1, l4: 1 };
+      var nodes = (d.nodes || []).filter(function (n) { return CORE[n.kind]; });
+      if (!nodes.length) {
+        alert("서버실 현황에 방화벽·백본·L3 장비가 없습니다.\n('서버실 현황 불러오기'로 전체를 확인해 보세요)");
+        return;
+      }
+      _tdiag = { nodes: [], edges: [] };
+      _addLoadedNodes(nodes, false);
+      _tView = null; _tSel = {}; _tSelId = null;
+      _tSuppressSave = true;
+      _tAutoLink({ quiet: true, done: function (added) {
+        _tAutoArrange();
+        _tSuppressSave = false;
+        alert("코어 초안: 장비 " + _tdiag.nodes.length + "대" +
+          (added ? ", 자동 연결 " + added + "건" : ", 자동 연결 근거 없음(수집 후 [자동 연결] 재시도)") +
+          "\n배치를 다듬고 [저장]을 누르면 반영됩니다.");
+      } });
+    }).catch(function () { alert("코어 초안 불러오기 오류"); });
+  });
+
+  // 검색 → 해당 장비로 화면 이동 + 선택 표시(대형 구성도에서 장비 찾기)
+  var sIn = document.getElementById("topo-search");
+  if (sIn) sIn.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    var q = (sIn.value || "").trim().toLowerCase();
+    if (!q) return;
+    var hit = _tdiag.nodes.filter(function (n) {
+      var m = _TOPO_KIND[n.kind] || {};
+      return !m.zone && ((n.ip || "").toLowerCase().indexOf(q) >= 0 ||
+                         (n.name || "").toLowerCase().indexOf(q) >= 0);
+    })[0];
+    if (!hit) { alert("'" + sIn.value + "' 와 일치하는 장비가 캔버스에 없습니다."); return; }
+    _tSel = {}; _tSel[hit.id] = true; _tSelId = hit.id;
+    _tView = { x: hit.x - 400, y: hit.y - 250, w: 800, h: 500 };   // 노드 중심으로 줌
+    _renderEditor();
+  });
+
   // 키보드: 편집 모드에서 Ctrl+C 복사 / Ctrl+V 붙여넣기 / Delete 삭제
   document.addEventListener("keydown", function (e) {
     // 토폴로지 탭 활성 + 편집 모드일 때만. 입력창/모달 포커스 중이면 무시(일반 복사 보존)
