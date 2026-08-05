@@ -56,6 +56,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "metrics_history",
         # 포트 상태 기준선(상태 감시 폴러 — up/down 전이 판정)
         "port_state",
+        # 업링크 트래픽 이력(bps) — 지표 폴러가 IF-MIB 카운터 델타로 기록
+        "traffic_history",
     }
     assert expected == tables
 

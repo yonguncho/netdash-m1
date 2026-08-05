@@ -28,6 +28,7 @@ function esc(s) {
 var KIND_KO = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
   port_down: "포트 다운", port_up: "포트 복구",
+  threshold_over: "임계 초과", threshold_clear: "임계 해제",
   device_moved: "설비 이동", config_changed: "설정 변경",
   switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
   firewall_unreachable: "방화벽 연결 실패", firewall_recovered: "방화벽 복구",
@@ -137,6 +138,9 @@ function refresh() {
         " <b>" + esc(kind) + "</b> " + esc(where) +
         (msg ? " — " + esc(msg) : "") + "</span>";
     }).join("");
+
+    // TV 모드: 새 알람성 이벤트면 관련 탭으로 자동 전환
+    if (typeof tvMaybeJump === "function") tvMaybeJump(d.recent_events || []);
   }).catch(function (e) { console.error(e); });
 }
 
@@ -396,6 +400,9 @@ function renderSwitchTab(s) {
       "</h3><div id='ch-ports' class='wchartbox'></div></div>" +
     "<div class='wcard wcard--6'><h3>온도 추이<span class='hint'>스위치별</span></h3>" +
       "<div id='ch-sw-temp' class='wchartbox'></div></div>" +
+    "<div class='wcard wcard--12'><h3>업링크 트래픽" +
+      "<span class='hint'>SNMP 64bit 카운터 · 지표 폴러 주기로 갱신 (실선 수신 · 점선 송신)</span></h3>" +
+      "<div id='ch-sw-traffic' class='wchartbox'></div></div>" +
     "</div>";
 }
 
@@ -764,20 +771,34 @@ document.addEventListener("click", function (e) {
   }
 });
 
+var _TAB_ORDER = ["summary", "switch", "firewall", "facility"];
+
+/* 탭 전환 — 버튼 클릭과 TV 로테이션이 공용으로 쓴다 */
+function wallShowTab(key) {
+  if (_TAB_ORDER.indexOf(key) < 0) return;
+  _wtab = key;
+  var nav = document.getElementById("wall-tabs");
+  if (nav) {
+    Array.prototype.forEach.call(nav.querySelectorAll("[data-wtab]"), function (x) {
+      x.classList.toggle("wall-tab--on", x.getAttribute("data-wtab") === key);
+    });
+  }
+  _TAB_ORDER.forEach(function (k) {
+    var p = document.getElementById("wtab-" + k);
+    if (p) p.classList.toggle("wall-pane--on", k === key);
+  });
+  // 숨긴 탭에서 그려진 차트는 clientWidth=0이라 500px 폴백으로 좁게 그려져
+  // 있다 — 탭이 보이게 된 지금 실제 폭으로 다시 그린다.
+  if (typeof renderSeriesCharts === "function" && _SERIES) renderSeriesCharts();
+}
+
 (function initWallTabs() {
   var nav = document.getElementById("wall-tabs");
   if (!nav) return;
   nav.addEventListener("click", function (e) {
     var b = e.target.closest("[data-wtab]");
     if (!b) return;
-    _wtab = b.getAttribute("data-wtab");
-    Array.prototype.forEach.call(nav.querySelectorAll(".wall-tab"), function (x) {
-      x.classList.toggle("wall-tab--on", x === b);
-    });
-    ["summary", "switch", "firewall", "facility"].forEach(function (k) {
-      var p = document.getElementById("wtab-" + k);
-      if (p) p.classList.toggle("wall-pane--on", k === _wtab);
-    });
+    wallShowTab(b.getAttribute("data-wtab"));
   });
 })();
 
@@ -876,6 +897,79 @@ function chartTotal(elId, rows, label, color) {
   }, [xs, ys, tot], el));
 }
 
+function _fmtBps(v) {
+  if (v == null) return "";
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + "G";
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return Math.round(v / 1e3) + "K";
+  return String(Math.round(v));
+}
+
+/* 업링크 트래픽 — 포트마다 수신(실선)/송신(점선) 두 시리즈, 같은 색.
+   traffic={key:{name,points[[ts,in_bps,out_bps]]}} — 많으면 바쁜 순 8개만. */
+function chartTraffic(elId, traffic) {
+  var el = document.getElementById(elId);
+  if (!el || typeof uPlot === "undefined") return;
+  var keys = Object.keys(traffic || {});
+  // 평균 (in+out) 큰 순 — 조용한 포트 수십 개가 범례를 덮지 않게
+  keys.sort(function (a, b) {
+    function avg(k) {
+      var pts = traffic[k].points || [];
+      var s = 0;
+      pts.forEach(function (p) { s += (p[1] || 0) + (p[2] || 0); });
+      return pts.length ? s / pts.length : 0;
+    }
+    return avg(b) - avg(a);
+  });
+  var dropped = keys.length - 8;
+  keys = keys.slice(0, 8);
+  var byTs = {};
+  keys.forEach(function (k, ki) {
+    (traffic[k].points || []).forEach(function (pt) {
+      var t = _tsToUnix(pt[0]);
+      (byTs[t] = byTs[t] || {})[ki] = pt;
+    });
+  });
+  var xs = Object.keys(byTs).map(Number).sort(function (a, b) { return a - b; });
+  if (xs.length < 2 || !keys.length) {
+    el.innerHTML = "<p class='wnone'>기록 수집 중 — SNMP 커뮤니티가 설정된 스위치에서 " +
+      "지표 폴러(기본 5분)가 두 주기를 돌면 그래프가 나타납니다.</p>";
+    return;
+  }
+  var data = [xs];
+  var series = [{}];
+  keys.forEach(function (k, ki) {
+    var color = PALETTE[ki % PALETTE.length];
+    [1, 2].forEach(function (pos) {
+      data.push(xs.map(function (t) {
+        var pt = byTs[t][ki];
+        return pt ? pt[pos] : null;
+      }));
+      series.push({
+        label: traffic[k].name + (pos === 1 ? " ↓" : " ↑"),
+        stroke: color, width: pos === 1 ? 2 : 1,
+        dash: pos === 1 ? undefined : [5, 5],
+        points: { show: false }, spanGaps: true });
+    });
+  });
+  el.innerHTML = dropped > 0
+    ? "<p class='wnone' style='margin:0 0 4px'>바쁜 포트 8개 표시 (외 " + dropped + "개 생략)</p>"
+    : "";
+  var box = document.createElement("div");
+  el.appendChild(box);
+  _plots.push(new uPlot({
+    width: el.clientWidth || 500, height: 210,
+    legend: { show: keys.length <= 4 },
+    cursor: { points: { size: 6 } },
+    scales: { x: { time: true } },
+    axes: [Object.assign({}, _UP_AXIS),
+           Object.assign({}, _UP_AXIS, {
+             size: 56,
+             values: function (u, vals) { return vals.map(_fmtBps); } })],
+    series: series,
+  }, data, box));
+}
+
 /* 기간 전환 버튼 줄 */
 function rangeBtns() {
   var opts = [["1", "1시간"], ["24", "24시간"], ["168", "7일"]];
@@ -916,6 +1010,7 @@ function renderSeriesCharts() {
   chartMulti("ch-fw-mem", fwS, function (pt) { return pt[2]; }, "%");
   chartMulti("ch-sw-temp", _SERIES.switches,
              function (pt) { return pt[4]; }, "°C");
+  chartTraffic("ch-sw-traffic", _SERIES.traffic);
   chartTotal("ch-ports", _SERIES.ports, "사용 중 포트", "#22d3ee");
   chartTotal("ch-fac", _SERIES.facility, "온라인 설비", "#34d399");
 }
@@ -988,6 +1083,9 @@ function applyLayout() {
         _SIZES.forEach(function (c) { card.classList.remove(c); });
         card.classList.add(st.size);
       }
+      // 드래그로 정한 순서 — grid의 CSS order로 적용(DOM은 렌더 순서 유지)
+      card.style.order = (st.order != null) ? st.order : "";
+      card.setAttribute("draggable", _editMode ? "true" : "false");
       if (st.hidden && !_editMode) { card.style.display = "none"; return; }
       card.style.display = "";
       card.classList.toggle("wcard--dim", !!st.hidden && _editMode);
@@ -1034,13 +1132,139 @@ document.addEventListener("click", function (e) {
   b.id = "wall-edit-btn";
   b.className = "wall-tab wall-tab--edit";
   b.textContent = "🛠 위젯 편집";
-  b.title = "카드 숨기기·크기 조절 — 이 PC 브라우저에 저장됩니다";
+  b.title = "카드 드래그 순서·숨기기·크기 조절 — 이 PC 브라우저에 저장됩니다";
   b.addEventListener("click", function () {
     _editMode = !_editMode;
     b.classList.toggle("wall-tab--editing", _editMode);
     renderStats();
   });
   nav.appendChild(b);
+})();
+
+/* ── 위젯 드래그 순서(편집 모드) ─────────────────────────────────
+   DOM은 렌더 순서 그대로 두고 CSS order만 바꾼다 — 30초 재렌더가 DOM을
+   다시 만들어도 applyLayout이 저장된 order를 도로 입히므로 순서가 유지된다. */
+
+var _dragCard = null;
+
+function _gridSeq(grid) {
+  return Array.prototype.slice.call(grid.querySelectorAll(":scope > .wcard"))
+    .sort(function (a, b) {
+      return (parseInt(a.style.order, 10) || 0) - (parseInt(b.style.order, 10) || 0);
+    });
+}
+
+document.addEventListener("dragstart", function (e) {
+  if (!_editMode) { if (e.preventDefault) e.preventDefault(); return; }
+  var card = e.target.closest && e.target.closest(".wcard");
+  if (!card) return;
+  _dragCard = card;
+  card.classList.add("wcard--drag");
+  try {
+    e.dataTransfer.setData("text/plain", "wcard");
+    e.dataTransfer.effectAllowed = "move";
+  } catch (err) {}
+});
+
+document.addEventListener("dragover", function (e) {
+  if (!_dragCard) return;
+  var over = e.target.closest && e.target.closest(".wcard");
+  if (!over || over === _dragCard) return;
+  if (over.parentElement !== _dragCard.parentElement) return;
+  e.preventDefault();
+  // 미리보기: 드래그 카드를 대상 앞/뒤로 끼운 순서를 즉시 order로 반영
+  var seq = _gridSeq(over.parentElement);
+  var di = seq.indexOf(_dragCard), oi = seq.indexOf(over);
+  if (di < 0 || oi < 0 || di === oi) return;
+  seq.splice(di, 1);
+  seq.splice(oi, 0, _dragCard);
+  seq.forEach(function (c, i) { c.style.order = i; });
+});
+
+document.addEventListener("dragend", function () {
+  if (!_dragCard) return;
+  _dragCard.classList.remove("wcard--drag");
+  var grid = _dragCard.parentElement;
+  var pane = _dragCard.closest("[id^='wtab-']");
+  var tab = pane ? pane.id.replace("wtab-", "") : "";
+  var layout = _wl();
+  _gridSeq(grid).forEach(function (c, i) {
+    var key = _cardKey(tab, c);
+    (layout[key] = layout[key] || {}).order = i;
+  });
+  _wlSave(layout);
+  _dragCard = null;
+});
+
+/* ── TV 관제 모드 ────────────────────────────────────────────────
+   대형 모니터 상시 표출용: 30초마다 탭 자동 로테이션. 알람성 이벤트가 새로
+   오면 관련 탭으로 즉시 전환 후 60초 머문다. 사용자가 조작하면 60초 정지. */
+
+var _TV_ROTATE_MS = 30000;
+var _TV_HOLD_MS = 60000;
+var _tvOn = false;
+var _tvHoldUntil = 0;
+var _tvNextAt = 0;
+var _tvLastEvtSig = null;
+
+// 알람성 이벤트 종류 → 보여줄 탭
+var _TV_JUMP = {
+  port_down: "switch", switch_unreachable: "switch",
+  flapping: "switch", looping: "switch",
+  firewall_unreachable: "firewall", threshold_over: "firewall",
+  device_offline: "facility",
+};
+
+function tvMaybeJump(events) {
+  if (!_tvOn || !events || !events.length) return;
+  var top = events[0];
+  var sig = (top.ts || "") + "|" + (top.kind || "") + "|" + (top.message || "");
+  if (_tvLastEvtSig === null) { _tvLastEvtSig = sig; return; }   // 첫 로딩은 기준만
+  if (sig === _tvLastEvtSig) return;
+  _tvLastEvtSig = sig;
+  var tab = _TV_JUMP[top.kind];
+  if (!tab) return;
+  wallShowTab(tab);
+  _tvHoldUntil = Date.now() + _TV_HOLD_MS;
+  _tvNextAt = _tvHoldUntil + _TV_ROTATE_MS;
+}
+
+setInterval(function () {
+  if (!_tvOn || _editMode) return;
+  var now = Date.now();
+  if (now < _tvHoldUntil || now < _tvNextAt) return;
+  _tvNextAt = now + _TV_ROTATE_MS;
+  var i = _TAB_ORDER.indexOf(_wtab);
+  wallShowTab(_TAB_ORDER[(i + 1) % _TAB_ORDER.length]);
+}, 3000);
+
+// 사용자가 화면을 만지면 로테이션을 잠시 멈춘다(보던 화면이 넘어가면 불편)
+document.addEventListener("click", function (e) {
+  if (!_tvOn) return;
+  if (e.target.closest && e.target.closest("#wall-tv-btn")) return;
+  _tvHoldUntil = Date.now() + _TV_HOLD_MS;
+});
+
+(function initTvBtn() {
+  var nav = document.getElementById("wall-tabs");
+  if (!nav) return;
+  var b = document.createElement("button");
+  b.id = "wall-tv-btn";
+  b.className = "wall-tab wall-tab--edit";
+  b.textContent = "📺 TV 모드";
+  b.title = "탭 자동 로테이션(30초) + 알람 발생 시 해당 탭 자동 전환";
+  function apply() { b.classList.toggle("wall-tab--editing", _tvOn); }
+  b.addEventListener("click", function () {
+    _tvOn = !_tvOn;
+    localStorage.setItem("wall_tv_mode", _tvOn ? "1" : "0");
+    _tvNextAt = Date.now() + _TV_ROTATE_MS;
+    _tvHoldUntil = 0;
+    apply();
+  });
+  nav.appendChild(b);
+  _tvOn = localStorage.getItem("wall_tv_mode") === "1";
+  if (_tvOn) _tvNextAt = Date.now() + _TV_ROTATE_MS;
+  apply();
 })();
 
 refreshSeries();

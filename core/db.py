@@ -344,6 +344,19 @@ CREATE TABLE IF NOT EXISTS metrics_history (
 )
 """
 
+# 업링크 트래픽 이력 — 지표 폴러가 IF-MIB 64bit 카운터 델타로 계산한 bps 한 점씩.
+# 대상은 업링크 포트(uplinks_for) 위주(전 포트를 저장하면 폭주).
+CREATE_TRAFFIC_HISTORY_TABLE = """
+CREATE TABLE IF NOT EXISTS traffic_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    switch_id INTEGER NOT NULL,
+    port TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    in_bps INTEGER,
+    out_bps INTEGER
+)
+"""
+
 # 서버실 랙 배치 스냅샷 — 장비 삭제·재등록으로 랙 위치가 사라지지 않게 하는 보관본.
 # 키는 (kind, ip): 재등록하면 id는 바뀌지만 IP는 대개 유지된다.
 CREATE_RACK_LAYOUT_TABLE = """
@@ -671,6 +684,7 @@ def init_schema(db_path):
                 CREATE_DEVICE_ENV_TABLE,
                 CREATE_RACK_LAYOUT_TABLE,
                 CREATE_METRICS_HISTORY_TABLE,
+                CREATE_TRAFFIC_HISTORY_TABLE,
                 CREATE_PORT_STATE_TABLE,
                 CREATE_SERVERS_TABLE,
                 CREATE_PC_PROFILES_TABLE,
@@ -2148,6 +2162,47 @@ def get_metrics_series(db_path, kind, device_id=None, hours=24, limit=4000):
             return [dict(r) for r in conn.execute(q, args).fetchall()]
         except Exception:
             return []
+
+
+def save_traffic_points(db_path, rows):
+    """트래픽 점 일괄 기록 — rows=[(switch_id, port, in_bps, out_bps)].
+    폴러가 주기마다 부른다 — 실패해도 예외를 올리지 않는다."""
+    if not rows:
+        return
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.executemany(
+                    "INSERT INTO traffic_history (switch_id, port, ts, in_bps, out_bps) "
+                    "VALUES (?,?, datetime('now','localtime'), ?,?)",
+                    [(int(sid), str(p)[:80], int(i), int(o)) for sid, p, i, o in rows])
+            except Exception as e:
+                log_event("warning", "save_traffic_points_skipped", error=str(e)[:120])
+
+
+def get_traffic_series(db_path, hours=24, limit=8000):
+    """트래픽 시계열 → [{switch_id, port, ts, in_bps, out_bps}] (ts 오름차순)."""
+    with get_db(db_path) as conn:
+        try:
+            return [dict(r) for r in conn.execute(
+                "SELECT switch_id, port, ts, in_bps, out_bps FROM traffic_history "
+                "WHERE ts >= datetime('now','localtime', ?) ORDER BY ts LIMIT ?",
+                ("-%d hours" % int(hours), int(limit))).fetchall()]
+        except Exception:
+            return []
+
+
+def prune_traffic_history(db_path, days=30):
+    """보존기간 지난 트래픽 이력 삭제."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                cur = conn.execute(
+                    "DELETE FROM traffic_history WHERE ts < datetime('now','localtime', ?)",
+                    ("-%d days" % int(days),))
+                return cur.rowcount or 0
+            except Exception:
+                return 0
 
 
 def prune_metrics_history(db_path, days=30):

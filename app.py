@@ -3278,10 +3278,20 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                    for r in db.get_metrics_series(db_path, "facility", hours=hours)]
             ports = [[r["ts"], r["online"], r["total"]]
                      for r in db.get_metrics_series(db_path, "ports", hours=hours)]
+            # 업링크 트래픽 — "스위치명 포트" 단위 시리즈로 묶는다
+            traffic = {}
+            for r in db.get_traffic_series(db_path, hours=hours):
+                key = "%s:%s" % (r["switch_id"], r["port"])
+                t = traffic.setdefault(key, {
+                    "name": "%s %s" % (sw_names.get(r["switch_id"])
+                                       or ("#%s" % r["switch_id"]), r["port"]),
+                    "points": []})
+                t["points"].append([r["ts"], r["in_bps"], r["out_bps"]])
             return jsonify({"hours": hours,
                             "firewalls": by_dev("firewall", fw_names),
                             "switches": by_dev("switch", sw_names),
-                            "facility": fac, "ports": ports})
+                            "facility": fac, "ports": ports,
+                            "traffic": traffic})
         except Exception as e:
             log_event("error", "wall_series_error",
                       error=collector._sanitize_error_msg(str(e)))
@@ -4219,6 +4229,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "snmp_enabled": db.get_setting(db_path, "snmp_enabled", "1") != "0",
                 "metrics_poll_minutes": db.get_setting(db_path, "metrics_poll_minutes", "5"),
                 "status_poll_minutes": db.get_setting(db_path, "status_poll_minutes", "10"),
+                # 임계값 알람(방화벽 CPU/MEM %, 세션 수 — 0=끔)
+                "alert_cpu_pct": db.get_setting(db_path, "alert_cpu_pct", "80"),
+                "alert_mem_pct": db.get_setting(db_path, "alert_mem_pct", "80"),
+                "alert_sessions": db.get_setting(db_path, "alert_sessions", "0"),
                 "snmp_has_community": bool(
                     db.get_setting(db_path, "snmp_community_blob", "")),
             })
@@ -4286,6 +4300,15 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     db.set_setting(db_path, "status_poll_minutes", str(_sp))
                 except (TypeError, ValueError):
                     pass
+            # 임계값 알람 — %는 0~100, 세션은 0~10,000,000. 0=끔.
+            for _k, _hi in (("alert_cpu_pct", 100), ("alert_mem_pct", 100),
+                            ("alert_sessions", 10_000_000)):
+                if _k in data:
+                    try:
+                        db.set_setting(db_path, _k,
+                                       str(max(0, min(_hi, int(data.get(_k))))))
+                    except (TypeError, ValueError):
+                        pass
             # 빈 값은 '변경 없음'이다 — 화면이 저장된 커뮤니티를 되돌려주지 않으므로
             # 빈 값으로 덮어쓰면 다른 설정을 저장할 때마다 커뮤니티가 지워진다.
             comm = data.get("snmp_community")

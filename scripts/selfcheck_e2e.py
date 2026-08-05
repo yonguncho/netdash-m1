@@ -49,9 +49,15 @@ def wait_health(timeout=60):
 
 
 def seed(dbp):
-    """부분 수집 상태를 만든다 — 빈 화면·전부 정상 화면만 보면 결함이 숨는다."""
+    """부분 수집 상태를 만든다 — 빈 화면·전부 정상 화면만 보면 결함이 숨는다.
+
+    멱등: 이전 실행이 중간에 죽어 시드가 남아 있어도 지우고 다시 심는다
+    (실제로 검증 스크립트 잔재 때문에 UNIQUE 충돌로 죽은 적 있음)."""
     from core import db
     with db.get_db(dbp) as conn:
+        conn.execute("DELETE FROM firewalls WHERE name LIKE 'SC-FW-%'")
+        conn.execute("DELETE FROM servers WHERE name = 'SC-SRV'")
+        conn.execute("DELETE FROM traffic_history WHERE port = 'Gi1/0/48'")
         conn.execute("INSERT INTO firewalls (name, vendor, host, status) "
                      "VALUES ('SC-FW-OK','fortigate','10.99.0.1','done')")
         conn.execute("INSERT INTO firewalls (name, vendor, host, status) "
@@ -67,6 +73,17 @@ def seed(dbp):
         "license": [{"key": "ips", "name": "IPS", "status": "licensed",
                      "expires": "2027-01-01"}],
         "objects": {"address": 10, "total": 10}})
+    # 업링크 트래픽 시계열(v6.29) — 차트가 실데이터로 그려지는지 확인
+    sws = db.get_switches(dbp)
+    if sws:
+        sid = sws[0]["id"]
+        with db.get_db(dbp) as conn:
+            for i in range(24):
+                conn.execute(
+                    "INSERT INTO traffic_history (switch_id, port, ts, in_bps, out_bps) "
+                    "VALUES (?, 'Gi1/0/48', datetime('now','localtime', ?), ?, ?)",
+                    (sid, "-%d minutes" % (i * 5),
+                     40_000_000 + i * 1_000_000, 8_000_000 + i * 300_000))
     # 설비 + 서버(랙) — 서버실·설비 흐름용
     db.save_facility_hosts(dbp, [
         {"subnet": "10.99.1.0/24", "ip": "10.99.1.%d" % i, "mac": "sc:%02x" % i,
@@ -225,7 +242,46 @@ def main():
                         ok("위젯 숨김/복원")
                     else:
                         fail("숨김 후 '표시' 버튼이 없음")
+            # 드래그 순서(v6.29): 편집 모드에서 카드 두 장을 맞바꾸고 order 저장 확인
+            # (Playwright 마우스 드래그는 headless HTML5 DnD가 불안정 —
+            #  DragEvent를 직접 디스패치해 핸들러 경로를 검증한다)
+            dragged = pg.evaluate("""() => {
+                const grid = document.querySelector('#wtab-firewall .wgrid');
+                if (!grid) return 'no-grid';
+                const cards = grid.querySelectorAll(':scope > .wcard');
+                if (cards.length < 2) return 'few-cards';
+                const dt = new DataTransfer();
+                const ev = (type, el) => el.dispatchEvent(new DragEvent(type,
+                    {bubbles: true, cancelable: true, dataTransfer: dt}));
+                ev('dragstart', cards[0]);
+                ev('dragover', cards[1]);
+                ev('dragend', cards[0]);
+                return localStorage.getItem('wall_layout_v1') || '';
+            }""")
+            if '"order"' in (dragged or ""):
+                ok("위젯 드래그 순서 저장")
+            else:
+                fail("드래그 후 order가 저장되지 않음: %r" % str(dragged)[:60])
             pg.click("#wall-edit-btn")         # 편집 종료
+            pg.wait_for_timeout(400)
+            # TV 모드(v6.29): 토글 켬 → 상태 클래스 확인 → 끔(로테이션까진 안 기다림)
+            pg.click("#wall-tv-btn")
+            pg.wait_for_timeout(300)
+            tv = pg.query_selector("#wall-tv-btn.wall-tab--editing")
+            if tv:
+                ok("TV 모드 토글")
+            else:
+                fail("TV 모드 켠 상태 표시가 없음")
+            pg.click("#wall-tv-btn")           # 끔(다음 검사에 로테이션 간섭 방지)
+            pg.wait_for_timeout(300)
+            # 트래픽 위젯(v6.29): 스위치 탭에 카드가 있고 자리표시 or 차트가 있다
+            pg.click("[data-wtab='switch']")
+            pg.wait_for_timeout(400)
+            if pg.query_selector("#ch-sw-traffic"):
+                ok("업링크 트래픽 위젯 표시")
+            else:
+                fail("업링크 트래픽 위젯 없음")
+            pg.click("[data-wtab='firewall']")
             pg.wait_for_timeout(400)
             # 장비 칩 토글(전체 ↔ 개별)
             chip = pg.query_selector("[data-fwdev]:not([data-fwdev='all'])")

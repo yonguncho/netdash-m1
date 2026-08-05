@@ -1,7 +1,25 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.28.0 릴리스 완료 (게이트: pytest 1693 PASS + selfcheck PASS + 스크린샷 검토)
-**직전 릴리스**: v6.27.0 (4158bfb)
+**현재 버전**: v6.29.0 작업 완료 — 게이트 통과 후 릴리스 예정
+**직전 릴리스**: v6.28.0 (2af0455)
+
+## v6.29.0 — 사용자 승인 추가 기능 4건 (SNMP 연동 전제)
+
+1. **업링크 트래픽**: metrics_poller ④단계 — `_walk_traffic`(ifHCIn/OutOctets+ifName)
+   → `compute_bps`(델타·카운터 감소 폐기·첫 관측 기준선) → `traffic_history`
+   (업링크만, 단독 스위치는 바쁜 3개 폴백, 30일 보존). `/api/wall/series`에
+   traffic 키. wall.js `chartTraffic`(수신 실선/송신 점선, `_fmtBps`, 상위 8개).
+2. **임계값 알람**: `check_thresholds` — alert_cpu_pct/alert_mem_pct(기본 80)·
+   alert_sessions(기본 0=끔), threshold_over(warning)/threshold_clear(info),
+   히스테리시스 −5%p(세션 95%). ⚙설정 SNMP 섹션 입력 3개.
+3. **위젯 드래그 순서**: 편집 모드 draggable + dragover 미리보기, **CSS order
+   방식**(DOM 이동 없음 — 재렌더에도 유지), `wall_layout_v1`에 order 저장.
+4. **TV 모드**: `#wall-tv-btn`, 30초 로테이션(`wallShowTab` 추출), `_TV_JUMP`
+   알람 종류→탭 점프(60초 유지), 조작 시 60초 정지, localStorage `wall_tv_mode`.
+- 부수 수정: 탭 전환 시 renderSeriesCharts 재호출(숨김 탭 500px 폴백 폭 해소).
+- selfcheck: 드래그(합성 DragEvent — headless 마우스 DnD 불안정)·TV 토글·
+  트래픽 위젯 단계 추가 + **seed 멱등화**(잔재 UNIQUE 충돌로 죽은 적 있음).
+- 테스트 16건 `tests/test_traffic_tv_v6290.py` + test_db 스키마에 traffic_history.
 
 ## v6.28.0 — 10분 상태 감시: 포트 DOWN·설비 끊김
 

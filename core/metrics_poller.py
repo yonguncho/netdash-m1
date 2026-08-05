@@ -21,8 +21,21 @@ from . import db, utils
 DEFAULT_MINUTES = 5
 RETENTION_DAYS = 30
 
+# IF-MIB 64bit 트래픽 카운터(32bit ifIn/OutOctets는 1G에서 34초면 한 바퀴 돈다)
+_IF_HC_IN = "1.3.6.1.2.1.31.1.1.1.6"
+_IF_HC_OUT = "1.3.6.1.2.1.31.1.1.1.10"
+_IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"
+
 _thread = None
 _stop = threading.Event()
+
+# 직전 카운터 샘플 {(switch_id, port): (time.time(), in_octets, out_octets)}.
+# 메모리로 충분 — 재시작하면 첫 주기는 기준선만 잡고 다음 주기부터 bps가 나온다.
+_prev_traffic = {}
+
+# 임계값 상태 {(fw_id, metric): 초과 여부} — 같은 초과 상태에서 매 주기 재알람 금지.
+# 메모리라 재시작 후 여전히 초과면 한 번 다시 알린다(지속 중인 이상은 알리는 게 맞다).
+_over_state = {}
 
 
 def poll_minutes(db_path):
@@ -40,6 +53,137 @@ def _snmp_community(db_path):
         return collector._snmp_community_if_enabled(db_path)
     except Exception:
         return None
+
+
+# ── 트래픽(업링크 bps) ────────────────────────────────────────────
+
+def _walk_traffic(ip, community, budget=8.0):
+    """{포트이름: (in_octets, out_octets)} — 물리 포트만. 응답 없으면 예외."""
+    from .snmp_collect import _Session
+    from .status_monitor import _is_physical
+    sess = _Session(ip, community, budget=budget)
+    names = {}
+    for oid, val in sess.walk(_IF_NAME, max_rows=1024):
+        idx = oid.rsplit(".", 1)[1]
+        names[idx] = val.decode("utf-8", "replace") if isinstance(val, bytes) else str(val)
+    out = {}
+    for base, pos in ((_IF_HC_IN, 0), (_IF_HC_OUT, 1)):
+        for oid, val in sess.walk(base, max_rows=1024):
+            idx = oid.rsplit(".", 1)[1]
+            nm = (names.get(idx) or "").strip()
+            if not _is_physical(nm):
+                continue
+            cur = out.setdefault(nm[:80], [None, None])
+            try:
+                cur[pos] = int(val)
+            except (TypeError, ValueError):
+                pass
+    return {p: (v[0], v[1]) for p, v in out.items()
+            if v[0] is not None and v[1] is not None}
+
+
+def compute_bps(prev, cur, now):
+    """직전 샘플과 비교해 {포트: (in_bps, out_bps)}를 계산하고 prev를 갱신한다.
+
+    prev: {포트: (ts, in, out)} — 이 함수가 제자리 갱신.
+    카운터가 줄었으면(장비 재부팅·카운터 초기화) 그 포트는 이번 점을 버린다 —
+    음수 bps나 64bit 랩 계산으로 만든 거대한 가짜 스파이크보다 점 하나 빠지는 게 낫다.
+    """
+    bps = {}
+    for port, (ci, co) in cur.items():
+        old = prev.get(port)
+        prev[port] = (now, ci, co)
+        if not old:
+            continue                      # 첫 관측 — 기준선만
+        dt = now - old[0]
+        if dt <= 0:
+            continue
+        di, do = ci - old[1], co - old[2]
+        if di < 0 or do < 0:
+            continue                      # 재부팅/초기화 — 이번 점 버림
+        bps[port] = (int(di * 8 / dt), int(do * 8 / dt))
+    return bps
+
+
+def collect_traffic(db_path, community):
+    """전 스위치 업링크 트래픽 한 점씩. 반환: 기록한 점 수.
+
+    저장 대상은 업링크 포트(uplinks_for) — 전 포트를 저장하면 이력이 폭주한다.
+    업링크가 하나도 안 잡힌 스위치(단독 구성)는 이번 주기 가장 바쁜 포트 3개를
+    대신 저장해 화면이 비지 않게 한다.
+    """
+    try:
+        uplinks = db.uplinks_for(db_path)
+    except Exception:
+        uplinks = frozenset()
+    rows = []
+    for sw in db.get_switches(db_path):
+        ip, sid = sw.get("ip"), sw["id"]
+        if not ip:
+            continue
+        try:
+            cur = _walk_traffic(ip, community)
+        except Exception:
+            continue                      # SNMP 미지원/차단 — 조용히 건너뜀
+        if not cur:
+            continue
+        prev = _prev_traffic.setdefault(sid, {})
+        bps = compute_bps(prev, cur, time.time())
+        picked = {p: v for p, v in bps.items() if (sid, p.lower()) in uplinks}
+        if not picked and bps:
+            top = sorted(bps.items(), key=lambda kv: kv[1][0] + kv[1][1],
+                         reverse=True)[:3]
+            picked = dict(top)
+        for port, (ib, ob) in picked.items():
+            rows.append((sid, port, ib, ob))
+    db.save_traffic_points(db_path, rows)
+    return len(rows)
+
+
+# ── 임계값 알람 ───────────────────────────────────────────────────
+
+def _alert_limit(db_path, key, default):
+    try:
+        v = int(db.get_setting(db_path, key, str(default)))
+        return max(0, v)                  # 0 = 끔
+    except (TypeError, ValueError):
+        return default
+
+
+def check_thresholds(db_path, fw_id, name, cpu, mem, sessions):
+    """CPU/MEM/세션이 임계를 넘으면 threshold_over, 내려오면 threshold_clear.
+
+    해제는 임계-5%p(세션은 95%)에서 — 임계 근처에서 오르내리며 알람이
+    반복되는 것(플래핑)을 막는 히스테리시스. 반환: 발생 이벤트 수.
+    """
+    checks = [
+        ("cpu", cpu, _alert_limit(db_path, "alert_cpu_pct", 80), "%", 5),
+        ("mem", mem, _alert_limit(db_path, "alert_mem_pct", 80), "%", 5),
+        ("sessions", sessions, _alert_limit(db_path, "alert_sessions", 0), "", None),
+    ]
+    label_ko = {"cpu": "CPU", "mem": "메모리", "sessions": "세션"}
+    fired = 0
+    for metric, val, limit, unit, margin in checks:
+        if not limit or val is None:
+            continue
+        clear_at = limit - margin if margin is not None else int(limit * 0.95)
+        key = (fw_id, metric)
+        was = _over_state.get(key, False)
+        if not was and val > limit:
+            _over_state[key] = True
+            fired += 1
+            db.save_device_event(
+                db_path, "threshold_over", "warning", label=name,
+                message="%s %s 임계 초과: %s%s (임계 %s%s)"
+                        % (name, label_ko[metric], val, unit, limit, unit))
+        elif was and val <= clear_at:
+            _over_state[key] = False
+            fired += 1
+            db.save_device_event(
+                db_path, "threshold_clear", "info", label=name,
+                message="%s %s 정상 복귀: %s%s (임계 %s%s)"
+                        % (name, label_ko[metric], val, unit, limit, unit))
+    return fired
 
 
 def poll_once(db_path, demo_mode=False):
@@ -99,6 +243,11 @@ def poll_once(db_path, demo_mode=False):
                 db.save_metrics_point(db_path, "firewall", fw["id"],
                                       cpu=cpu, mem=mem, sessions=sess, temp_c=temp)
                 points += 1
+            try:
+                check_thresholds(db_path, fw["id"], fw.get("name") or fw["host"],
+                                 cpu, mem, sess)
+            except Exception:
+                pass
     except Exception as e:
         utils.log_event("warning", "metrics_poll_fw_error", error=str(e)[:120])
 
@@ -118,6 +267,12 @@ def poll_once(db_path, demo_mode=False):
                 continue
     except Exception as e:
         utils.log_event("warning", "metrics_poll_sw_error", error=str(e)[:120])
+
+    # ④ 업링크 트래픽(bps) — 첫 주기는 카운터 기준선만, 다음 주기부터 점이 쌓인다
+    try:
+        points += collect_traffic(db_path, community)
+    except Exception as e:
+        utils.log_event("warning", "metrics_poll_traffic_error", error=str(e)[:120])
 
     return points
 
@@ -141,6 +296,7 @@ def _loop(db_path, demo_mode):
         if time.monotonic() - last_prune > 86400:
             try:
                 removed = db.prune_metrics_history(db_path, RETENTION_DAYS)
+                removed += db.prune_traffic_history(db_path, RETENTION_DAYS)
                 if removed:
                     utils.log_event("info", "metrics_history_pruned", removed=removed)
             except Exception:

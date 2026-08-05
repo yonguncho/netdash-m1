@@ -319,3 +319,8 @@ body {
   color:#b9c7da; font-size:10.5px; padding:1px 8px; border-radius:6px; cursor:pointer; }
 .wtool:hover { color:#fff; border-color:#94a3b8; }
 .wcard--dim { opacity:.35; }
+
+/* v6.29 — 위젯 드래그 순서·TV 모드 */
+.wcard[draggable="true"] { cursor:grab; }
+.wcard--drag { opacity:.5; outline:2px dashed rgba(34,211,238,.6); cursor:grabbing; }
+#wall-tv-btn { margin-left:6px; }          /* 편집 버튼의 margin-left:auto 상속 해제 */
