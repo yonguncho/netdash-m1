@@ -10,6 +10,17 @@
 > 앱 코드·커밋 무관. DB는 5대 깨끗·위치 비움으로 복원, 백업 `netdash.db.bak_screenshot`.
 > 결과물: `shared/handoff/tool_posts/NetDash/`, 회신 `shared/commands/NetDash_cmd.done`+`.response`.
 
+## 릴리스 게이트 확장 (2026-08-05, 사용자 요구 — "네가 먼저 보고 고쳐라")
+
+pytest만으로 릴리스 금지. UI·동작 변경 릴리스는 반드시:
+① `python -m pytest tests/ -q` PASS
+② `python scripts/selfcheck_e2e.py` PASS — 실제 클릭(탭·상세보기·일괄수집
+   모달→실행·서버실 저장/업데이트·관제 탭/기간/팝업) + pageerror/console/
+   오류성 alert/undefined·NaN 검사
+③ `build/selfcheck/*.png` 직접 열어 UX 자기검토(사유 없는 누락·0/0·빈 카드 금지)
+새 화면 흐름을 만들면 selfcheck에 그 클릭 단계를 같이 추가한다.
+상세: 메모리 `netdash_release_gate_selfcheck`. 실장비 의존 항목만 사용자 확인 요청.
+
 ## 작업 중 (v6.27.0) — 라이선스 만료일 + 객체 수 (합의된 마지막 항목)
 
 - REST 확장: `_fetch_license`(monitor/license/status → parse_license_status:
