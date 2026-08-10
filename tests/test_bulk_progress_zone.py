@@ -240,7 +240,7 @@ def test_server_checkbox_and_switch_collect_ui():
 
 def test_facility_remark_column_and_settings_button():
     html = HTML.read_text(encoding="utf-8")
-    assert "<th>비고</th>" in html                 # 설비 비고 컬럼 신설
+    assert ">결과</th>" in html                   # v6.33: 비고 → 결과(설명은 진단 결과 팝업)
     assert 'id="btn-settings"' in html             # 상단 ⚙ 설정 버튼
     assert 'id="btn-auto-collect"' not in html     # 현황판 자동수집 버튼 제거
     js = APP_JS.read_text(encoding="utf-8")

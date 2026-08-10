@@ -1,7 +1,23 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.32.0 릴리스 완료 (2abe8d8 — pytest 1722 PASS + selfcheck PASS + 스모크 200)
-**직전 릴리스**: v6.31.0 (eca4e63)
+**현재 버전**: v6.33.0 작업 완료 — 게이트 통과 후 릴리스 예정
+**직전 릴리스**: v6.32.0 (2abe8d8)
+
+## v6.33.0 — UX 정리 6건 (사용자 지적)
+
+1. 라이선스 영어 통일: fortigate.py `_LIC_NAMES` → FortiGate GUI 표기(AntiVirus 등).
+2. 추이 일부만 보이는 원因 = SNMP 응답 장비만 지표 기록 → `#fw-series-note`
+   "추이 미표시 N대(SNMP 무응답): 이름들" (renderSeriesCharts에서 devices−series 차집합).
+3. TV 모드: 켜는 순간 다음 탭 즉시 전환 + `#wall-tv-ind` 표시등(wall.html).
+4. EOS/EoES: 목록 배지 제거(fwModelCell/fwVersionCell) → 상세 하단 "지원 수명주기"
+   섹션. 상세 API에 `_attach_env` 추가(lifecycle 실림).
+5. 설비 선택 삭제: `fac-check`/`fac-check-all` + `btn-fac-delete-sel` +
+   `POST /api/facility/delete-hosts` + `db.delete_facility_hosts`.
+6. 비고→결과: 요약 단어+[진단 결과] 버튼(data-remarks), explainFacility(ip, remarks)
+   가 설명+관측 근거 통합 팝업. exporter의 '비고' 컬럼(파일)은 유지.
+7. 빈 카드 슬림(`slimEmptyCards` — **차트 placeholder는 renderSeriesCharts가
+   나중에 넣으므로 차트 후 판정**, applyLayout 시점만 보면 항상 0건) + 여백 축소.
+- selfcheck [4.2] 설비 선택·진단 결과 + TV 즉시 전환 검증. 테스트 `test_ux_v6330.py`.
 
 ## v6.32.0 — 토폴로지 코어 초안·자동 연결·자동 정렬·검색
 

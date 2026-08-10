@@ -121,7 +121,8 @@ document.addEventListener("click", function (e) {
     case "terminal-fw": openTerminal(nid, "firewall"); break;
     case "delete-fw": deleteFirewall(nid); break;
     case "diagnose-server": diagnoseServer(nid); break;
-    case "explain-facility": explainFacility(id); break;   // id는 IP 문자열(정수 아님)
+    case "explain-facility":                               // id는 IP 문자열(정수 아님)
+      explainFacility(id, btn.getAttribute("data-remarks")); break;
     case "snmp-probe-fw": snmpProbeFirewall(nid); break;
     case "hw-detail":
       e.preventDefault();
@@ -2096,13 +2097,13 @@ function fwModelCell(f) {
   if (!f.fw_model) {
     return "<span class='cell-none' title='SSH 계정 또는 REST 토큰으로 수집하면 get system status에서 채워집니다'>-</span>";
   }
-  return escHtml(f.fw_model) + lifeBadge(f.lifecycle && f.lifecycle.hw);
+  // 수명주기(EOS/EoES) 배지는 상세 하단으로 옮겼다(사용자: 표가 어지럽다)
+  return escHtml(f.fw_model);
 }
 
 function fwVersionCell(f) {
   if (!f.fw_version) return "<span class='cell-none'>-</span>";
-  return "<code>" + escHtml(f.fw_version) + "</code>" +
-    lifeBadge(f.lifecycle && f.lifecycle.os);
+  return "<code>" + escHtml(f.fw_version) + "</code>";
 }
 
 // 온도 셀 — SNMP(ENTITY-SENSOR-MIB)로 읽은 최고 센서 온도.
@@ -2778,7 +2779,7 @@ function _renderFacilityRows() {
     if (!all.length) emptyMsg = "수집된 설비가 없습니다. '대역 수집(ping)'을 실행하세요.";
     else if (subnet || q) emptyMsg = "필터/검색 조건에 맞는 설비가 없습니다.";
     else emptyMsg = "직접 연결로 확인된 설비가 없습니다. ('직접 연결만' 해제 시 전체 표시)";
-    tbody.innerHTML = "<tr><td colspan=7 style='color:#64748b'>" + emptyMsg + "</td></tr>";
+    tbody.innerHTML = "<tr><td colspan=9 style='color:#64748b'>" + emptyMsg + "</td></tr>";
     return;
   }
   tbody.innerHTML = rows.map(function (h) {
@@ -2828,37 +2829,86 @@ function _renderFacilityRows() {
           (h.desc_port ? " " + h.desc_port : "") + " (스위치 설정 라벨 — 참고용)");
       }
     }
-    remarkCell = remarks.length
-      ? "<span style='font-size:12px;color:#64748b'>" + escHtml(remarks.join(" · ")) + "</span>"
-      : "<span style='color:#cbd5e1'>-</span>";
-    // 판정 근거 — "왜 이 스위치로 나오냐"를 장비에 직접 들어가 대조하지 않고
-    // 화면에서 확인할 수 있게. 판정에 쓰인 입력(MAC 관측 위치·포트별 MAC 수·
-    // 포트채널 멤버·CDP 이웃)을 그대로 보여준다.
-    remarkCell += " <button class='btn btn--ghost' style='font-size:11px;padding:2px 6px' " +
-      "title='이 판정에 쓰인 관측 데이터 보기' data-action='explain-facility' " +
-      "data-id='" + escHtml(h.ip) + "'>근거</button>";
+    // 결과 컬럼(구 '비고') — 설명을 표에 직접 늘어놓지 않는다(사용자: 어지럽다).
+    // 요약 단어 + [진단 결과] 버튼: 설명과 판정 근거(MAC 관측 위치·포트별 MAC 수·
+    // CDP 이웃)를 팝업 하나로 묶어 보여준다.
+    var resWord = !h.online
+      ? "<span style='color:#b91c1c;font-weight:600'>오프라인</span>"
+      : _facIsDirect(h) ? "<span style='color:#047857'>정상</span>"
+      : "<span style='color:#b45309'>확인 필요</span>";
+    remarkCell = resWord +
+      " <button class='btn btn--ghost' style='font-size:11px;padding:2px 6px' " +
+      "title='판정 설명과 관측 근거 보기' data-action='explain-facility' " +
+      "data-id='" + escHtml(h.ip) + "' data-remarks=\"" +
+      escHtml(remarks.join("\n")) + "\">진단 결과</button>";
     // 오프라인(연결 실패)은 행 배경(빨강) + 상태 배지로 신호.
     // 예전엔 배경색만 있어 다른 현황 화면(상태 배지)과 표기가 달랐다.
     var trStyle = h.online ? "" : " style='background:#fef2f2'";
-    return "<tr" + trStyle + "><td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
+    return "<tr" + trStyle + "><td><input type='checkbox' class='fac-check' " +
+      "data-subnet='" + escHtml(h.subnet || "") + "' data-ip='" + escHtml(h.ip) + "'></td>" +
+      "<td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
       "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
       portCell + "</td><td>" + descCell + "</td><td>" + reachBadge(!!h.online) + "</td><td>" +
       remarkCell + "</td></tr>";
   }).join("");
+  var ca = document.getElementById("fac-check-all");
+  if (ca) ca.checked = false;
+  _facSelUpdate();
 }
+
+// 설비 선택 삭제(v6.33) — 철거 장비·잘못 수집된 IP를 표에서 제거.
+// 다음 대역 수집에서 실제로 살아 있으면 다시 등록된다(수집이 진실의 원천).
+function _facSelUpdate() {
+  var n = document.querySelectorAll(".fac-check:checked").length;
+  var b = document.getElementById("btn-fac-delete-sel");
+  if (b) { b.textContent = "선택 삭제 (" + n + ")"; b.disabled = !n; }
+}
+document.addEventListener("change", function (e) {
+  var t = e.target;
+  if (t && t.id === "fac-check-all") {
+    document.querySelectorAll(".fac-check").forEach(function (c) { c.checked = t.checked; });
+    _facSelUpdate();
+  } else if (t && t.classList && t.classList.contains("fac-check")) {
+    _facSelUpdate();
+  }
+});
+(function initFacDeleteSel() {
+  var b = document.getElementById("btn-fac-delete-sel");
+  if (!b) return;
+  b.addEventListener("click", function () {
+    var items = Array.prototype.map.call(
+      document.querySelectorAll(".fac-check:checked"), function (c) {
+        return { subnet: c.getAttribute("data-subnet"), ip: c.getAttribute("data-ip") };
+      });
+    if (!items.length) return;
+    if (!confirm("선택한 설비 " + items.length + "대를 목록에서 삭제할까요?\n" +
+                 "(다음 대역 수집에서 살아 있으면 다시 나타납니다)")) return;
+    fetch("/api/facility/delete-hosts", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) loadFacility();
+        else alert("삭제 실패: " + (d.error || ""));
+      })
+      .catch(function () { alert("서버 오류"); });
+  });
+})();
 
 // 설비 1건의 연결 스위치 판정 근거 — 진단 팝업(modal-diagnose) 재사용.
 // textContent로만 넣는다(HTML 아님) — 스위치 이름·포트 설명에 <>가 섞여도 안전.
-function explainFacility(ip) {
+function explainFacility(ip, remarks) {
   var out = document.getElementById("diag-result");
   openModal("modal-diagnose");
-  if (out) out.textContent = "판정 근거 조회 중...";
+  var head = remarks ? "── 진단 결과 ──\n" + remarks + "\n\n" : "";
+  if (out) out.textContent = head + "판정 근거 조회 중...";
   fetch("/api/facility/explain?ip=" + encodeURIComponent(ip))
     .then(function (r) { return r.json(); })
     .then(function (res) {
       if (!out) return;
       if (!res.ok) { out.textContent = "조회 실패: " + (res.error || ""); return; }
       var L = [];
+      if (head) L.push(head.trimEnd() + "\n");
       L.push("설비 " + res.ip + "  MAC " + (res.mac || "-"));
       var s = res.stored || {};
       L.push("");
@@ -3379,6 +3429,23 @@ function fwStatusHtml(fw, env) {
   if (env.updated) {
     H += "<p style='font-size:11px;color:#64748b;margin-top:6px'>수집: " +
       escHtml(env.updated) + (env.source ? " (" + escHtml(env.source) + ")" : "") + "</p>";
+  }
+  // 지원 수명주기(EOS/EoES) — 목록 컬럼 배지를 걷어낸 대신 상세에서 상세히
+  var lc = fw.lifecycle || {};
+  var lcRows = [["모델", fw.fw_model, lc.hw], ["FortiOS", fw.fw_version, lc.os]]
+    .filter(function (r) { return r[2] && r[2].status && r[2].status !== "unknown"; });
+  if (lcRows.length) {
+    H += "<h4 style='margin:14px 0 6px'>지원 수명주기 (EOS/EoES)</h4>" +
+      "<table class='data-table' style='max-width:560px'><tbody>" +
+      lcRows.map(function (r) {
+        var st = r[2].status === "ok"
+          ? " <span class='status-badge status-badge--ok'>지원 중</span>"
+          : lifeBadge(r[2]);
+        return "<tr><td style='width:150px;color:#475569'>" + escHtml(r[0]) +
+          "</td><td><b>" + escHtml(r[1] || "-") + "</b>" + st +
+          (r[2].message ? "<div style='font-size:12px;color:#64748b;margin-top:2px'>" +
+            escHtml(r[2].message) + "</div>" : "") + "</td></tr>";
+      }).join("") + "</tbody></table>";
   }
   return H;
 }

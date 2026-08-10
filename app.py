@@ -3526,6 +3526,32 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
         with _diag_all_lock:
             return jsonify(dict(_diag_all))
 
+    @app.route("/api/facility/delete-hosts", methods=["POST"])
+    @rate_limit("facility_delete_hosts", max_requests=30, window_seconds=60)
+    def facility_delete_hosts():
+        """선택 설비 삭제. body: {items:[{subnet, ip}...]} — 철거 장비·오수집 정리용.
+        다음 대역 수집에서 실제로 응답하면 다시 등록된다(수집이 진실의 원천)."""
+        try:
+            data = request.get_json(silent=True) or {}
+            items = data.get("items")
+            if not isinstance(items, list) or not items or len(items) > 2000:
+                return jsonify({"ok": False, "error": "items must be a list (1~2000)"}), 400
+            pairs = []
+            for it in items:
+                if not isinstance(it, dict):
+                    return jsonify({"ok": False, "error": "invalid item"}), 400
+                ip = _sv_text(it.get("ip"), 64)
+                if not ip:
+                    return jsonify({"ok": False, "error": "ip required"}), 400
+                pairs.append((_sv_text(it.get("subnet"), 64), ip))
+            deleted = db.delete_facility_hosts(db_path, pairs)
+            log_event("info", "facility_hosts_deleted", count=deleted)
+            return jsonify({"ok": True, "deleted": deleted})
+        except Exception as e:
+            log_event("error", "facility_delete_hosts_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
     @app.route("/api/facility/delete-subnet", methods=["POST"])
     @rate_limit("facility_delete_subnet", max_requests=30, window_seconds=60)
     def facility_delete_subnet():
@@ -4460,6 +4486,9 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 return jsonify({"error": "not found"}), 404
             from core import manufacturer
             manufacturer.annotate([fw])
+            # 모델·버전·수명주기(EOS/EoES)를 상세에도 — 목록 컬럼 배지를 걷어내고
+            # 상세 하단에서 보여주기로 했다(사용자 지정).
+            _attach_env(db_path, [fw], "firewall")
             return jsonify({
                 "firewall": fw,
                 "interfaces": db.get_firewall_interfaces(db_path, fid),

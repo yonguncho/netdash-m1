@@ -207,6 +207,37 @@ def main():
             ok("배치 저장/업데이트 클릭")
             text_problems(pg, "서버실")
 
+            # ── 설비: 선택 체크 → 삭제 버튼 활성 + 진단 결과 팝업(v6.33) ──
+            print("[4.2] 설비 선택·진단 결과")
+            pg.click(".tab-nav__btn[data-tab='facility']")
+            pg.wait_for_timeout(900)
+            chk = pg.query_selector(".fac-check")
+            if chk:
+                chk.click()
+                pg.wait_for_timeout(300)
+                btn = pg.query_selector("#btn-fac-delete-sel:not([disabled])")
+                if btn and "1" in (btn.inner_text() or ""):
+                    ok("설비 선택 → 삭제 버튼 활성(1)")
+                else:
+                    fail("설비 체크 후 선택 삭제 버튼이 활성화되지 않음")
+                chk.click()               # 해제(실삭제는 하지 않는다)
+                pg.wait_for_timeout(200)
+            else:
+                fail("설비 선택 체크박스 없음")
+            diag = pg.query_selector("[data-action='explain-facility']")
+            if diag:
+                if "진단 결과" not in (diag.inner_text() or ""):
+                    fail("설비 결과 컬럼 버튼 문구가 '진단 결과'가 아님")
+                diag.click()
+                pg.wait_for_timeout(900)
+                if pg.query_selector("#modal-diagnose:not(.hidden)"):
+                    ok("진단 결과 팝업 열림")
+                    pg.evaluate("() => closeModal && closeModal('modal-diagnose')")
+                else:
+                    fail("진단 결과 팝업이 열리지 않음")
+            else:
+                fail("진단 결과 버튼 없음")
+
             # ── 토폴로지: 자동 연결·자동 정렬·검색(v6.32) ──
             print("[4.5] 토폴로지 자동 연결·정렬·검색")
             pg.click(".tab-nav__btn[data-tab='topology']")
@@ -316,13 +347,17 @@ def main():
             pg.click("#wall-edit-btn")         # 편집 종료
             pg.wait_for_timeout(400)
             # TV 모드(v6.29): 토글 켬 → 상태 클래스 확인 → 끔(로테이션까진 안 기다림)
+            tab_before = pg.evaluate("() => _wtab")
             pg.click("#wall-tv-btn")
             pg.wait_for_timeout(300)
             tv = pg.query_selector("#wall-tv-btn.wall-tab--editing")
-            if tv:
-                ok("TV 모드 토글")
+            ind = pg.query_selector("#wall-tv-ind:not([style*='display: none'])")
+            tab_after = pg.evaluate("() => _wtab")
+            if tv and ind and tab_after != tab_before:
+                ok("TV 모드 토글(즉시 탭 전환 %s→%s + 표시등)" % (tab_before, tab_after))
             else:
-                fail("TV 모드 켠 상태 표시가 없음")
+                fail("TV 모드 즉각 피드백 없음(btn=%s ind=%s tab %s→%s)"
+                     % (bool(tv), bool(ind), tab_before, tab_after))
             pg.click("#wall-tv-btn")           # 끔(다음 검사에 로테이션 간섭 방지)
             pg.wait_for_timeout(300)
             # 트래픽 위젯(v6.29): 스위치 탭에 카드가 있고 자리표시 or 차트가 있다

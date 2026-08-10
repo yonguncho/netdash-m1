@@ -29,7 +29,7 @@ def test_parse_license_status_shapes():
     lic = fgw.parse_license_status(_LIC_RESULTS)
     by = {x["key"]: x for x in lic}
     assert "web_filtering" not in by, "미보유 구독은 잡음 — 제외"
-    assert by["forticare_hardware"]["name"] == "FortiCare 하드웨어"
+    assert by["forticare_hardware"]["name"] == "FortiCare Hardware", "영어 통일(사용자 지정)"
     assert by["antivirus"]["expires"] == datetime.date.fromtimestamp(1750000000).isoformat()
     assert by["ips"]["status"] == "expired"
     assert len(lic) == 5    # forticare 2 + antivirus + ips + appctrl
@@ -107,11 +107,11 @@ def test_wallstats_license_levels(temp_db):
     today = datetime.date.today()
     db.save_device_metrics(temp_db, "firewall", fid, {
         "license": [
-            {"key": "a", "name": "안티바이러스", "status": "licensed",
+            {"key": "a", "name": "AntiVirus", "status": "licensed",
              "expires": (today + datetime.timedelta(days=400)).isoformat()},
             {"key": "b", "name": "IPS", "status": "licensed",
              "expires": (today + datetime.timedelta(days=30)).isoformat()},
-            {"key": "c", "name": "웹 필터", "status": "expired",
+            {"key": "c", "name": "Web Filtering", "status": "expired",
              "expires": (today - datetime.timedelta(days=10)).isoformat()},
         ],
         "objects": {"address": 120, "addrgrp": 8, "service": 40, "vip": 3,

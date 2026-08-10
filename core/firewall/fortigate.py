@@ -314,12 +314,14 @@ def _fetch_sysinfo(s, base, host):
         return None
 
 
-# 라이선스 구독 키 → 한글 표기(모르는 키는 원문 그대로)
+# 라이선스 구독 키 → 표기명. FortiGate GUI와 같은 영어로 통일(사용자 지정 —
+# 한글 번역명은 장비 화면과 대조가 안 된다). 모르는 키는 원문 그대로.
 _LIC_NAMES = {
-    "antivirus": "안티바이러스", "ips": "IPS", "web_filtering": "웹 필터",
-    "antispam": "안티스팸", "appctrl": "앱 컨트롤", "outbreak_prevention": "아웃브레이크 방지",
-    "forticare_hardware": "FortiCare 하드웨어", "forticare_enhanced": "FortiCare 지원",
-    "security_rating": "보안 등급", "sdwan_network_monitor": "SD-WAN 모니터",
+    "antivirus": "AntiVirus", "ips": "IPS", "web_filtering": "Web Filtering",
+    "antispam": "AntiSpam", "appctrl": "Application Control",
+    "outbreak_prevention": "Outbreak Prevention",
+    "forticare_hardware": "FortiCare Hardware", "forticare_enhanced": "FortiCare Support",
+    "security_rating": "Security Rating", "sdwan_network_monitor": "SD-WAN Monitor",
     "vdom": "VDOM", "fortiguard": "FortiGuard",
 }
 

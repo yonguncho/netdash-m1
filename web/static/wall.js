@@ -674,6 +674,7 @@ function renderFirewallTab(f) {
     "<div class='wcard wcard--4'><h3>MEM 추이" +
       "<span class='hint'>" + (_seriesHours >= 168 ? "7일" : _seriesHours + "시간") +
       "</span></h3><div id='ch-fw-mem' class='wchartbox'></div></div>" +
+    "<div id='fw-series-note' class='wnote' style='display:none'></div>" +
     "</div>" +
     (cards ? "<div class='fwrow'>" + cards + "</div>" : "") +
     "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + "</div>";
@@ -1029,6 +1030,18 @@ function _fwSeriesFiltered() {
   return out;
 }
 
+/* 빈 카드 슬림화(v6.33) — 수집 전이라 안내문만 있는 카드가 큰 상자로 자리를
+   차지하면 여백만 늘어난다(사용자 지적). 차트 placeholder는 renderSeriesCharts가
+   렌더 후에 넣으므로, 차트까지 그린 뒤 다시 판정해야 한다. */
+function slimEmptyCards() {
+  document.querySelectorAll(".wall-pane .wcard").forEach(function (card) {
+    var hasData = card.querySelector(
+      "canvas, table, .wrank__row, .wmeter, .dsvg, .uplot");
+    card.classList.toggle("wcard--empty",
+      !hasData && !!card.querySelector(".wnone"));
+  });
+}
+
 function renderSeriesCharts() {
   if (!_SERIES) return;
   _destroyPlots();
@@ -1036,6 +1049,22 @@ function renderSeriesCharts() {
   chartMulti("ch-fw-sess", fwS, function (pt) { return pt[3]; }, "");
   chartMulti("ch-fw-cpu", fwS, function (pt) { return pt[1]; }, "%");
   chartMulti("ch-fw-mem", fwS, function (pt) { return pt[2]; }, "%");
+  var note = document.getElementById("fw-series-note");
+  if (note) {
+    var have = {};
+    Object.keys(_SERIES.firewalls || {}).forEach(function (k) { have[k] = true; });
+    var sel = _fwDevSel();
+    var miss = ((_WSTAT && _WSTAT.firewalls && _WSTAT.firewalls.devices) || [])
+      .filter(function (d) { return !have[String(d.id)] &&
+                                    (!sel || sel.has(String(d.id))); })
+      .map(function (d) { return d.name; });
+    note.style.display = miss.length ? "" : "none";
+    note.innerHTML = miss.length
+      ? "추이 미표시 " + miss.length + "대 — SNMP 응답이 없어 지표가 안 쌓입니다: <b>" +
+        esc(miss.join(", ")) + "</b> (설정의 SNMP 커뮤니티 · 장비의 허용 호스트 확인)"
+      : "";
+  }
+  slimEmptyCards();
   chartMulti("ch-sw-temp", _SERIES.switches,
              function (pt) { return pt[4]; }, "°C");
   chartTraffic("ch-sw-traffic", _SERIES.traffic);
@@ -1281,13 +1310,19 @@ document.addEventListener("click", function (e) {
   b.className = "wall-tab wall-tab--edit";
   b.innerHTML = ico("monitor") + " TV 모드";
   b.title = "탭 자동 로테이션(30초) + 알람 발생 시 해당 탭 자동 전환";
-  function apply() { b.classList.toggle("wall-tab--editing", _tvOn); }
+  function apply() {
+    b.classList.toggle("wall-tab--editing", _tvOn);
+    var ind = document.getElementById("wall-tv-ind");
+    if (ind) ind.style.display = _tvOn ? "" : "none";
+  }
   b.addEventListener("click", function () {
     _tvOn = !_tvOn;
     localStorage.setItem("wall_tv_mode", _tvOn ? "1" : "0");
     _tvNextAt = Date.now() + _TV_ROTATE_MS;
     _tvHoldUntil = 0;
     apply();
+    // 즉각 피드백(사용자: "화면상 달라지는 게 없다") — 켜는 순간 다음 탭으로
+    if (_tvOn) wallShowTab(_TAB_ORDER[(_TAB_ORDER.indexOf(_wtab) + 1) % _TAB_ORDER.length]);
   });
   nav.appendChild(b);
   _tvOn = localStorage.getItem("wall_tv_mode") === "1";

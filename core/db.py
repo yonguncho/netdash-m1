@@ -1845,6 +1845,29 @@ def _drop_registered_devices(db_path, hosts):
     return kept, len(rows) - len(kept)
 
 
+def delete_facility_hosts(db_path, pairs):
+    """선택 설비 삭제 — pairs=[(subnet, ip)]. subnet이 비면 ip만으로 지운다.
+    반환: 삭제 건수."""
+    if not pairs:
+        return 0
+    deleted = 0
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                for subnet, ip in pairs:
+                    if subnet:
+                        cur = conn.execute(
+                            "DELETE FROM facility_hosts WHERE subnet=? AND ip=?",
+                            (subnet, ip))
+                    else:
+                        cur = conn.execute(
+                            "DELETE FROM facility_hosts WHERE ip=?", (ip,))
+                    deleted += cur.rowcount or 0
+            except Exception as e:
+                log_event("warning", "delete_facility_hosts_skipped", error=str(e)[:120])
+    return deleted
+
+
 def purge_registered_devices_from_facility(db_path):
     """이미 저장돼 있던 등록 장비 행을 설비 현황에서 제거. 반환: 삭제 건수.
 
