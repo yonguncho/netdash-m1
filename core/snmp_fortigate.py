@@ -13,6 +13,8 @@ FortiGate는 표준 MIB(IF-MIB·ENTITY-SENSOR-MIB 등)과 Fortinet 전용 MIB을
   ② `probe()`로 장비가 실제로 무엇을 주는지 원문을 볼 수 있게 한다
      — 화면에서 확인한 뒤에 파싱을 확정하는 방식(사양 수집 진단과 같은 패턴)
 """
+import re
+
 from . import utils
 from .snmp_collect import _Session, SnmpError, SnmpClosed, SnmpSilent  # noqa: F401
 
@@ -24,6 +26,8 @@ _SYS_NAME = "1.3.6.1.2.1.1.5.0"
 # Fortinet 전용 — fgSystemInfo
 _FG = "1.3.6.1.4.1.12356.101"
 _FG_VERSION = _FG + ".4.1.1.0"
+# ENTITY-MIB 모델명(첫 섀시 항목) — SSH·REST가 안 되는 장비(특히 6.x)의 모델 폴백
+_ENT_MODEL = "1.3.6.1.2.1.47.1.1.1.1.13.1"
 _FG_CPU = _FG + ".4.1.3.0"           # %
 _FG_MEM = _FG + ".4.1.4.0"           # %
 _FG_MEM_CAP = _FG + ".4.1.5.0"       # KB
@@ -76,11 +80,28 @@ def pct_level(p):
     return "normal"
 
 
+def norm_fgt_model(raw):
+    """SNMP 모델 문자열 정규화 — 'FGT_1000D'/'FGT-1000D' → 'FortiGate-1000D'.
+
+    sysDescr 폴백은 모델처럼 보일 때만 인정한다(잡다한 설명문 오인 방지).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"(?i)^(fortigate|fortiwifi|fgt|fwf)[-_\s]*([\w-]+)", s)
+    if not m:
+        return ""
+    fam = {"fgt": "FortiGate", "fwf": "FortiWiFi"}.get(
+        m.group(1).lower(), m.group(1)[:1].upper() + m.group(1)[1:].lower())
+    fam = {"Fortigate": "FortiGate", "Fortiwifi": "FortiWiFi"}.get(fam, fam)
+    return ("%s-%s" % (fam, m.group(2).upper()))[:60]
+
+
 def _scalars(sess):
     """스칼라 GET을 한 번에 — 지원하지 않는 OID는 값이 없거나 빠진다."""
     want = [_SYS_DESCR, _SYS_UPTIME, _SYS_NAME, _FG_VERSION, _FG_CPU, _FG_MEM,
             _FG_MEM_CAP, _FG_DISK_USED, _FG_DISK_CAP, _FG_SESSIONS,
-            _FG_HA_MODE, _FG_HA_GROUP]
+            _FG_HA_MODE, _FG_HA_GROUP, _ENT_MODEL]
     got = {}
     # 한 PDU에 다 넣으면 하나만 없어도 장비에 따라 통째로 noSuchName이 온다.
     # 4개씩 나눠 부분 실패를 격리한다.
@@ -138,6 +159,9 @@ def collect_health(ip, community="public", timeout=2.0, budget=20.0):
     ver = _text(g.get(_FG_VERSION))
     if ver:
         out["version"] = ver[:100]
+    model = norm_fgt_model(_text(g.get(_ENT_MODEL)) or _text(g.get(_SYS_DESCR)))
+    if model:
+        out["model"] = model
     name = _text(g.get(_SYS_NAME))
     if name:
         out["hostname"] = name.split(".")[0][:100]

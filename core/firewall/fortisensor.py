@@ -121,11 +121,79 @@ def _ssh_run(host, username, password, commands, port=22, timeout=20):
                 out[cmd] = stdout.read().decode("utf-8", errors="replace")
             except Exception:
                 out[cmd] = ""
+        # FortiOS 6.x는 SSH exec 채널을 지원하지 않는다(요청 거부 또는 빈 출력,
+        # 7.0부터 지원) — 전 명령이 비면 대화형 셸로 다시 실행한다.
+        # 실증상: 6.x 장비만 모델명·센서·성능이 통째로 비었다(사용자 신고).
+        if not any((v or "").strip() for v in out.values()):
+            out = _shell_run(client, commands, timeout=timeout)
     finally:
         try:
             client.close()
         except Exception:
             pass
+    return out
+
+
+def _shell_run(client, commands, timeout=20):
+    """대화형 셸로 명령 실행 — exec 채널이 없는 FortiOS 6.x용 폴백.
+
+    6.x 기본 콘솔은 출력이 길면 --More--로 멈춘다 → 스페이스로 계속 넘긴다.
+    프롬프트 감지 대신 '출력이 잠잠해지면 다음 명령' 방식 — 프롬프트 문자열은
+    호스트네임·VDOM에 따라 달라 패턴을 못 믿는다.
+    """
+    import time as _t
+    chan = client.invoke_shell(width=200, height=1000)
+    chan.settimeout(1.0)
+
+    def _drain(quiet_s=1.0, max_s=timeout):
+        buf = b""
+        quiet = 0.0
+        start = _t.monotonic()
+        while _t.monotonic() - start < max_s:
+            got = False
+            try:
+                while chan.recv_ready():
+                    buf += chan.recv(65535)
+                    got = True
+            except Exception:
+                break
+            if got:
+                quiet = 0.0
+                if b"--More--" in buf[-160:]:
+                    try:
+                        chan.send(" ")
+                    except Exception:
+                        break
+            else:
+                _t.sleep(0.1)
+                quiet += 0.1
+                if quiet >= quiet_s and buf:
+                    break
+                if quiet >= max(2.0, quiet_s):
+                    break
+        return buf
+
+    _drain(0.8, 5)                    # 로그인 배너·프롬프트 소진
+    out = {}
+    for cmd in commands:
+        try:
+            chan.send(cmd + "\n")
+        except Exception:
+            out[cmd] = ""
+            continue
+        txt = _drain().decode("utf-8", "replace")
+        txt = txt.replace("\r\n", "\n").replace("\r", "\n")
+        # --More-- 잔재와 그 지우개(백스페이스·ANSI 제어열) 제거
+        txt = txt.replace("--More--", "")
+        txt = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|\x08+", "", txt)
+        lines = txt.split("\n")
+        if lines and cmd in lines[0]:
+            lines = lines[1:]         # 명령 에코 제거
+        out[cmd] = "\n".join(lines)
+    try:
+        chan.close()
+    except Exception:
+        pass
     return out
 
 

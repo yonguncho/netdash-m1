@@ -485,8 +485,21 @@ def collect_fw_metrics_snmp(db_path, fw):
         # 응답은 왔는데 핵심 지표가 없다 = SNMP는 되지만 이 MIB이 막혀 있다.
         utils.log_event("info", "fw_metrics_snmp_empty", firewall_id=fw.get("id"))
         return None
-    db.save_device_metrics(db_path, "firewall", fw["id"], m, source="snmp")
-    return m
+    # 통째로 덮으면 SSH·REST가 채운 model·vpn·policy·license가 지워진다
+    # (같은 metrics_json을 세 경로가 쓴다 — dual-path). 읽어서 합쳐 쓴다.
+    # 표기 기준(사용자 지정)은 SSH get sys status라 model 계열은 빈 곳만 채운다.
+    try:
+        cur = (db.get_device_env(db_path, "firewall", fw["id"]) or {}).get("metrics") or {}
+    except Exception:
+        cur = {}
+    for k, v in m.items():
+        if k in ("model", "version", "serial", "hostname"):
+            if not cur.get(k):
+                cur[k] = v
+        else:
+            cur[k] = v
+    db.save_device_metrics(db_path, "firewall", fw["id"], cur, source="snmp")
+    return cur
 
 
 def save_firewall_result(db_path, fw, result, cred=None):
