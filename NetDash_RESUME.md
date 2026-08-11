@@ -1,6 +1,26 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.34.1 릴리스 완료 (a221ac1 — pytest 1751 PASS + selfcheck PASS + 스모크 200)
+**현재 버전**: v6.35.1 릴리스 완료 (81ac624 — pytest 1759 PASS + selfcheck PASS + 스모크 200)
+
+## v6.35.1 — L4 SLB VIP 설비 제외 (사용자 신고)
+
+- `db.slb_vip_ips`: 수집된 config에서 VIP 추출(`vip`/`virtual-ip`/`virtual ip
+  address`, 60초 캐시 `_vip_cache`). rip·설명문 IP 오제외 방지.
+- `_drop_registered_devices` + purge에 VIP 합류 — 저장 차단 + 재매칭 청소.
+- 사용자 안내: L4 config 수집 후 설비 ↻ 새로고침(재매칭)으로 기존 VIP 행 제거.
+- 테스트 4건 `tests/test_slb_vip_v6351.py`.
+
+## v6.35.0 — 설비 표기 정리·진단 팝업 확대·스위치 온도 컬럼 제거·관제 NOC 정돈
+
+- 설비: `facStateBadge` 3단계(연결됨/확인 필요/끊김 — 직접 미확인이 '연결됨'으로
+  보이던 것 수정), 결과 컬럼은 [진단 결과] 버튼만. 진단 팝업 940px·14px.
+- 스위치 표 온도 컬럼 제거(tempCell(sw) 삭제 — 상세·관제 추이로).
+- 관제 NOC 정돈(Grafana BP·SolarWinds NOC·FortiAnalyzer 조사): 상단 타일 →
+  슬림 스탯 바, hint→ⓘ 툴팁(`tidyHints`), 수집 전 카드 숨김+`.wempty-note`
+  (편집 모드에선 표시), 긴 목록 표준 높이 `wcard--tall`(내부 스크롤).
+  Figma는 View 시트라 파일 생성 불가 → 코드 목업+스크린샷 검증으로 진행.
+
+## v6.34.1 — SNMP 폴링 정책 확정 (구 헤더)
 
 ## v6.34.1 — SNMP 폴링 정책 확정 (사용자)
 
