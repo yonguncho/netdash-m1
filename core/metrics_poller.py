@@ -48,15 +48,15 @@ def poll_minutes(db_path):
 
 
 def bg_snmp_enabled(db_path):
-    """백그라운드 주기 SNMP 폴링 허용 여부 — **기본 꺼짐**(사용자: 장비 부하 우려).
+    """백그라운드 주기 SNMP 폴링 허용 여부 — 기본 켜짐.
 
-    꺼져 있으면: 지표는 DB 집계 점(설비·포트 수)만 쌓이고, FortiGate 부하·
-    스위치 온도·업링크 트래픽·임계값 알람·포트 DOWN 감시(SNMP)는 멈춘다.
-    수집 버튼·자동 수집(하루 2회)·진단·SNMP 확인 등 사용자가 시킨 조회는
-    이 설정과 무관하게 동작한다.
+    사용자 확정 정책(2026-08-11): **스위치·방화벽은 주기 SNMP+ping 체크 허용,
+    설비는 ping만.** 주기 SNMP의 대상은 원래부터 switches·firewalls 테이블뿐이고
+    설비(facility_hosts)에는 SNMP를 보내지 않는다 — 설비는 status_monitor의
+    ICMP ping이 전부다. 그래도 부하가 걱정되면 이 설정으로 끌 수 있다.
     """
     try:
-        return db.get_setting(db_path, "snmp_bg_poll_enabled", "0") == "1"
+        return db.get_setting(db_path, "snmp_bg_poll_enabled", "1") == "1"
     except Exception:
         return False
 

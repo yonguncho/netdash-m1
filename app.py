@@ -4276,7 +4276,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 # SNMP 사양 수집(SSH가 닫힌 리눅스·UNIX 서버용) — 커뮤니티 값은
                 # 자격증명이므로 내려주지 않고 '설정됨' 여부만 알린다.
                 "snmp_enabled": db.get_setting(db_path, "snmp_enabled", "1") != "0",
-                "snmp_bg_poll_enabled": db.get_setting(db_path, "snmp_bg_poll_enabled", "0") == "1",
+                "snmp_bg_poll_enabled": db.get_setting(db_path, "snmp_bg_poll_enabled", "1") == "1",
                 "metrics_poll_minutes": db.get_setting(db_path, "metrics_poll_minutes", "5"),
                 "status_poll_minutes": db.get_setting(db_path, "status_poll_minutes", "10"),
                 # 임계값 알람(방화벽 CPU/MEM %, 세션 수 — 0=끔)
