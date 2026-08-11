@@ -36,7 +36,10 @@ def test_all_four_screens_use_shared_status_badge():
     """화면마다 다른 배지·이모지를 쓰던 것을 하나로 모았다."""
     # 스위치·서버·방화벽 표 + 설비(연결 상태)
     assert APPJS.count("statusBadge(") >= 4, "일부 화면이 여전히 자체 표기를 쓴다"
-    assert "reachBadge(!!h.online)" in APPJS, "설비 표에 상태 배지가 없다"
+    # v6.35: 설비 상태는 3단계(연결됨/확인 필요/끊김) — facStateBadge가
+    # 내부에서 reachBadge를 재사용한다(표기 통일 유지).
+    assert "facStateBadge(h)" in APPJS, "설비 표에 상태 배지가 없다"
+    assert "reachBadge(true)" in APPJS and "reachBadge(false)" in APPJS
 
 
 def test_no_emoji_in_status_cells():

@@ -728,6 +728,7 @@ function renderStats() {
   renderSwitchTab(_WSTAT.switches);
   renderFirewallTab(_WSTAT.firewalls);
   renderFacilityTab(_WSTAT.facility);
+  tidyHints();
   // 탭 HTML을 다시 그리면 차트 컨테이너도 비워진다 — 통계 갱신(30초)마다
   // 차트를 다시 그리지 않으면 처음 1분 안에 그래프가 사라진다(실화면에서 재현).
   if (typeof applyLayout === "function") applyLayout();   // 차트보다 먼저(숨김 반영)
@@ -1034,11 +1035,49 @@ function _fwSeriesFiltered() {
    차지하면 여백만 늘어난다(사용자 지적). 차트 placeholder는 renderSeriesCharts가
    렌더 후에 넣으므로, 차트까지 그린 뒤 다시 판정해야 한다. */
 function slimEmptyCards() {
-  document.querySelectorAll(".wall-pane .wcard").forEach(function (card) {
-    var hasData = card.querySelector(
-      "canvas, table, .wrank__row, .wmeter, .dsvg, .uplot");
-    card.classList.toggle("wcard--empty",
-      !hasData && !!card.querySelector(".wnone"));
+  ["summary", "switch", "firewall", "facility"].forEach(function (tab) {
+    var pane = document.getElementById("wtab-" + tab);
+    if (!pane) return;
+    var hiddenN = 0;
+    pane.querySelectorAll(".wcard").forEach(function (card) {
+      var hasData = card.querySelector(
+        "canvas, table, .wrank__row, .wmeter, .dsvg, .uplot");
+      var empty = !hasData && !!card.querySelector(".wnone");
+      card.classList.toggle("wcard--empty", empty);
+      if (empty) {
+        // 수집 전 카드는 아예 숨긴다(NOC 원칙: 안 쓰는 패널은 치운다).
+        // 편집 모드에서는 흐리게 보여 존재를 알 수 있다.
+        if (_editMode) { card.style.display = ""; }
+        else { card.style.display = "none"; hiddenN++; }
+      }
+      // 목록이 긴 카드는 표준 높이로 눌러 행 정렬 유지(내부 스크롤)
+      card.classList.toggle("wcard--tall", !empty && card.scrollHeight > 470);
+    });
+    var note = pane.querySelector(".wempty-note");
+    if (hiddenN && !_editMode) {
+      if (!note) {
+        note = document.createElement("div");
+        note.className = "wempty-note";
+        pane.appendChild(note);
+      }
+      note.textContent = "수집 전 위젯 " + hiddenN +
+        "개 숨김 — 수집·SNMP 연동 후 자동 표시됩니다";
+      note.style.display = "";
+    } else if (note) {
+      note.style.display = "none";
+    }
+  });
+}
+
+/* 카드 제목의 긴 설명(.hint)을 ⓘ 툴팁으로 접는다 — 화면 텍스트 최소화
+   (패널당 질문 하나 원칙). 마우스를 올리면 원문 설명이 그대로 보인다. */
+function tidyHints() {
+  document.querySelectorAll(".wall-pane h3 .hint").forEach(function (h) {
+    var i = document.createElement("span");
+    i.className = "winfo";
+    i.title = h.textContent || "";
+    i.textContent = "?";
+    h.replaceWith(i);
   });
 }
 

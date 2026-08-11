@@ -2172,7 +2172,7 @@ function renderSwitchTable(switches) {
         : "<span class='cell-none' title='이 버전으로 한 번 재수집하면 자동으로 채워집니다'>-</span>") + "</td><td>" +
       (sw.serial ? "<code style='font-size:11px'>" + escHtml(sw.serial) + "</code>"
         : "<span class='cell-none' title='재수집하면 show version/inventory에서 자동으로 채워집니다'>-</span>") + "</td><td>" +
-      locCell + "</td><td>" + tempCell(sw) + "</td><td>" +
+      locCell + "</td><td>" +
       statusBadge(sw.status, sw.last_error) + "</td><td>" +
       alertBadge(sw.alert) +
       "</td><td>" + fmtTime(sw.last_collected) + "</td>" +
@@ -2738,6 +2738,15 @@ function _facMatchesSearch(h, q) {
   return (h.mac || "").toLowerCase().indexOf(ql) >= 0;
 }
 
+// 설비 상태 3단계 — 응답이 있어도 접속 지점(액세스 스위치·포트)이 미확인이면
+// '연결됨'이 아니라 '확인 필요'(사용자 지적: 직접 연결 미확인인데 연결됨으로 보임).
+function facStateBadge(h) {
+  if (!h.online) return reachBadge(false);
+  if (_facIsDirect(h)) return reachBadge(true);
+  return "<span class='status-badge' style='background:#fef3c7;color:#b45309' " +
+    "title='응답은 있으나 접속 지점(액세스 스위치·포트) 미확인 — [진단 결과]에서 사유 확인'>확인 필요</span>";
+}
+
 function _renderFacilityRows() {
   var tbody = document.getElementById("facility-table-body");
   if (!tbody) return;
@@ -2831,15 +2840,9 @@ function _renderFacilityRows() {
           (h.desc_port ? " " + h.desc_port : "") + " (스위치 설정 라벨 — 참고용)");
       }
     }
-    // 결과 컬럼(구 '비고') — 설명을 표에 직접 늘어놓지 않는다(사용자: 어지럽다).
-    // 요약 단어 + [진단 결과] 버튼: 설명과 판정 근거(MAC 관측 위치·포트별 MAC 수·
-    // CDP 이웃)를 팝업 하나로 묶어 보여준다.
-    var resWord = !h.online
-      ? "<span style='color:#b91c1c;font-weight:600'>오프라인</span>"
-      : _facIsDirect(h) ? "<span style='color:#047857'>정상</span>"
-      : "<span style='color:#b45309'>확인 필요</span>";
-    remarkCell = resWord +
-      " <button class='btn btn--ghost' style='font-size:11px;padding:2px 6px' " +
+    // 결과 컬럼 — [진단 결과] 버튼만(사용자: 요약 단어까지 있으면 지저분하다.
+    // 판정 요약은 '상태' 컬럼의 3단계 배지가 담당한다).
+    remarkCell = "<button class='btn btn--ghost' style='font-size:11px;padding:2px 6px' " +
       "title='판정 설명과 관측 근거 보기' data-action='explain-facility' " +
       "data-id='" + escHtml(h.ip) + "' data-remarks=\"" +
       escHtml(remarks.join("\n")) + "\">진단 결과</button>";
@@ -2850,7 +2853,7 @@ function _renderFacilityRows() {
       "data-subnet='" + escHtml(h.subnet || "") + "' data-ip='" + escHtml(h.ip) + "'></td>" +
       "<td>" + escHtml(h.subnet || "-") + "</td><td><code>" + escHtml(h.ip) + "</code></td>" +
       "<td><code>" + escHtml(h.mac || "-") + "</code></td><td>" + swCell + "</td><td>" +
-      portCell + "</td><td>" + descCell + "</td><td>" + reachBadge(!!h.online) + "</td><td>" +
+      portCell + "</td><td>" + descCell + "</td><td>" + facStateBadge(h) + "</td><td>" +
       remarkCell + "</td></tr>";
   }).join("");
   var ca = document.getElementById("fac-check-all");

@@ -229,10 +229,10 @@ def test_ui_has_temperature_column():
     js = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (root / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     assert "function tempCell" in js
-    # v6.25.0: 방화벽 표에서 온도 컬럼 제거(사용자 지시 — 통계는 관제에서만).
-    # 온도 컬럼은 이제 스위치 표에만 있다.
-    assert "tempCell(sw)" in js
-    assert html.count("<th title=\"SNMP로 읽은 최고 센서 온도") == 1
+    # v6.25.0: 방화벽 표 온도 제거 → v6.35.0: 스위치 표에서도 제거(사용자 지시).
+    # 온도는 상세보기(detail-env)와 관제 온도 추이에서만 본다.
+    assert "tempCell(sw)" not in js
+    assert html.count("<th title=\"SNMP로 읽은 최고 센서 온도") == 0
 
 
 def test_detail_shows_sensor_list():
