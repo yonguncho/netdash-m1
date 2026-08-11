@@ -1825,8 +1825,52 @@ def registered_device_ips(db_path):
     return ips
 
 
+_vip_cache = {}                 # {str(db_path): (monotonic, frozenset)} — 60초 TTL
+_VIP_TTL = 60.0
+
+# L4 설정에서 VIP 정의를 뽑는 패턴 — '주소가 그 줄의 값'인 확실한 문법만 인정
+# (ARP·설명문 속 IP를 오인하면 실제 설비를 잘못 제외한다):
+#   Alteon /cfg/dump:  /c/slb/virt N 블록의 "vip 10.92.140.88"
+#   Piolink 등:        "virtual-ip 10.92.140.88"
+#   Cisco 계열 SLB:    "virtual ip address 10.92.140.88"
+_VIP_PATTERNS = (
+    r"(?m)^\s*vip\s+((?:\d{1,3}\.){3}\d{1,3})\b",
+    r"(?m)^\s*virtual-ip\s+((?:\d{1,3}\.){3}\d{1,3})\b",
+    r"(?m)^\s*virtual\s+ip\s+address\s+((?:\d{1,3}\.){3}\d{1,3})\b",
+)
+
+
+def slb_vip_ips(db_path):
+    """L4 스위치(SLB)의 VIP IP 집합 — 수집된 최신 config에서 추출(60초 캐시).
+
+    사용자 지적: 설비 대역을 스캔하면 L4의 SLB VIP가 ping에 응답해 설비로
+    잡히고, 실체(포트에 물린 장비)가 없으니 '연결 안 됨'으로 목록을 오염시킨다.
+    VIP는 장비가 아니라 주소다 — 설비 현황 대상이 아니다.
+    """
+    import re as _re
+    import time as _t
+    key = str(db_path)
+    ent = _vip_cache.get(key)
+    now = _t.monotonic()
+    if ent and now - ent[0] < _VIP_TTL:
+        return ent[1]
+    vips = set()
+    try:
+        for content in get_latest_configs(db_path).values():
+            if not content:
+                continue
+            for pat in _VIP_PATTERNS:
+                vips.update(_re.findall(pat, content))
+    except Exception:
+        pass
+    out = frozenset(vips)
+    _vip_cache[key] = (now, out)
+    return out
+
+
 def _drop_registered_devices(db_path, hosts):
-    """설비로 저장하면 안 되는 등록 장비를 걸러낸다. 반환: (남길 목록, 제외 수).
+    """설비로 저장하면 안 되는 IP를 걸러낸다 — 등록 장비 + L4 SLB VIP.
+    반환: (남길 목록, 제외 수).
 
     쓰기 함수가 둘(save_facility_hosts / replace_facility_subnet)이라 양쪽 다
     이걸 거치게 한다 — 화면에서 거르면 세 곳(설비·관제·엑셀)을 챙겨야 하고
@@ -1836,7 +1880,7 @@ def _drop_registered_devices(db_path, hosts):
     if not rows:
         return rows, 0
     try:
-        known = registered_device_ips(db_path)
+        known = set(registered_device_ips(db_path)) | set(slb_vip_ips(db_path))
     except Exception:
         return rows, 0
     if not known:
@@ -1869,12 +1913,12 @@ def delete_facility_hosts(db_path, pairs):
 
 
 def purge_registered_devices_from_facility(db_path):
-    """이미 저장돼 있던 등록 장비 행을 설비 현황에서 제거. 반환: 삭제 건수.
+    """이미 저장돼 있던 등록 장비·SLB VIP 행을 설비 현황에서 제거. 반환: 삭제 건수.
 
     저장 시점 필터만 두면 예전에 수집된 행이 그대로 남는다(로직만 고치고
     저장값은 안 고치는 실수를 반복하지 않기 위해 재매칭에서 함께 호출한다).
     """
-    known = registered_device_ips(db_path)
+    known = set(registered_device_ips(db_path)) | set(slb_vip_ips(db_path))
     if not known:
         return 0
     with _db_lock:
