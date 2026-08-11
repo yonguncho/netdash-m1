@@ -1,6 +1,17 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.33.2 릴리스 완료 (1c8f101 — pytest 1742 PASS + selfcheck PASS + 스모크 200)
+**현재 버전**: v6.34.0 릴리스 완료 (49285e0 — pytest 1749 PASS + selfcheck PASS + 스모크 200)
+
+## v6.34.0 — 백그라운드 SNMP 자동 폴링 기본 꺼짐 (사용자: 장비 부하)
+
+- `metrics_poller.bg_snmp_enabled(db_path)` 게이트 — 설정 `snmp_bg_poll_enabled`
+  **기본 "0"**. 꺼짐: 지표 폴러 SNMP 구간(FG 부하·스위치 온도)·트래픽 walk·
+  status_monitor 포트 walk·임계값 알람 전부 중단. 유지: 설비 ping(ICMP),
+  DB 집계 점, 수동 수집/진단/SNMP 확인/자동 수집 예약.
+- ⚙설정 SNMP 섹션 `ac-snmp-bg` 토글. `/api/wall/series`에 `bg_snmp` 플래그 —
+  관제 추이 안내가 '무응답'과 '폴링 꺼짐'을 구분해 표시.
+- 기존 폴러 테스트 3곳은 setting "1"로 켜고 검증. 신규 7건
+  `tests/test_bg_snmp_v6340.py`(꺼짐 상태 SNMP 호출 0회 보장).
 
 ## v6.33.2 — FortiOS 6.x 모델명 미수집 (사용자 신고, 3중 원인)
 
