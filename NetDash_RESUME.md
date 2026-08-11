@@ -1,6 +1,14 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.34.0 릴리스 완료 (49285e0 — pytest 1749 PASS + selfcheck PASS + 스모크 200)
+**현재 버전**: v6.34.1 릴리스 완료 (a221ac1 — pytest 1751 PASS + selfcheck PASS + 스모크 200)
+
+## v6.34.1 — SNMP 폴링 정책 확정 (사용자)
+
+- **정책: 스위치·방화벽 = 주기 SNMP+ping 허용(bg 기본 '1' 복원), 설비 = ping만**
+  (check_facility SNMP 금지 — inspect.getsource 회귀 테스트).
+- 마스터 'SNMP 수집 사용'(snmp_enabled)이 전체 on/off — 모든 경로가
+  _snmp_community_if_enabled 경유 확인, off 시 SNMP 0회 테스트.
+  장비 쪽 SNMP 설정 전엔 마스터를 꺼두라는 취지로 라벨·툴팁 정비.
 
 ## v6.34.0 — 백그라운드 SNMP 자동 폴링 기본 꺼짐 (사용자: 장비 부하)
 
