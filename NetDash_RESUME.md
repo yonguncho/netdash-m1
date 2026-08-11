@@ -1,6 +1,20 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.33.1 릴리스 완료 (91b1680 — pytest 1734 PASS + selfcheck PASS + 스모크 200)
+**현재 버전**: v6.33.2 릴리스 완료 (1c8f101 — pytest 1742 PASS + selfcheck PASS + 스모크 200)
+
+## v6.33.2 — FortiOS 6.x 모델명 미수집 (사용자 신고, 3중 원인)
+
+- **6.x는 SSH exec 채널 미지원**(7.0부터 지원) → get system status·센서·성능
+  배치가 전부 빈 출력. `fortisensor._shell_run` 대화형 셸 폴백(--More-- 스페이스,
+  ·ANSI 제거, 명령 에코 제거, '잠잠해지면 다음' 방식 — 프롬프트 패턴 안 믿음).
+  exec가 하나라도 출력을 주면 폴백 안 탐(7.x 빠른 경로).
+- SNMP 모델: `_ENT_MODEL`(ENTITY-MIB .47.1.1.1.1.13.1) + sysDescr 폴백,
+  `norm_fgt_model`(FGT_→FortiGate-). 모델 형태일 때만 인정.
+- `collect_fw_metrics_snmp` 통째 덮어쓰기 → 병합(model/version/serial/hostname은
+  빈 곳만 — SSH 표기 기준 보존). **dual-path: 같은 metrics_json을 SSH/REST/SNMP
+  세 경로가 쓴다 — 한 경로의 전체 덮어쓰기가 다른 경로 결과를 지운다.**
+- 테스트 9건 `tests/test_fw6x_model_v6332.py`(FakeChan --More-- 재현 포함).
+- ⏳ 실장비 확인 대기: 6.x 방화벽 수집 재실행 시 모델·버전 채워지는지.
 
 ## v6.33.1 — 방화벽 상세 빈 화면 수정 (사용자 신고)
 
