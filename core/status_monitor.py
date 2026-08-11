@@ -200,8 +200,11 @@ def poll_once(db_path):
     """한 주기 — (포트다운, 포트복구, 설비끊김, 설비복구, 스킵대역)."""
     community = None
     try:
-        from . import collector
-        community = collector._snmp_community_if_enabled(db_path)
+        # 포트 감시(SNMP walk)도 백그라운드 폴링 게이트를 따른다 — 설비 직접
+        # ping(ICMP)은 SNMP가 아니고 가벼워서 유지(사용자가 요청한 10분 감시).
+        from . import collector, metrics_poller
+        if metrics_poller.bg_snmp_enabled(db_path):
+            community = collector._snmp_community_if_enabled(db_path)
     except Exception:
         pass
     pd = pu = 0

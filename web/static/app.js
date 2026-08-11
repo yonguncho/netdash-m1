@@ -188,6 +188,7 @@ function _applyLocFilter(list, inputId) {
       _setVal("ac-retention", d.retention_days || "90");
       _setVal("ac-timezone", d.display_timezone || "America/New_York");
       _setChk("ac-snmp-enabled", d.snmp_enabled !== false);
+      _setChk("ac-snmp-bg", d.snmp_bg_poll_enabled === true);
       _setVal("ac-metrics-minutes", d.metrics_poll_minutes || "5");
       _setVal("ac-status-minutes", d.status_poll_minutes || "10");
       _setVal("ac-alert-cpu", d.alert_cpu_pct != null ? d.alert_cpu_pct : "80");
@@ -268,6 +269,7 @@ function _applyLocFilter(list, inputId) {
       retention_days: _val("ac-retention", "90"),
       display_timezone: _val("ac-timezone", "America/New_York"),
       snmp_enabled: _chk("ac-snmp-enabled"),
+      snmp_bg_poll_enabled: _chk("ac-snmp-bg"),
       metrics_poll_minutes: _val("ac-metrics-minutes", "5"),
       status_poll_minutes: _val("ac-status-minutes", "10"),
       alert_cpu_pct: _val("ac-alert-cpu", "80"),

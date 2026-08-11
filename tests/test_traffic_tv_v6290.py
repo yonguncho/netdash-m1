@@ -143,6 +143,7 @@ def test_threshold_disabled_by_zero(temp_db):
 
 def test_threshold_wired_into_poll(temp_db, monkeypatch):
     """폴러 경로에서 실제로 호출되는지 — 지표 저장과 같은 주기."""
+    db.set_setting(temp_db, "snmp_bg_poll_enabled", "1")   # v6.34: 기본 꺼짐
     with db.get_db(temp_db) as conn:
         conn.execute("INSERT INTO firewalls (name, vendor, host) VALUES "
                      "('FW-P','fortigate','10.0.0.9')")

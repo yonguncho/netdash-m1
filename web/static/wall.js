@@ -1058,11 +1058,18 @@ function renderSeriesCharts() {
       .filter(function (d) { return !have[String(d.id)] &&
                                     (!sel || sel.has(String(d.id))); })
       .map(function (d) { return d.name; });
-    note.style.display = miss.length ? "" : "none";
-    note.innerHTML = miss.length
-      ? "추이 미표시 " + miss.length + "대 — SNMP 응답이 없어 지표가 안 쌓입니다: <b>" +
-        esc(miss.join(", ")) + "</b> (설정의 SNMP 커뮤니티 · 장비의 허용 호스트 확인)"
-      : "";
+    if (_SERIES.bg_snmp === false) {
+      // 폴링 자체가 꺼져 있으면 '무응답'이 아니다 — 정확한 사유와 켜는 곳 안내
+      note.style.display = "";
+      note.innerHTML = "백그라운드 SNMP 폴링이 꺼져 있어 추이가 쌓이지 않습니다 " +
+        "(기본 꺼짐 — 본 화면 설정 &gt; SNMP &gt; 백그라운드 자동 폴링에서 켤 수 있습니다)";
+    } else {
+      note.style.display = miss.length ? "" : "none";
+      note.innerHTML = miss.length
+        ? "추이 미표시 " + miss.length + "대 — SNMP 응답이 없어 지표가 안 쌓입니다: <b>" +
+          esc(miss.join(", ")) + "</b> (설정의 SNMP 커뮤니티 · 장비의 허용 호스트 확인)"
+        : "";
+    }
   }
   slimEmptyCards();
   chartMulti("ch-sw-temp", _SERIES.switches,

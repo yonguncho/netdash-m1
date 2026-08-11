@@ -47,6 +47,20 @@ def poll_minutes(db_path):
         return DEFAULT_MINUTES
 
 
+def bg_snmp_enabled(db_path):
+    """백그라운드 주기 SNMP 폴링 허용 여부 — **기본 꺼짐**(사용자: 장비 부하 우려).
+
+    꺼져 있으면: 지표는 DB 집계 점(설비·포트 수)만 쌓이고, FortiGate 부하·
+    스위치 온도·업링크 트래픽·임계값 알람·포트 DOWN 감시(SNMP)는 멈춘다.
+    수집 버튼·자동 수집(하루 2회)·진단·SNMP 확인 등 사용자가 시킨 조회는
+    이 설정과 무관하게 동작한다.
+    """
+    try:
+        return db.get_setting(db_path, "snmp_bg_poll_enabled", "0") == "1"
+    except Exception:
+        return False
+
+
 def _snmp_community(db_path):
     try:
         from . import collector
@@ -218,6 +232,10 @@ def poll_once(db_path, demo_mode=False):
     if demo_mode:
         return points
 
+    # 주기 SNMP는 명시적으로 켠 경우에만 — 툴을 켜두는 것만으로 장비에
+    # 5분마다 쿼리가 나가면 안 된다(사용자 지시).
+    if not bg_snmp_enabled(db_path):
+        return points
     community = _snmp_community(db_path)
     if not community:
         return points

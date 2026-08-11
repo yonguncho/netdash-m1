@@ -3307,11 +3307,14 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                                        or ("#%s" % r["switch_id"]), r["port"]),
                     "points": []})
                 t["points"].append([r["ts"], r["in_bps"], r["out_bps"]])
+            from core import metrics_poller as _mp
             return jsonify({"hours": hours,
                             "firewalls": by_dev("firewall", fw_names),
                             "switches": by_dev("switch", sw_names),
                             "facility": fac, "ports": ports,
-                            "traffic": traffic})
+                            "traffic": traffic,
+                            # 관제가 "왜 추이가 안 쌓이는지"를 정확히 안내하기 위함
+                            "bg_snmp": _mp.bg_snmp_enabled(db_path)})
         except Exception as e:
             log_event("error", "wall_series_error",
                       error=collector._sanitize_error_msg(str(e)))
@@ -4273,6 +4276,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 # SNMP 사양 수집(SSH가 닫힌 리눅스·UNIX 서버용) — 커뮤니티 값은
                 # 자격증명이므로 내려주지 않고 '설정됨' 여부만 알린다.
                 "snmp_enabled": db.get_setting(db_path, "snmp_enabled", "1") != "0",
+                "snmp_bg_poll_enabled": db.get_setting(db_path, "snmp_bg_poll_enabled", "0") == "1",
                 "metrics_poll_minutes": db.get_setting(db_path, "metrics_poll_minutes", "5"),
                 "status_poll_minutes": db.get_setting(db_path, "status_poll_minutes", "10"),
                 # 임계값 알람(방화벽 CPU/MEM %, 세션 수 — 0=끔)
@@ -4332,6 +4336,10 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # SNMP 사양 수집 on/off + 커뮤니티(암호화 저장, 빈 값이면 기존 값 유지)
             db.set_setting(db_path, "snmp_enabled",
                            "1" if data.get("snmp_enabled", True) else "0")
+            # 백그라운드 SNMP 폴링(지표·트래픽·포트 감시) — 기본 꺼짐(장비 부하)
+            if "snmp_bg_poll_enabled" in data:
+                db.set_setting(db_path, "snmp_bg_poll_enabled",
+                               "1" if data.get("snmp_bg_poll_enabled") else "0")
             # 지표 기록 주기(분) — 0=끔, 1~1440. 다음 주기부터 폴러가 새 값을 읽는다.
             if "metrics_poll_minutes" in data:
                 try:

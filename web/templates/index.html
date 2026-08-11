@@ -653,6 +653,7 @@
         <div class="ac-section">
           <div class="ac-section__title">📡 SNMP <span style="font-weight:400;color:#94a3b8">(서버 사양 · 스위치/방화벽 온도 · FortiGate 부하 공용)</span></div>
           <label class="ac-toggle"><input id="ac-snmp-enabled" type="checkbox"> SNMP 수집 사용 (161/UDP 읽기 전용)</label>
+          <label class="ac-toggle" title="켜면 지표 기록·업링크 트래픽·포트 DOWN 감시가 주기적으로 SNMP를 조회합니다. 끄면 수집 버튼·자동 수집 때만 조회합니다"><input id="ac-snmp-bg" type="checkbox"> 백그라운드 자동 폴링 (기본 꺼짐 — 주기 조회로 장비에 부하를 줄 수 있음)</label>
           <div class="field-row" style="margin-top:8px">
             <div style="flex:1"><label>SNMP 커뮤니티 <span style="color:#94a3b8">(장비에 설정된 값과 같아야 합니다 · 비우면 기존 값 유지, 미설정 시 public)</span></label>
               <input id="ac-snmp-community" type="password" autocomplete="new-password" placeholder="public"></div>

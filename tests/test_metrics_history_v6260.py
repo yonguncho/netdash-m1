@@ -68,6 +68,7 @@ def test_poll_once_records_db_aggregates_without_snmp(temp_db, monkeypatch):
 
 
 def test_poll_once_records_firewall_snmp(temp_db, monkeypatch):
+    db.set_setting(temp_db, "snmp_bg_poll_enabled", "1")   # v6.34: 기본 꺼짐
     with db.get_db(temp_db) as conn:
         conn.execute("INSERT INTO firewalls (name, vendor, host) VALUES "
                      "('FW','fortigate','10.0.0.9')")
@@ -86,6 +87,7 @@ def test_poll_once_records_firewall_snmp(temp_db, monkeypatch):
 
 def test_poll_once_survives_dead_device(temp_db, monkeypatch):
     """장비 하나가 죽어도 나머지는 기록된다 — 폴러 필수 성질."""
+    db.set_setting(temp_db, "snmp_bg_poll_enabled", "1")   # v6.34: 기본 꺼짐
     with db.get_db(temp_db) as conn:
         conn.execute("INSERT INTO firewalls (name, vendor, host) VALUES "
                      "('FW-A','fortigate','10.0.0.1')")
