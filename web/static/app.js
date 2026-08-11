@@ -3306,6 +3306,7 @@ function showFirewallDetail(fid) {
         " — 장비 상태</h3>" + envHtml +
         "<h3 style='margin:16px 0 8px'>인터페이스</h3>" + ifHtml +
         "<h3 style='margin:16px 0 8px'>ARP (연결된 IP)</h3>" + arpHtml;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
     })
     .catch(function(e) { console.error("firewall detail:", e); });
 }
@@ -3314,13 +3315,13 @@ function showFirewallDetail(fid) {
 function fwStatusHtml(fw, env) {
   env = env || {};
   var m = env.metrics || {};
-  if (!m.cpu_pct && !m.sessions && !m.vpn && !m.policy && !m.sensors && !env.max_temp_c) {
-    return "<p style='color:#64748b'>수집된 상태 정보가 없습니다. " +
-      "SNMP 커뮤니티(설정)와 SSH 계정을 지정한 뒤 이 방화벽을 수집하면 채워집니다.</p>";
-  }
+  // 부하 지표가 있는지(모델·버전만 있어도 상세는 그린다 — 예전엔 여기서 조기
+  // 반환해 SSH로 모델만 수집된 방화벽의 상세가 통째로 비어 보였다)
+  var hasLoad = (m.cpu_pct !== undefined) || (m.sessions !== undefined) ||
+    m.vpn || m.policy || m.sensors || env.max_temp_c;
   var H = "";
   // 부하
-  H += "<div style='max-width:420px'>" +
+  if (hasLoad) H += "<div style='max-width:420px'>" +
     fwBar("CPU", m.cpu_pct === undefined ? null : m.cpu_pct) +
     fwBar("MEM", m.mem_pct === undefined ? null : m.mem_pct) +
     (m.disk_absent
@@ -3329,8 +3330,9 @@ function fwStatusHtml(fw, env) {
       : fwBar("DISK", m.disk_pct === undefined ? null : m.disk_pct)) + "</div>";
 
   var facts = [];
+  if (fw.fw_model) facts.push(["모델", fw.fw_model]);
   if (m.sessions !== undefined) facts.push(["동시 세션", Number(m.sessions).toLocaleString()]);
-  if (m.version) facts.push(["펌웨어", m.version]);
+  if (m.version || fw.fw_version) facts.push(["펌웨어", m.version || fw.fw_version]);
   if (m.uptime_sec) facts.push(["업타임", Math.floor(m.uptime_sec / 86400) + "일"]);
   if (m.ha_mode) facts.push(["HA", m.ha_mode + (m.ha_group ? " (" + m.ha_group + ")" : "")]);
   var vpn = m.vpn || {};
@@ -3446,6 +3448,14 @@ function fwStatusHtml(fw, env) {
           (r[2].message ? "<div style='font-size:12px;color:#64748b;margin-top:2px'>" +
             escHtml(r[2].message) + "</div>" : "") + "</td></tr>";
       }).join("") + "</tbody></table>";
+  }
+  if (!H) {
+    return "<p style='color:#64748b'>수집된 상태 정보가 없습니다. " +
+      "SNMP 커뮤니티(설정)와 SSH 계정을 지정한 뒤 이 방화벽을 수집하면 채워집니다.</p>";
+  }
+  if (!hasLoad) {
+    H = "<p style='color:#64748b;margin:0 0 8px'>부하·세션 지표는 아직 수집 전 " +
+      "(SNMP 커뮤니티 또는 SSH/REST 수집 시 채워집니다) — 수집된 정보만 표시합니다.</p>" + H;
   }
   return H;
 }
