@@ -6,7 +6,7 @@
 빌드로 교체(SHA256 = dist 빌드 = GitHub 자산, 구버전은 `.old` 보존). 배포 config.yaml
 그대로 프로덕션 기동 스모크 `/`·`/wall` 200 확인 후 종료. **남은 현장 단계(사용자,
 폐쇄망)**: 새 exe 반입 → L4 config 수집 확인(없으면 1회 수집) → 설비 ↻ 새로고침(재매칭).
-gh CLI 인증 401 만료 — 다음 릴리스 전 `gh auth login` 필요.
+gh CLI 인증은 2026-08-12 디바이스 플로우로 재발급 완료(keyring, repo·workflow 스코프) — push 정상.
 
 ## v6.35.1 — L4 SLB VIP 설비 제외 (사용자 신고)
 
