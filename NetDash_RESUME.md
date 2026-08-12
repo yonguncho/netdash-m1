@@ -2,6 +2,12 @@
 
 **현재 버전**: v6.35.1 릴리스 완료 (81ac624 — pytest 1759 PASS + selfcheck PASS + 스모크 200)
 
+**2026-08-12 배포본 교체 완료**: `C:\AI_WORKPLACE\NetDash\netdash.exe` 를 v6.35.1
+빌드로 교체(SHA256 = dist 빌드 = GitHub 자산, 구버전은 `.old` 보존). 배포 config.yaml
+그대로 프로덕션 기동 스모크 `/`·`/wall` 200 확인 후 종료. **남은 현장 단계(사용자,
+폐쇄망)**: 새 exe 반입 → L4 config 수집 확인(없으면 1회 수집) → 설비 ↻ 새로고침(재매칭).
+gh CLI 인증 401 만료 — 다음 릴리스 전 `gh auth login` 필요.
+
 ## v6.35.1 — L4 SLB VIP 설비 제외 (사용자 신고)
 
 - `db.slb_vip_ips`: 수집된 config에서 VIP 추출(`vip`/`virtual-ip`/`virtual ip
