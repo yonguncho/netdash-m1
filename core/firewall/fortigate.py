@@ -11,6 +11,7 @@
 import logging
 import re
 from .. import secpolicy
+from . import fortiperf          # 버전 표기 정규화(경로마다 다르면 화면이 어긋난다)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,55 @@ _ARP_PATHS = (
     "/api/v2/monitor/network/arp",
     "/api/v2/monitor/router/arp",
 )
+
+
+def _why(status):
+    """HTTP 상태 → 사람이 읽는 사유. 6.x처럼 API가 없는 펌웨어를 구분하려고."""
+    if status == 404:
+        return "이 펌웨어에 없는 API (404)"
+    if status == 403:
+        return "권한 거부 (403) — API 관리자 프로필 권한/VDOM 범위 확인"
+    if status == 401:
+        return "인증 실패 (401) — API 토큰 확인"
+    if status == 405:
+        return "지원하지 않는 요청 (405)"
+    return "HTTP %s" % status
+
+
+def _try_get(s, base, path, notes=None, label=None, vdom_retry=True):
+    """GET → 성공하면 JSON, 실패하면 None. **실패 사유를 notes에 남긴다.**
+
+    예전엔 각 수집 함수가 `except Exception: pass` 로 조용히 넘어갔다. 그래서
+    구버전(6.0/6.2)에서 어떤 항목이 왜 안 채워지는지 화면에도 로그에도 흔적이
+    없었다 — 사용자에게는 '구버전은 덜 수집된다'로만 보였다.
+
+    403은 멀티 VDOM 장비에서 vdom 범위를 안 주면 나는 알려진 응답이라
+    `?vdom=root`로 한 번 더 시도한다.
+    """
+    label = label or path.rsplit("/", 1)[-1]
+    try:
+        r = _get_with_retry(s, f"{base}{path}")
+        if r is None:
+            if notes is not None:
+                notes[label] = "응답 없음"
+            return None
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code == 403 and vdom_retry:
+            sep = "&" if "?" in path else "?"
+            r2 = _get_with_retry(s, f"{base}{path}{sep}vdom=root")
+            if r2 is not None and r2.status_code == 200:
+                logger.info("fortigate %s: 403 → vdom=root 재시도 성공", label)
+                return r2.json()
+        if notes is not None:
+            notes[label] = _why(r.status_code)
+        logger.info("fortigate %s 미수집: %s", label,
+                    notes.get(label) if notes is not None else r.status_code)
+        return None
+    except Exception as e:
+        if notes is not None:
+            notes[label] = "요청 실패: %s" % type(e).__name__
+        return None
 
 
 def _get_with_retry(session, url, timeout=15, retries=3):
@@ -290,13 +340,12 @@ def _fetch_ha(s, base, host):
         return None
 
 
-def _fetch_sysinfo(s, base, host):
+def _fetch_sysinfo(s, base, host, notes=None):
     """모델명·버전·시리얼(monitor/system/status) — SSH 없는 토큰 전용 장비 대비."""
     try:
-        r = _get_with_retry(s, f"{base}/api/v2/monitor/system/status")
-        if r is None or r.status_code != 200:
+        body = _try_get(s, base, "/api/v2/monitor/system/status", notes, "장비 정보")
+        if not body:
             return None
-        body = r.json()
         res = body.get("results") or {}
         out = {}
         model = res.get("model_name") or body.get("model_name") or ""
@@ -305,7 +354,7 @@ def _fetch_sysinfo(s, base, host):
             out["model"] = ("%s-%s" % (model, model_num)) if model_num else model
         ver = body.get("version") or res.get("version") or ""
         if ver:
-            out["version"] = str(ver).split(",")[0][:40]
+            out["version"] = fortiperf.norm_version(ver)
         serial = body.get("serial") or res.get("serial") or ""
         if serial:
             out["serial"] = str(serial)[:40]
@@ -367,18 +416,15 @@ def parse_license_status(results):
     return out
 
 
-def _fetch_license(s, base, host):
-    """구독 라이선스 상태(monitor/license/status). 실패하면 None."""
-    try:
-        r = _get_with_retry(s, f"{base}/api/v2/monitor/license/status")
-        if r is None or r.status_code != 200:
-            return None
-        lic = parse_license_status(r.json().get("results"))
-        if lic:
-            logger.info("fortigate_license host=%s entries=%d", host, len(lic))
-        return lic or None
-    except Exception:
+def _fetch_license(s, base, host, notes=None):
+    """구독 라이선스 상태(monitor/license/status). 실패하면 None(사유는 notes)."""
+    body = _try_get(s, base, "/api/v2/monitor/license/status", notes, "라이선스")
+    if not body:
         return None
+    lic = parse_license_status(body.get("results"))
+    if lic:
+        logger.info("fortigate_license host=%s entries=%d", host, len(lic))
+    return lic or None
 
 
 # 객체 수 집계 대상 — (표기, cmdb 경로)
@@ -446,65 +492,54 @@ def parse_ipsec_tunnels(results):
     return out
 
 
-def _fetch_vpn(s, base, host):
+def _fetch_vpn(s, base, host, notes=None):
     """IPsec 터널 + SSL VPN 접속자. 실패하면 None(수집 흐름에 영향 없음)."""
     out = {}
-    try:
-        r = _get_with_retry(s, f"{base}/api/v2/monitor/vpn/ipsec")
-        if r is not None and r.status_code == 200:
-            tun = parse_ipsec_tunnels(r.json().get("results"))
-            out["tunnels"] = tun
-            out["tunnel_total"] = len(tun)
-            out["tunnel_up"] = sum(1 for t in tun if t["status"] == "up")
-    except Exception:
-        pass
-    try:
-        r = _get_with_retry(s, f"{base}/api/v2/monitor/vpn/ssl")
-        if r is not None and r.status_code == 200:
-            res = r.json().get("results") or []
-            out["ssl_users"] = len(res) if isinstance(res, list) else 0
-    except Exception:
-        pass
+    body = _try_get(s, base, "/api/v2/monitor/vpn/ipsec", notes, "VPN 터널")
+    if body:
+        tun = parse_ipsec_tunnels(body.get("results"))
+        out["tunnels"] = tun
+        out["tunnel_total"] = len(tun)
+        out["tunnel_up"] = sum(1 for t in tun if t["status"] == "up")
+    body = _try_get(s, base, "/api/v2/monitor/vpn/ssl", notes, "SSL VPN")
+    if body:
+        res = body.get("results") or []
+        out["ssl_users"] = len(res) if isinstance(res, list) else 0
     if out:
         logger.info("fortigate_vpn host=%s tunnels=%s up=%s",
                     host, out.get("tunnel_total"), out.get("tunnel_up"))
     return out or None
 
 
-def _fetch_policy_stats(s, base, host):
+def _fetch_policy_stats(s, base, host, notes=None):
     """방화벽 정책 개수 + 미사용(히트 0) 개수. 실패하면 None.
 
     cmdb로 전체 개수를, monitor로 히트 카운트를 얻는다. 정책이 수천 개인 장비도
     있어 목록 자체는 저장하지 않는다 — 화면에 필요한 건 총계와 미사용 수다.
     """
     out = {}
-    try:
-        r = _get_with_retry(s, f"{base}/api/v2/cmdb/firewall/policy")
-        if r is not None and r.status_code == 200:
-            res = r.json().get("results") or []
-            out["total"] = len(res)
-            out["disabled"] = sum(1 for p in res
-                                  if isinstance(p, dict) and p.get("status") == "disable")
-    except Exception:
-        pass
-    try:
-        r = _get_with_retry(s, f"{base}/api/v2/monitor/firewall/policy")
-        if r is not None and r.status_code == 200:
-            res = r.json().get("results") or []
-            hits = [p for p in res if isinstance(p, dict)]
-            if hits:
-                out["unused"] = sum(1 for p in hits
-                                    if not (p.get("hit_count") or p.get("bytes") or 0))
-    except Exception:
-        pass
-    # Proxy 정책(명시적 프록시) — 없는 구성도 많다: 404/빈 결과면 키 자체를 뺀다.
-    try:
-        r = _get_with_retry(s, f"{base}/api/v2/cmdb/firewall/proxy-policy")
-        if r is not None and r.status_code == 200:
-            res = r.json().get("results") or []
-            out["proxy_total"] = len(res)
-    except Exception:
-        pass
+    body = _try_get(s, base, "/api/v2/cmdb/firewall/policy", notes, "정책 목록")
+    if body:
+        res = body.get("results") or []
+        out["total"] = len(res)
+        out["disabled"] = sum(1 for p in res
+                              if isinstance(p, dict) and p.get("status") == "disable")
+    body = _try_get(s, base, "/api/v2/monitor/firewall/policy", notes, "정책 히트수")
+    if body:
+        res = body.get("results") or []
+        hits = [p for p in res if isinstance(p, dict)]
+        if hits:
+            # 6.x는 hit_count 대신 packets/bytes만 주는 펌웨어가 있다 —
+            # 셋 다 0일 때만 '미사용'으로 센다.
+            out["unused"] = sum(1 for p in hits
+                                if not (p.get("hit_count") or p.get("packets")
+                                        or p.get("bytes") or 0))
+    # Proxy 정책(명시적 프록시) — 없는 구성도 많다. 404는 '이 장비엔 없음'이라
+    # 미수집 안내로 띄우지 않는다(잡음).
+    body = _try_get(s, base, "/api/v2/cmdb/firewall/proxy-policy")
+    if body:
+        res = body.get("results") or []
+        out["proxy_total"] = len(res)
     if out:
         logger.info("fortigate_policy host=%s total=%s unused=%s",
                     host, out.get("total"), out.get("unused"))
@@ -524,14 +559,20 @@ def collect(host, port=443, token="", username="", password="", verify_ssl=False
         arp = _fetch_arp(s, base, host)
         ha = _fetch_ha(s, base, host)
         # 대시보드용 부가 정보 — 실패해도 인터페이스/ARP 수집은 그대로 성공시킨다.
-        vpn = _fetch_vpn(s, base, host)
-        policy = _fetch_policy_stats(s, base, host)
-        sysinfo = _fetch_sysinfo(s, base, host)
-        license_ = _fetch_license(s, base, host)
+        # notes: 어느 항목이 왜 안 채워졌는지(404=이 펌웨어에 없는 API 등).
+        # 구버전(6.0/6.2)이 '덜 수집되는' 이유를 화면에서 답할 수 있게 남긴다.
+        notes = {}
+        vpn = _fetch_vpn(s, base, host, notes)
+        policy = _fetch_policy_stats(s, base, host, notes)
+        sysinfo = _fetch_sysinfo(s, base, host, notes)
+        license_ = _fetch_license(s, base, host, notes)
         objects = _fetch_objects(s, base, host)
+        if notes:
+            logger.info("fortigate_rest_gaps host=%s %s", host, notes)
         return {"interfaces": interfaces, "arp": arp, "ha": ha,
                 "vpn": vpn, "policy": policy, "sysinfo": sysinfo,
-                "license": license_, "objects": objects}
+                "license": license_, "objects": objects,
+                "rest_notes": notes or None}
     finally:
         # requests.Session 연결 풀 정리(자동수집 반복 시 핸들 누수 방지)
         try:

@@ -78,6 +78,29 @@ def parse_perf_status(output):
     return out
 
 
+def norm_version(raw):
+    """펌웨어 버전 표기를 한 가지로 — 'v7.4.6,build2726,241210 (GA.M)' → 'v7.4.6'.
+
+    수집 경로가 셋(SSH `get system status` · REST monitor/system/status · SNMP
+    fgSysVersion)인데 SSH·REST만 콤마 앞을 잘라 쓰고 SNMP는 원문을 그대로
+    저장하고 있었다. 그래서 같은 화면에서 어떤 장비는 'v7.4.6', 어떤 장비는
+    'v7.4.6, build2726, 241210 (GA.M)'로 보였다(사용자 신고).
+    빌드 번호까지 필요하면 원문이 아니라 별도 필드로 두어야 한다.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    s = s.split(",")[0].strip()          # build·날짜·릴리스 등급 제거
+    s = s.split("(")[0].strip()          # 콤마 없이 'v7.4.6 (GA)'인 장비 대비
+    # SNMP는 모델명이 앞에 붙어 오기도 한다: 'FortiGate-1000D v6.0.14'
+    m = re.search(r"(v?\d+\.\d+(?:\.\d+)?)\s*$", s)
+    if m:
+        s = m.group(1)
+    if s and not s.lower().startswith("v") and re.match(r"^\d", s):
+        s = "v" + s                      # SNMP는 'v' 없이 '6.0.14'만 주기도 한다
+    return s[:40]
+
+
 def parse_sys_status(output):
     """`get system status` 출력 → {model, version, serial, hostname}.
 
@@ -93,7 +116,7 @@ def parse_sys_status(output):
                   r"(v[\d.]+(?:,build\d+)?)", s, re.MULTILINE | re.IGNORECASE)
     if m:
         out["model"] = m.group(1)[:60]
-        out["version"] = m.group(2).split(",")[0][:40]
+        out["version"] = norm_version(m.group(2))
     m = re.search(r"^\s*Serial-?Number:\s*(\S+)", s, re.MULTILINE | re.IGNORECASE)
     if m:
         out["serial"] = m.group(1)[:40]

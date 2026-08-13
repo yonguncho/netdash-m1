@@ -550,6 +550,10 @@ def merge_fw_extra(db_path, fw, collected, cred=None):
         v = (collected or {}).get(key)
         if v:
             extra[key] = v
+    # REST에서 못 가져온 항목과 사유(404=이 펌웨어에 없는 API 등). 구버전이
+    # '덜 수집되는' 이유를 상세 화면에서 답하려면 저장해 둬야 한다.
+    notes = (collected or {}).get("rest_notes")
+    has_data = bool(extra)
     # 모델·버전(REST monitor/system/status) — SSH의 get system status가 있으면
     # 그쪽이 이겨야 하므로(사용자 지정 기준) extra가 아니라 '빈 곳 채움'으로 합류.
     sysinfo = (collected or {}).get("sysinfo") or {}
@@ -568,13 +572,16 @@ def merge_fw_extra(db_path, fw, collected, cred=None):
             # VM 모델은 센서가 없고, SSH가 막힌 장비도 있다 — 정상 범주다.
             utils.log_event("info", "fw_sensor_list_skipped", firewall_id=fw.get("id"),
                             error=_sanitize_error_msg(str(e))[:120])
-    if not extra and not perf:
+    if not has_data and not perf and not notes:
         return None
     try:
         cur = (db.get_device_env(db_path, "firewall", fw["id"]) or {}).get("metrics") or {}
     except Exception:
         cur = {}
     cur.update(extra)
+    # 사유는 이번 수집 결과로 **교체**한다(빈 것도 반영) — 예전 실패 사유가
+    # 남아 있으면 문제가 해결된 뒤에도 화면에 계속 뜬다.
+    cur["rest_notes"] = notes or None
     # get sys status(SSH)의 model/version은 표기 기준이라 항상 덮는다(사용자 지정).
     # 그 외(perf 지표)는 SNMP가 이미 채운 값을 그대로 두고 빈 곳만 채운다.
     for k in ("model", "version", "serial", "hostname"):

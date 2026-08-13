@@ -80,6 +80,13 @@ def pct_level(p):
     return "normal"
 
 
+def _norm_version(raw):
+    """버전 표기 정규화는 파서 한 곳(firewall.fortiperf)에 둔다 — 경로마다
+    따로 자르면 이번처럼 한 경로만 어긋난다. import는 지연(순환 방지)."""
+    from .firewall import fortiperf
+    return fortiperf.norm_version(raw)
+
+
 def norm_fgt_model(raw):
     """SNMP 모델 문자열 정규화 — 'FGT_1000D'/'FGT-1000D' → 'FortiGate-1000D'.
 
@@ -156,9 +163,11 @@ def collect_health(ip, community="public", timeout=2.0, budget=20.0):
     g = _scalars(sess)
     out = {}
 
-    ver = _text(g.get(_FG_VERSION))
+    # SSH·REST와 같은 표기로 맞춘다 — 예전엔 여기만 원문(빌드·날짜 포함)을 넣어
+    # 같은 화면에 'v7.4.6'과 'v7.4.6,build2726,241210 (GA.M)'이 섞였다(사용자 신고).
+    ver = _norm_version(_text(g.get(_FG_VERSION)))
     if ver:
-        out["version"] = ver[:100]
+        out["version"] = ver
     model = norm_fgt_model(_text(g.get(_ENT_MODEL)) or _text(g.get(_SYS_DESCR)))
     if model:
         out["model"] = model

@@ -48,7 +48,9 @@ def test_health_scalars(monkeypatch):
     h = fg.collect_health("10.0.0.1", "public")
     assert h["cpu_pct"] == 12 and h["mem_pct"] == 43
     assert h["sessions"] == 8231
-    assert h["version"] == "v7.2.5,build1517"
+    # v6.37.0: SNMP도 SSH·REST와 같은 표기로 정규화한다. 예전엔 여기만 원문
+    # (빌드 번호 포함)이라 같은 화면에 'v7.2.5'와 'v7.2.5,build1517'이 섞였다.
+    assert h["version"] == "v7.2.5"
     assert h["hostname"] == "FW-HQ-01"          # FQDN 꼬리 제거
     assert h["uptime_sec"] == 1234567           # 1/100초 → 초
     assert h["mem_total_mb"] == 2048            # KB → MB
