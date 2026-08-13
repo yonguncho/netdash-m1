@@ -116,6 +116,18 @@ document.addEventListener("click", function (e) {
       else openFwCollect(obj);
       break;
     case "detail-fw": showFirewallDetail(nid); break;
+    case "add-rack-item":                                  // 랙 빈 칸 클릭
+      e.stopPropagation();
+      openRackItemModal(btn.getAttribute("data-rack"),
+                        parseInt(btn.getAttribute("data-unit"), 10), null);
+      break;
+    case "edit-rack-item": {                               // 직접 입력 항목 클릭
+      e.stopPropagation();
+      var iid = parseInt(btn.getAttribute("data-item-id"), 10);
+      var it = (_roomRackItems || []).filter(function (x) { return x.id === iid; })[0];
+      if (it) openRackItemModal(it.rack, it.unit, it);
+      break;
+    }
     case "edit-fw": editFirewall(obj); break;
     case "diagnose-fw": diagnoseFirewall(nid); break;
     case "terminal-fw": openTerminal(nid, "firewall"); break;
@@ -1437,7 +1449,10 @@ var _RACK_KIND = {
   "Firewall": { c: "#ef4444", t: "FW" }, "BackBone": { c: "#a855f7", t: "Core" },
   "L3 Switch": { c: "#8b5cf6", t: "L3" }, "L4 Switch": { c: "#f59e0b", t: "L4" },
   "L2 Switch": { c: "#14b8a6", t: "L2" }, "Server": { c: "#3b82f6", t: "SRV" },
-  "AP": { c: "#22c55e", t: "AP" }, "_": { c: "#64748b", t: "" }
+  "AP": { c: "#22c55e", t: "AP" }, "_": { c: "#64748b", t: "" },
+  // 직접 입력 — 현황에 등록하지 않은 것들. 등록 장비와 색으로 구분한다.
+  "기타 장비": { c: "#0ea5e9", t: "기타" },
+  "예약(비움)": { c: "#eab308", t: "예약" }
 };
 function _roomInferDT(name) {
   var t = (name || "").toUpperCase();
@@ -1449,6 +1464,9 @@ function _roomInferDT(name) {
   return "";
 }
 function _roomKind(d) {
+  if (d.k === "item") {
+    return _RACK_KIND[d.o.item_type === "reserved" ? "예약(비움)" : "기타 장비"];
+  }
   if (d.k === "fw") return _RACK_KIND["Firewall"];
   if (d.k === "srv") return _RACK_KIND["Server"];
   var dt = d.o.device_type || _roomInferDT(d.o.name);
@@ -1493,6 +1511,13 @@ function renderRoomRackView(switches, firewalls, servers) {
   switches.forEach(function (sw) { _put({ k: "sw", o: sw }); });
   firewalls.forEach(function (f) { _put({ k: "fw", o: f }); });
   servers.forEach(function (s) { _put({ k: "srv", o: s }); });
+  // 직접 입력 항목(기타 장비·예약 자리) — 현황 장비와 같은 자리 계산을 탄다.
+  // 등록 장비를 먼저 넣었으므로, 겹치면 여기가 '위치 겹침'으로 드러난다.
+  (_roomRackItems || []).forEach(function (it) {
+    _put({ k: "item", o: {
+      id: it.id, name: it.name, room_rack: it.rack, room_unit: it.unit,
+      room_height: it.height, item_type: it.item_type, note: it.note } });
+  });
 
   // 열(A/B) 단위로 줄 분리, 각 줄에 랙 나란히
   var rows = {};
@@ -1516,30 +1541,42 @@ function renderRoomRackView(switches, firewalls, servers) {
       if (d) {
         var k = _roomKind(d);
         var obj = d.o, isFw = d.k === "fw", isSrv = d.k === "srv";
+        var isItem = d.k === "item";
         var h = Math.max(1, d.h || 1);
-        var down = obj.status === "failed" || obj.reachable === false;
-        var act = isFw ? ("data-action='detail-fw' data-id='" + obj.id + "'")
+        var down = !isItem && (obj.status === "failed" || obj.reachable === false);
+        var act = isItem ? ("data-action='edit-rack-item' data-item-id='" + obj.id + "'")
+                       : isFw ? ("data-action='detail-fw' data-id='" + obj.id + "'")
                        : isSrv ? ""   // 서버는 랙뷰에서 클릭 상세 없음(서버 현황 탭에서 관리)
                        : ("data-action='detail-switch' data-payload='" + payloadAttr((obj)) + "'");
         var uLabel = h > 1 ? ("U" + u + "-U" + (u + h - 1)) : ("U" + u);
         if (d.clipped) uLabel = "⚠ " + uLabel;
-        slots += "<div class='ru ru--dev" + (h > 1 ? " ru--multi" : "") + "' " + act +
+        var tip = isItem
+          ? ((obj.name || "") + " · " + uLabel + (h > 1 ? (" (" + h + "U)") : "") +
+             (obj.note ? " · " + obj.note : "") + " — 클릭하면 수정/삭제")
+          : ((obj.name || "") + " · " + (obj.ip || obj.host || "") +
+             " · " + uLabel + (h > 1 ? (" (" + h + "U)") : ""));
+        slots += "<div class='ru ru--dev" + (h > 1 ? " ru--multi" : "") +
+          (isItem ? " ru--item ru--item-" + escHtml(obj.item_type || "etc") : "") + "' " + act +
           " data-rack='" + escHtml(rk) + "' data-unit='" + u + "' data-h='" + h + "'" +
           " data-kind='" + d.k + "' data-devid='" + obj.id + "'" +
           " style='background:" + k.c + "22;border-left:4px solid " + k.c +
           ";--ru-span:" + h + "'" +
-          " title='" + escHtml((obj.name || "") + " · " + (obj.ip || obj.host || "") +
-                               " · " + uLabel + (h > 1 ? (" (" + h + "U)") : "")) + "'>" +
+          " title='" + escHtml(tip) + "'>" +
           "<span class='ru__u'>" + uLabel + "</span>" +
           "<span class='ru__tag' style='background:" + k.c + "'>" + (k.t || "") + "</span>" +
           "<span class='ru__name'>" + (down ? "🔴 " : "") + escHtml(obj.name || "") +
             (h > 1 ? " <span class='ru__h'>" + h + "U</span>" : "") + "</span>" +
-          // 아래쪽 손잡이를 잡고 끌면 아래 유닛까지 늘어난다(랙 실장 높이 지정)
-          "<span class='ru__grip' title='드래그해서 장비 높이(U) 조절'></span>" +
+          // 직접 입력 항목은 드래그 이동·높이 조절 대상이 아니다(수정 창에서 바꾼다)
+          (isItem ? "" :
+            "<span class='ru__grip' title='드래그해서 장비 높이(U) 조절'></span>") +
           "</div>";
       } else {
-        slots += "<div class='ru ru--empty' data-rack='" + escHtml(rk) + "' data-unit='" + u +
-          "'><span class='ru__u'>U" + u + "</span></div>";
+        // 빈 칸을 누르면 그 U에 직접 입력(기타 장비·예약 자리)할 수 있다.
+        slots += "<div class='ru ru--empty' data-action='add-rack-item'" +
+          " data-rack='" + escHtml(rk) + "' data-unit='" + u + "'" +
+          " title='U" + u + " — 클릭해서 기타 장비/예약 자리 입력'>" +
+          "<span class='ru__u'>U" + u + "</span>" +
+          "<span class='ru__add'>+</span></div>";
       }
     }
     return "<div class='rackframe'>" +
@@ -1586,6 +1623,99 @@ function renderRoomRackView(switches, firewalls, servers) {
 // '업데이트'가 위치 빈 장비에 IP 기준으로 되살린다.
 var _roomGhosts = [];
 
+// ─── 랙 직접 입력(기타 장비·예약 자리) ──────────────────────────
+// 현황(스위치·방화벽·서버)에 등록하지 않는 것도 랙에는 실장된다(KVM·PDU 등).
+// '비워둘 자리'도 표시해 둬야 다음 사람이 그 자리를 쓰지 않는다.
+var _roomRackItems = [];
+
+function _loadRackItems(then) {
+  fetch("/api/room/rack-items").then(function (r) { return r.json(); })
+    .then(function (res) {
+      _roomRackItems = (res && res.ok && res.items) ? res.items : [];
+      if (then) then();
+    })
+    .catch(function () { if (then) then(); });
+}
+
+/* 랙 항목 입력 창. item이 있으면 수정, 없으면 rack/unit 자리에 새로 추가. */
+function openRackItemModal(rack, unit, item) {
+  var m = document.getElementById("rack-item-modal");
+  if (!m) return;
+  var isEdit = !!item;
+  document.getElementById("rack-item-title").textContent =
+    isEdit ? "랙 항목 수정" : "랙 항목 추가";
+  document.getElementById("rack-item-where").textContent =
+    (item ? item.rack : rack) + " 랙 · U" + (item ? item.unit : unit);
+  document.getElementById("rack-item-id").value = isEdit ? item.id : "";
+  document.getElementById("rack-item-rack").value = item ? item.rack : rack;
+  document.getElementById("rack-item-unit").value = item ? item.unit : unit;
+  document.getElementById("rack-item-name").value = item ? (item.name || "") : "";
+  document.getElementById("rack-item-height").value = item ? (item.height || 1) : 1;
+  document.getElementById("rack-item-note").value = item ? (item.note || "") : "";
+  var t = item ? (item.item_type || "etc") : "etc";
+  var sel = document.getElementById("rack-item-type");
+  if (sel) sel.value = t;
+  var del = document.getElementById("btn-rack-item-delete");
+  if (del) del.style.display = isEdit ? "" : "none";
+  var err = document.getElementById("rack-item-error");
+  if (err) { err.textContent = ""; err.style.display = "none"; }
+  m.classList.remove("hidden");          /* 다른 모달과 같은 방식(hidden 토글) */
+  var nameEl = document.getElementById("rack-item-name");
+  if (nameEl) setTimeout(function () { nameEl.focus(); }, 30);
+}
+
+function closeRackItemModal() {
+  var m = document.getElementById("rack-item-modal");
+  if (m) m.classList.add("hidden");
+}
+
+function _rackItemError(msg) {
+  var err = document.getElementById("rack-item-error");
+  if (!err) { alert(msg); return; }
+  err.textContent = msg;
+  err.style.display = "";
+}
+
+function saveRackItem() {
+  var id = document.getElementById("rack-item-id").value;
+  var body = {
+    rack: document.getElementById("rack-item-rack").value,
+    unit: parseInt(document.getElementById("rack-item-unit").value, 10),
+    height: parseInt(document.getElementById("rack-item-height").value, 10) || 1,
+    name: document.getElementById("rack-item-name").value,
+    item_type: document.getElementById("rack-item-type").value,
+    note: document.getElementById("rack-item-note").value
+  };
+  if (id) body.id = parseInt(id, 10);
+  fetch("/api/room/rack-items", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      /* 자리 겹침은 사용자가 고칠 수 있는 것 — 창을 닫지 말고 사유를 그 자리에
+         보여준다(닫아버리면 무엇을 고쳐야 하는지 알 수 없다). */
+      if (!res.ok) { _rackItemError(res.error || "저장하지 못했습니다"); return; }
+      closeRackItemModal();
+      _loadRackItems(function () { renderRoom(_switches); });
+    })
+    .catch(function (e) { _rackItemError("저장 오류: " + e); });
+}
+
+function deleteRackItem() {
+  var id = document.getElementById("rack-item-id").value;
+  if (!id) return;
+  if (!confirm("이 랙 항목을 삭제할까요?")) return;
+  fetch("/api/room/rack-items/" + encodeURIComponent(id), { method: "DELETE" })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!res.ok) { _rackItemError(res.error || "삭제하지 못했습니다"); return; }
+      closeRackItemModal();
+      _loadRackItems(function () { renderRoom(_switches); });
+    })
+    .catch(function (e) { _rackItemError("삭제 오류: " + e); });
+}
+
 function _loadRoomLayoutInfo() {
   fetch("/api/room/layout").then(function (r) { return r.json(); })
     .then(function (res) {
@@ -1603,6 +1733,10 @@ function _loadRoomLayoutInfo() {
 }
 
 (function () {
+  var rsave = document.getElementById("btn-rack-item-save");
+  if (rsave) rsave.addEventListener("click", saveRackItem);
+  var rdel = document.getElementById("btn-rack-item-delete");
+  if (rdel) rdel.addEventListener("click", deleteRackItem);
   var save = document.getElementById("btn-room-save-layout");
   if (save) save.addEventListener("click", function () {
     save.disabled = true;
@@ -1643,6 +1777,10 @@ function _loadRoomLayoutInfo() {
       .then(function () { upd.disabled = false; });
   });
   _loadRoomLayoutInfo();
+  // 랙 직접 입력 항목은 렌더보다 먼저 있어야 첫 화면에 같이 그려진다.
+  _loadRackItems(function () {
+    if (_roomRackItems.length && typeof renderRoom === "function") renderRoom(_switches);
+  });
 })();
 
 // ─── 랙 실장 높이(U) 드래그 조절 ─────────────────────────────────
@@ -3432,6 +3570,22 @@ function fwStatusHtml(fw, env) {
         return "<tr><td>" + escHtml(s.name) + "</td><td>" +
           escHtml(s.value === null ? "-" : (s.value + unit)) + "</td></tr>";
       }).join("") + "</tbody></table>";
+  }
+  // REST에서 못 가져온 항목과 사유 — 구버전(6.0/6.2)은 없는 API가 있어 항목이
+  // 빈다. 예전엔 조용히 빠져 '이 장비는 왜 덜 수집되나'에 답할 수 없었다.
+  var notes = m.rest_notes || null;
+  var noteKeys = notes ? Object.keys(notes) : [];
+  if (noteKeys.length) {
+    H += "<h4 style='margin:14px 0 6px'>수집되지 않은 항목 (" + noteKeys.length + ")</h4>" +
+      "<table class='data-table' style='max-width:560px'><tbody>" +
+      noteKeys.map(function (k) {
+        return "<tr><td style='width:150px;color:#475569'>" + escHtml(k) +
+          "</td><td style='color:#b45309'>" + escHtml(String(notes[k])) + "</td></tr>";
+      }).join("") + "</tbody></table>" +
+      "<p style='font-size:11px;color:#64748b;margin-top:4px'>" +
+      "404는 이 펌웨어에 없는 API입니다(FortiOS 6.0·6.2에서 흔함) — 장비 문제가 " +
+      "아니라 그 버전이 제공하지 않는 항목입니다. 403은 API 관리자 프로필 권한 " +
+      "또는 VDOM 범위를 확인하세요.</p>";
   }
   if (env.updated) {
     H += "<p style='font-size:11px;color:#64748b;margin-top:6px'>수집: " +

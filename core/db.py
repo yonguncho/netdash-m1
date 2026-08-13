@@ -370,6 +370,25 @@ CREATE TABLE IF NOT EXISTS rack_layout (
 )
 """
 
+# 랙에 직접 적어 넣는 항목 — 현황(스위치·방화벽·서버)에 등록하지 않는 것들.
+# 랙에는 KVM·콘솔·PDU처럼 관리 대상이 아닌 장비도 실장되고, '증설 예정이라
+# 비워둘 자리'도 표시해 둬야 한다. 현황 3종에 억지로 등록하면 수집 대상이
+# 돼버리므로(도달 불가 알람) 별도 테이블로 둔다.
+# item_type: 'etc'(기타 장비) | 'reserved'(예약·비움)
+CREATE_RACK_ITEMS_TABLE = """
+CREATE TABLE IF NOT EXISTS rack_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rack TEXT NOT NULL,
+    unit INTEGER NOT NULL,
+    height INTEGER NOT NULL DEFAULT 1,
+    name TEXT,
+    item_type TEXT NOT NULL DEFAULT 'etc',
+    note TEXT,
+    updated TEXT,
+    UNIQUE(rack, unit)
+)
+"""
+
 # 서버(리눅스/윈도우) 현황 — 스위치와 별도 수명주기.
 # 수집: 무자격(포트스캔+역DNS+스위치 ARP/MAC 대조) + SSH 상세(자격증명 시).
 # is_vm=0(물리) + location이 랙 형식(A09U27)이면 서버실 현황에 포함.
@@ -683,6 +702,7 @@ def init_schema(db_path):
                 CREATE_FACILITY_HOSTS_TABLE,
                 CREATE_DEVICE_ENV_TABLE,
                 CREATE_RACK_LAYOUT_TABLE,
+                CREATE_RACK_ITEMS_TABLE,
                 CREATE_METRICS_HISTORY_TABLE,
                 CREATE_TRAFFIC_HISTORY_TABLE,
                 CREATE_PORT_STATE_TABLE,

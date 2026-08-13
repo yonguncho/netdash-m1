@@ -52,6 +52,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "device_env",
         # 서버실 랙 배치 스냅샷 — 장비 삭제·재등록에도 위치 보존(키: kind+ip)
         "rack_layout",
+        # 랙에 직접 입력한 항목(기타 장비·예약 자리) — 현황에 등록하지 않는 것들
+        "rack_items",
         # 지표 이력(시계열 그래프) — 폴러가 5분마다 기록, 30일 보존
         "metrics_history",
         # 포트 상태 기준선(상태 감시 폴러 — up/down 전이 판정)

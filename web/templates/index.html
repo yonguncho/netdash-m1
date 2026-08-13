@@ -95,6 +95,45 @@
     </div>
   </div>
 
+  <!-- 랙 직접 입력 — 현황에 등록하지 않는 장비(KVM·PDU 등)와 '비워둘 자리' -->
+  <div id="rack-item-modal" class="modal hidden">
+    <div class="modal__backdrop" data-close="rack-item-modal"></div>
+    <div class="modal__box" style="width:420px">
+      <div class="modal__header">
+        <span id="rack-item-title">랙 항목 추가</span>
+        <button class="modal__close" data-close="rack-item-modal">&times;</button>
+      </div>
+      <div class="modal__body">
+        <p style="font-size:12.5px;color:#64748b;margin-bottom:10px">
+          위치: <b id="rack-item-where">-</b><br>
+          현황(스위치·방화벽·서버)에 등록하지 않는 장비나, 비워둬야 하는 자리를
+          랙에 표시합니다. 수집·감시 대상이 되지 않습니다.</p>
+        <input type="hidden" id="rack-item-id">
+        <input type="hidden" id="rack-item-rack">
+        <input type="hidden" id="rack-item-unit">
+        <label for="rack-item-type">유형</label>
+        <select id="rack-item-type">
+          <option value="etc">기타 장비 (KVM·PDU·콘솔 등)</option>
+          <option value="reserved">예약 / 사용 금지 (비워둘 자리)</option>
+        </select>
+        <label for="rack-item-name" style="display:block;margin-top:10px">이름</label>
+        <input id="rack-item-name" type="text" maxlength="40"
+               placeholder="예: KVM 스위치 / 증설 예정 / 발열 공간">
+        <label for="rack-item-height" style="display:block;margin-top:10px">크기 (U)</label>
+        <input id="rack-item-height" type="number" min="1" max="42" value="1">
+        <label for="rack-item-note" style="display:block;margin-top:10px">비고 (선택)</label>
+        <input id="rack-item-note" type="text" maxlength="120"
+               placeholder="예: 2026년 3분기 서버 증설분">
+        <p id="rack-item-error" class="rack-item__err" style="display:none"></p>
+      </div>
+      <div class="modal__footer">
+        <button id="btn-rack-item-save" class="btn btn--primary">저장</button>
+        <button id="btn-rack-item-delete" class="btn btn--danger" style="display:none">삭제</button>
+        <button class="btn btn--ghost" data-close="rack-item-modal">취소</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 접근 로그 모달 -->
   <div id="modal-audit" class="modal hidden">
     <div class="modal__backdrop"></div>
