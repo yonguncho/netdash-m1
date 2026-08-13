@@ -1,12 +1,48 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.35.1 릴리스 완료 (81ac624 — pytest 1759 PASS + selfcheck PASS + 스모크 200)
+**현재 버전**: v6.37.0 커밋 완료 (a6349e0·d7f580c·00f23b7) — exe 빌드·릴리스 진행 중.
+pytest 1780 PASS / 16 FAIL(전부 아래 DPAPI 환경 문제, 코드 무관) + selfcheck PASS.
 
-**2026-08-12 배포본 교체 완료**: `C:\AI_WORKPLACE\NetDash\netdash.exe` 를 v6.35.1
-빌드로 교체(SHA256 = dist 빌드 = GitHub 자산, 구버전은 `.old` 보존). 배포 config.yaml
-그대로 프로덕션 기동 스모크 `/`·`/wall` 200 확인 후 종료. **남은 현장 단계(사용자,
-폐쇄망)**: 새 exe 반입 → L4 config 수집 확인(없으면 1회 수집) → 설비 ↻ 새로고침(재매칭).
-gh CLI 인증은 2026-08-12 디바이스 플로우로 재발급 완료(keyring, repo·workflow 스코프) — push 정상.
+## ⚠ 빌드 PC의 Windows DPAPI 암호화 고장 (2026-08-13 확인, 미해결)
+
+`CryptProtectData`가 시스템 수준에서 "액세스가 거부되었습니다"(오류 5)를 반환한다.
+- **NetDash 코드 문제가 아니다** — .NET `ProtectedData.Protect`도 독립 프로세스에서
+  동일 실패. 복호화(Unprotect)는 정상(gh 토큰 읽기 성공).
+- 서비스(CryptSvc/KeyIso/VaultSvc) 정상, 마스터키 디렉터리·ACL 정상, 이벤트로그 무.
+- **영향**: 이 PC에서 NetDash 실행 시 장비 계정·SNMP 커뮤니티 저장 실패.
+  자격증명 관련 테스트 16건이 항상 실패한다(릴리스 판정 시 이 16건은 제외하고 본다).
+- 폐쇄망 운영 PC는 별개 장비 — 그쪽은 정상일 가능성이 높다.
+- 시스템 수준 수리는 사용자 확인이 필요해 손대지 않음.
+
+## v6.37.0 — 사용자 요청 4건
+
+1. **관제 설비 탭 '대역별 IP 사용 현황'** + 대역 클릭 → IP 리스트업
+   (`/api/wall/facility-subnet`). `subnet_capacity()`로 사용률.
+   **LIMIT 12 제거** — 13번째 대역부터 조용히 사라지던 것.
+   모달 `max-height:88vh`+본문 스크롤 — IP 120행이면 3969px로 늘어나 ×가
+   화면 밖(-1417px)으로 밀려 닫히지 않았다(실측 확인).
+2. **랙뷰 U 클릭 → 직접 입력** — `rack_items` 테이블 + `core/rackitems.py`.
+   기타 장비(하늘색)/예약 비움(노란 빗금). 겹침은 저장 시점 차단
+   (`occupied_units`가 등록 장비+직접 입력 둘 다 본다), 사유를 주고 창 유지.
+3. **FortiOS 버전 표기 통일** — SNMP만 원문(`v7.4.6,build2726,...`)을 저장하고
+   있었다. `fortiperf.norm_version()` 한 곳으로 모아 SSH·REST·SNMP 공유.
+   ※ 기존 테스트가 원문을 정답으로 고정하고 있어 회귀로 안 잡혔다.
+4. **6.x 덜 수집되는 이유가 안 보이던 것** — REST가 전부 `except: pass`였다.
+   `_try_get`이 404/403/401 사유를 `rest_notes`로 남기고 방화벽 상세에
+   '수집되지 않은 항목' 표로 표시. 403은 `vdom=root` 자동 재시도.
+   6.x는 `hit_count` 없이 `packets/bytes`만 주는 펌웨어가 있어 셋 다 0일 때만
+   미사용 정책으로 센다.
+   **⏳ 사용자 확인 대기**: 6.x 재수집 후 '수집되지 않은 항목'에 뜨는 사유 →
+   그에 맞춰 정확히 대응(예: 라이선스 404면 SSH 대체).
+
+**검증 스크립트 시드 주의**: 실재할 수 있는 대역·랙 이름을 쓰면 `INSERT OR REPLACE`가
+개발 DB의 기존 행을 덮어쓴다(실제로 겪음). 문서 전용 주소(RFC 5737 TEST-NET,
+RFC 6598 100.64/10)와 전용 랙 이름(ZZ99)만 쓰고 끝나면 지운다.
+
+**로컬 배포본(`C:\AI_WORKPLACE\NetDash\netdash.exe`)**: 2026-08-12에 v6.35.1로 교체
+(구버전 `.old` 보존, 프로덕션 config 기동 스모크 `/`·`/wall` 200 확인).
+**v6.37.0 릴리스 후 다시 교체할 것.**
+gh CLI는 2026-08-12 디바이스 플로우로 재인증 완료(keyring, repo·workflow) — push 정상.
 
 ## v6.35.1 — L4 SLB VIP 설비 제외 (사용자 신고)
 
