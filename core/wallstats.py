@@ -291,6 +291,61 @@ def _firewall_stats(conn, db_path):
             "objects_rows": objects_rows}
 
 
+def subnet_capacity(subnet):
+    """대역이 담을 수 있는 호스트 IP 개수. 모르면 None(0을 쓰면 나눗셈이 깨진다).
+
+    /31은 RFC 3021 링크(2개 모두 호스트), /32는 단일 호스트라 예외.
+    그 외는 네트워크·브로드캐스트 2개를 뺀다.
+    """
+    if not subnet or "/" not in str(subnet):
+        return None
+    try:
+        prefix = int(str(subnet).split("/", 1)[1].strip())
+    except (TypeError, ValueError):
+        return None
+    if prefix < 0 or prefix > 32:
+        return None
+    size = 1 << (32 - prefix)
+    return size if prefix >= 31 else size - 2
+
+
+def _ip_sort_key(ip):
+    """문자열 정렬은 .10을 .2보다 앞에 둔다 — 옥텟 숫자로 정렬한다."""
+    try:
+        parts = [int(p) for p in str(ip).split(".")]
+        if len(parts) == 4:
+            return tuple(parts)
+    except (TypeError, ValueError):
+        pass
+    return (256, 0, 0, 0)
+
+
+def facility_subnet_hosts(db_path, subnet, limit=2000):
+    """한 대역의 설비 IP 목록(대역 클릭 → 리스트업). IP 숫자 순."""
+    with db.get_db(db_path) as conn:
+        # SQL에서 자르지 않고 다 읽어 정렬한 뒤 자른다. SQL LIMIT은 IP 순서와
+        # 무관하게 잘라서, 큰 대역이면 '임의의 2000개'가 나온다. 설비 한 대역이
+        # 수천 행을 넘는 일은 드물고, 그 정도 리스트 정렬은 순식간이다.
+        rows = _rows(conn,
+            "SELECT ip, mac, switch_name, port, online, direct, via, updated "
+            "FROM facility_hosts WHERE IFNULL(subnet,'')=?", (subnet or "",))
+        hosts = [{"ip": r["ip"], "mac": r["mac"] or "",
+                  "switch_name": r["switch_name"] or "", "port": r["port"] or "",
+                  "online": bool(r["online"]), "direct": bool(r["direct"]),
+                  "via": r["via"] or "",
+                  "updated": (r["updated"] or "")[:16]} for r in rows]
+    hosts.sort(key=lambda h: _ip_sort_key(h["ip"]))
+    total = len(hosts)
+    truncated = total > limit
+    hosts = hosts[:limit]
+    cap = subnet_capacity(subnet)
+    online = sum(1 for h in hosts if h["online"])
+    return {"subnet": subnet, "hosts": hosts, "count": len(hosts),
+            "total": total,
+            "online": online, "offline": len(hosts) - online,
+            "capacity": cap, "truncated": truncated}
+
+
 def _facility_stats(conn):
     total = online = direct = 0
     r = _rows(conn, "SELECT COUNT(*) AS total, SUM(online) AS onl, "
@@ -300,13 +355,24 @@ def _facility_stats(conn):
         total = r[0]["total"] or 0
         online = r[0]["onl"] or 0
         direct = r[0]["dir"] or 0
+    # 대역별 IP 사용 현황. 예전엔 LIMIT 12로 잘랐는데, 대역이 13개면 13번째가
+    # 화면에서 조용히 사라져 '수집이 안 된 대역'과 구분되지 않았다. 전부 싣고,
+    # 길면 화면이 카드 안 스크롤로 처리한다(개수는 카드 제목에 밝힌다).
     by_subnet = []
     for x in _rows(conn,
-        "SELECT subnet AS k, COUNT(*) AS c, SUM(online) AS onl "
-        "FROM facility_hosts GROUP BY subnet ORDER BY c DESC LIMIT 12"):
+        "SELECT subnet AS k, COUNT(*) AS c, SUM(online) AS onl, "
+        "SUM(CASE WHEN direct=1 AND IFNULL(switch_name,'')<>'' THEN 1 ELSE 0 END) AS dir "
+        "FROM facility_hosts GROUP BY subnet ORDER BY c DESC"):
         c = x["c"] or 0
+        onl = x["onl"] or 0
+        cap = subnet_capacity(x["k"])
         by_subnet.append({"name": x["k"] or "미지정", "count": c,
-                          "online": x["onl"] or 0, "offline": c - (x["onl"] or 0)})
+                          "online": onl, "offline": c - onl,
+                          "direct": x["dir"] or 0,
+                          "capacity": cap,
+                          # 사용률은 대역 크기를 알 때만. 모르면 화면이 '-'로 둔다
+                          # (0%로 보내면 '텅 빈 대역'으로 오독된다).
+                          "usage_pct": (round(c * 1000.0 / cap) / 10.0) if cap else None})
     by_switch = _counter(_rows(conn,
         "SELECT IFNULL(switch_name,'') AS k, COUNT(*) AS c FROM facility_hosts "
         "WHERE IFNULL(switch_name,'')<>'' GROUP BY k ORDER BY c DESC LIMIT 10"))

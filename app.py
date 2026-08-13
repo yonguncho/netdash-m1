@@ -3272,6 +3272,50 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"ok": False, "error": "Internal server error"}), 500
 
+    @app.route("/api/room/rack-items", methods=["GET"])
+    def room_rack_items_list():
+        """랙에 직접 적어 넣은 항목(기타 장비·예약 자리) 목록."""
+        try:
+            from core import rackitems
+            return jsonify({"ok": True,
+                            "items": rackitems.list_items(db_path)})
+        except Exception as e:
+            log_event("error", "rack_items_list_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
+    @app.route("/api/room/rack-items", methods=["POST"])
+    @rate_limit("rack_item_save", max_requests=60, window_seconds=60)
+    def room_rack_items_save():
+        """추가·수정. body: {id?, rack, unit, height, name, item_type, note}"""
+        data = request.get_json(silent=True) or {}
+        try:
+            from core import rackitems
+            res = rackitems.save_item(
+                db_path,
+                rack=data.get("rack"), unit=data.get("unit"),
+                height=data.get("height") or 1, name=data.get("name"),
+                item_type=data.get("item_type"), note=data.get("note"),
+                item_id=data.get("id"))
+            # 자리 겹침·입력 오류는 사용자가 고칠 수 있는 것이라 400으로 사유를 준다
+            return jsonify(res), (200 if res.get("ok") else 400)
+        except Exception as e:
+            log_event("error", "rack_item_save_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
+    @app.route("/api/room/rack-items/<int:item_id>", methods=["DELETE"])
+    @rate_limit("rack_item_delete", max_requests=60, window_seconds=60)
+    def room_rack_items_delete(item_id):
+        try:
+            from core import rackitems
+            res = rackitems.delete_item(db_path, item_id)
+            return jsonify(res), (200 if res.get("ok") else 404)
+        except Exception as e:
+            log_event("error", "rack_item_delete_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
     @app.route("/api/wall/series", methods=["GET"])
     def wall_series():
         """시계열 조회(관제 그래프용). ?hours=1|24|168 — kind별로 묶어 반환."""
@@ -3328,6 +3372,20 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             return jsonify(wallstats.build(db_path))
         except Exception as e:
             log_event("error", "wall_stats_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
+    @app.route("/api/wall/facility-subnet", methods=["GET"])
+    def wall_facility_subnet():
+        """한 대역의 설비 IP 목록(관제 설비 탭 → 대역 클릭 → 리스트업)."""
+        subnet = (request.args.get("subnet") or "").strip()
+        if not subnet or len(subnet) > 64:
+            return jsonify({"error": "대역(subnet)이 필요합니다"}), 400
+        try:
+            from core import wallstats
+            return jsonify(wallstats.facility_subnet_hosts(db_path, subnet))
+        except Exception as e:
+            log_event("error", "wall_facility_subnet_error",
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 

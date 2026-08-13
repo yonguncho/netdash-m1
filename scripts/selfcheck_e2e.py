@@ -207,6 +207,61 @@ def main():
             ok("배치 저장/업데이트 클릭")
             text_problems(pg, "서버실")
 
+            # ── 랙 직접 입력(v6.37): 빈 U 클릭 → 입력 → 랙에 표시 → 삭제 ──
+            print("[4.1] 랙 직접 입력(기타 장비·예약 자리)")
+            rackbtn = pg.query_selector("#btn-room-rack")
+            if not rackbtn:
+                fail("랙뷰 전환 버튼 없음")
+            else:
+                rackbtn.click()
+                pg.wait_for_timeout(1100)
+                empty = pg.query_selector("#room-rack-view .ru--empty[data-action='add-rack-item']")
+                if not empty:
+                    fail("랙뷰 빈 칸이 클릭 대상이 아님(직접 입력 불가)")
+                else:
+                    rk = empty.get_attribute("data-rack")
+                    un = empty.get_attribute("data-unit")
+                    empty.click()
+                    pg.wait_for_timeout(700)
+                    modal = pg.query_selector("#rack-item-modal")
+                    if not (modal and modal.is_visible()):
+                        fail("빈 U를 눌렀는데 입력 창이 안 열림")
+                    else:
+                        pg.select_option("#rack-item-type", "reserved")
+                        pg.fill("#rack-item-name", "SC 예약칸")
+                        pg.fill("#rack-item-height", "1")
+                        pg.click("#btn-rack-item-save")
+                        pg.wait_for_timeout(1400)
+                        sel = ("#room-rack-view .ru--item-reserved[data-rack='%s']"
+                               "[data-unit='%s']" % (rk, un))
+                        made = pg.query_selector(sel)
+                        if not made:
+                            fail("저장한 예약 자리가 랙에 안 그려짐")
+                        else:
+                            ok("랙 직접 입력: %s U%s 예약 자리 표시" % (rk, un))
+                            # 원상복구 — 셀프체크가 DB에 잔재를 남기면 안 된다.
+                            # 삭제 confirm은 위의 전역 _dlg 핸들러가 받는다.
+                            made.click()
+                            pg.wait_for_timeout(700)
+                            dl = pg.query_selector("#btn-rack-item-delete")
+                            if dl and dl.is_visible():
+                                dl.click()
+                                pg.wait_for_timeout(1200)
+                                if pg.query_selector(
+                                        "#room-rack-view .ru--empty[data-rack='%s']"
+                                        "[data-unit='%s']" % (rk, un)):
+                                    ok("랙 항목 삭제 → 빈 칸 복귀")
+                                else:
+                                    fail("랙 항목 삭제 후에도 칸이 비지 않음")
+                            else:
+                                fail("수정 창에 삭제 버튼이 없음")
+                    text_problems(pg, "랙뷰")
+                pg.screenshot(path=str(OUT / "room_rack.png"))
+                cardbtn = pg.query_selector("#btn-room-card")
+                if cardbtn:
+                    cardbtn.click()
+                    pg.wait_for_timeout(500)
+
             # ── 설비: 선택 체크 → 삭제 버튼 활성 + 진단 결과 팝업(v6.33) ──
             print("[4.2] 설비 선택·진단 결과")
             pg.click(".tab-nav__btn[data-tab='facility']")
@@ -291,6 +346,48 @@ def main():
                 pg.click("[data-wtab='%s']" % tab)
                 pg.wait_for_timeout(600)
             text_problems(pg, "관제 전체 탭")
+            # 대역별 IP 사용 현황(v6.36) — 행 클릭 → 그 대역의 IP 목록 팝업
+            pg.click("[data-wtab='facility']")
+            pg.wait_for_timeout(700)
+            subrow = pg.query_selector(".wsub__row")
+            if not subrow:
+                fail("설비 탭에 대역별 IP 사용 현황이 없음")
+            else:
+                subrow.click()
+                pg.wait_for_timeout(1500)
+                modal = pg.query_selector("#wsw-modal")
+                iprows = pg.query_selector_all("#wsw-body .wtable tbody tr")
+                sub = pg.inner_text("#wsw-sub")
+                if not (modal and modal.is_visible()) or not iprows:
+                    fail("대역 클릭 → IP 목록이 안 열림")
+                elif "불러오는 중" in sub:
+                    fail("대역 IP 목록이 로딩에서 멈춤")
+                else:
+                    ok("대역 IP 리스트업: %d행 (%s)" % (len(iprows), sub[:40]))
+                text_problems(pg, "대역 IP 목록")
+                # 목록이 길어도 헤더의 ×가 화면 안에 남아야 한다 — 팝업에 높이
+                # 제한이 없으면 뷰포트 밖으로 밀려 닫을 수 없다.
+                vh = pg.evaluate("() => window.innerHeight")
+                xbox = pg.eval_on_selector(
+                    "#wsw-modal .wswm__x",
+                    "el => { const r = el.getBoundingClientRect();"
+                    "        return {top: r.top, bottom: r.bottom}; }")
+                if xbox["top"] < 0 or xbox["bottom"] > vh:
+                    fail("대역 팝업의 닫기 버튼이 화면 밖(top=%.0f, vh=%d)"
+                         % (xbox["top"], vh))
+                else:
+                    ok("대역 팝업 닫기 버튼이 화면 안")
+                # [data-close] 첫 매치는 배경 오버레이라 박스에 가려 클릭 불가 —
+                # 사용자가 실제로 누르는 × 버튼을 집는다.
+                close = pg.query_selector("#wsw-modal .wswm__x")
+                if close:
+                    close.click()
+                    pg.wait_for_timeout(400)
+                    m2 = pg.query_selector("#wsw-modal")
+                    if m2 and m2.is_visible():
+                        fail("× 를 눌렀는데 대역 팝업이 안 닫힘")
+                    else:
+                        ok("대역 팝업 닫기")
             pg.click("[data-wtab='switch']")
             pg.wait_for_timeout(400)
             rb = pg.query_selector("[data-hours='168']")

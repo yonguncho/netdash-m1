@@ -680,6 +680,100 @@ function renderFirewallTab(f) {
     "<div class='wgrid'>" + vpnCard + loadCard + stCard + polCard + "</div>";
 }
 
+/* 대역별 IP 사용 현황 — 대역이 몇 개든 전부 싣는다. 예전엔 상위 12개만 보내
+   13번째 대역이 화면에서 조용히 사라졌고, 그러면 '수집이 안 된 대역'과 구분되지
+   않는다. 행을 클릭하면 그 대역의 IP 목록이 열린다. */
+function subnetTable(rows) {
+  return "<table class='wtable'><thead><tr>" +
+    "<th>대역</th><th>사용 IP</th><th>사용률</th>" +
+    "<th>온라인</th><th>연결 실패</th><th>연결 지점 확인</th>" +
+    "</tr></thead><tbody>" +
+    rows.map(function (x) {
+      /* 사용률은 대역 크기를 알 때만 그린다. 모르는 걸 0%로 그리면 텅 빈
+         대역처럼 보인다 — 그래서 막대 대신 '-'. */
+      var pct = (x.usage_pct === null || x.usage_pct === undefined) ? null : x.usage_pct;
+      var mf = pct === null ? "mf-ok"
+        : (pct >= 90 ? "mf-crit" : pct >= 75 ? "mf-warn" : "mf-ok");
+      var bar = pct === null ? "<span class='wsub__na'>-</span>"
+        : "<span class='wsub__bar'><span class='wmeter__t'><span class='wmeter__f " + mf +
+          "' style='width:" + Math.max(2, Math.min(100, pct)) + "%'></span></span>" +
+          "<b>" + pct + "%</b></span>";
+      return "<tr class='wsub__row' data-subnet='" + esc(x.name) + "'>" +
+        "<td><b>" + esc(x.name) + "</b></td>" +
+        "<td>" + _n(x.count) +
+          (x.capacity ? " <small class='wsub__cap'>/ " + _n(x.capacity) + "</small>" : "") +
+          "</td>" +
+        "<td>" + bar + "</td>" +
+        "<td>" + _n(x.online) + "</td>" +
+        "<td" + (x.offline ? " class='wsub__bad'" : "") + ">" + _n(x.offline) + "</td>" +
+        "<td>" + _n(x.direct) + "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
+function subnetCard(rows) {
+  var body = rows.length ? subnetTable(rows)
+    : "<p class='wnone'>수집된 대역이 없습니다.</p>";
+  var total = rows.reduce(function (a, x) { return a + (x.count || 0); }, 0);
+  return wcard("대역별 IP 사용 현황",
+    "대역 " + rows.length + "개 · 수집 IP 합계 " + _n(total) +
+    " · 행을 클릭하면 그 대역의 IP 목록이 열립니다. 사용률 = 수집 IP / 대역 용량",
+    body, "wcard--6" + (rows.length > 8 ? " wcard--tall" : ""));
+}
+
+/* 대역 클릭 → 그 대역이 실제로 쓰는 IP 목록. 관제 안 팝업으로 연다. */
+function openSubnetModal(subnet) {
+  var modal = document.getElementById("wsw-modal");
+  var body = document.getElementById("wsw-body");
+  if (!modal || !body) return;
+  modal.style.display = "";
+  var box = modal.querySelector(".wswm__box");
+  if (box) box.classList.add("wswm__box--wide");   /* 목록은 컬럼이 6개라 넓게 */
+  document.getElementById("wsw-name").textContent = subnet;
+  document.getElementById("wsw-sub").textContent = "불러오는 중...";
+  body.innerHTML = "<p class='wnone'>불러오는 중...</p>";
+  fetch("/api/wall/facility-subnet?subnet=" + encodeURIComponent(subnet))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var hosts = d.hosts || [];
+      /* 잘렸을 때는 표시 개수가 아니라 실제 사용 개수를 보여준다 —
+         '사용 2000개'는 진짜 2000개인지 잘린 건지 구분이 안 된다. */
+      var used = (d.total === null || d.total === undefined) ? hosts.length : d.total;
+      document.getElementById("wsw-sub").textContent =
+        "사용 " + used + "개" +
+        (d.capacity ? " / 대역 용량 " + d.capacity + "개" : "") +
+        " · 온라인 " + d.online + " · 연결 실패 " + d.offline;
+      if (!hosts.length) {
+        body.innerHTML = "<p class='wnone'>이 대역에 수집된 설비가 없습니다.</p>";
+        return;
+      }
+      body.innerHTML =
+        "<table class='wtable'><thead><tr><th>IP</th><th>상태</th>" +
+        "<th>연결 스위치</th><th>포트</th><th>MAC</th><th>갱신</th></tr></thead><tbody>" +
+        hosts.map(function (h) {
+          var st = h.online
+            ? "<span class='wst wst--ok'>온라인</span>"
+            : "<span class='wst wst--bad'>연결 실패</span>";
+          /* 접속 지점이 확인 안 된 것을 스위치 이름 없이 비워두면 '수집 실패'로
+             오해한다 — 사유를 한 줄로 밝힌다(v6.35.0 설비 상태 3단계와 같은 취지). */
+          var sw = h.switch_name
+            ? esc(h.switch_name) + (h.direct ? "" : " <small class='wsub__na'>(경유 관측)</small>")
+            : "<small class='wsub__na'>미확인</small>";
+          return "<tr><td><b>" + esc(h.ip) + "</b></td><td>" + st + "</td><td>" + sw +
+            "</td><td>" + esc(h.port || "-") + "</td><td>" + esc(h.mac || "-") +
+            /* 연도는 뺀다(월-일 시:분) — 좁은 칸에서 두 줄로 접혀 읽기 나빴다.
+               수집 상태 표도 같은 형식(slice(5,16))이다. */
+            "</td><td>" + esc((h.updated || "-").slice(5)) + "</td></tr>";
+        }).join("") + "</tbody></table>" +
+        (d.truncated
+          ? "<p class='wswm__foot'>" + used + "개 중 앞 " + hosts.length +
+            "개만 표시했습니다(IP 순).</p>"
+          : "");
+    })
+    .catch(function () {
+      body.innerHTML = "<p class='wnone'>대역 정보를 불러오지 못했습니다.</p>";
+    });
+}
+
 /* ── 설비 탭 ── */
 function renderFacilityTab(c) {
   var el = document.getElementById("wtab-facility");
@@ -710,13 +804,8 @@ function renderFacilityTab(c) {
             return { id: x.id, name: x.name, v: x.count, d: _n(x.count) + " <small>건</small>" };
           }), { link: true, c0: "#e11d48", c1: "#fb7185" })
         : "<p class='wnone'>최근 7일 연결 실패 이벤트 없음</p>") +
-      "<h3 style='margin-top:14px'>대역별 수집 IP<span class='hint'>온라인/전체</span></h3>" +
-      rankList((c.by_subnet || []).map(function (x) {
-        var pct = x.count ? Math.round(x.online * 100 / x.count) : 0;
-        return { name: x.name, v: x.count,
-                 d: _n(x.online) + "/" + _n(x.count) + " <small>(" + pct + "%)</small>" };
-      }), { c0: "#059669", c1: "#34d399" }) +
     "</div>" +
+    subnetCard(c.by_subnet || []) +
     "<div class='wcard wcard--12'><h3>온라인 설비 추이" + rangeBtns() +
       "<span class='hint'>계단이 꺾인 시각 = 설비가 무더기로 끊긴 시각 — 그 시각의 스위치·전원 이벤트와 대조</span></h3>" +
       "<div id='ch-fac' class='wchartbox'></div></div>" +
@@ -747,6 +836,9 @@ function openWallSwitchModal(id) {
   var body = document.getElementById("wsw-body");
   if (!modal || !body) return;
   modal.style.display = "";
+  /* 대역 목록 팝업이 넓게 켜뒀을 수 있다 — 스위치 요약은 좁은 기본 폭으로 */
+  var box = modal.querySelector(".wswm__box");
+  if (box) box.classList.remove("wswm__box--wide");
   document.getElementById("wsw-name").textContent = "불러오는 중...";
   document.getElementById("wsw-sub").textContent = "";
   body.innerHTML = "<p class='wnone'>불러오는 중...</p>";
@@ -794,6 +886,8 @@ function openWallSwitchModal(id) {
 document.addEventListener("click", function (e) {
   var row = e.target.closest && e.target.closest("[data-swid]");
   if (row) { openWallSwitchModal(row.getAttribute("data-swid")); return; }
+  var sub = e.target.closest && e.target.closest("[data-subnet]");
+  if (sub) { openSubnetModal(sub.getAttribute("data-subnet")); return; }
   var x = e.target.closest && e.target.closest("[data-close]");
   if (x) {
     var m = document.getElementById("wsw-modal");
