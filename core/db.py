@@ -370,6 +370,28 @@ CREATE TABLE IF NOT EXISTS rack_layout (
 )
 """
 
+# 포트 에러 '증가분' 이력 — 누적 카운터가 아니라 주기 사이의 델타.
+#
+# ports 테이블에도 crc/in/out error가 있지만 그건 **장비 부팅 이후 누적값**이라
+# 100만이 3년 전 것인지 어제 것인지 구분되지 않는다. 지금 나빠지고 있는 포트를
+# 찾으려면 "최근 10분에 얼마나 늘었나"가 필요하다.
+#
+# 증가한 포트만 넣는다 — 대부분의 포트는 항상 0이라 전 포트를 매 주기 기록하면
+# 이력만 폭주하고 볼 것은 없다.
+CREATE_PORT_ERROR_HISTORY_TABLE = """
+CREATE TABLE IF NOT EXISTS port_error_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    switch_id INTEGER NOT NULL,
+    port TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    in_err INTEGER DEFAULT 0,
+    out_err INTEGER DEFAULT 0,
+    in_disc INTEGER DEFAULT 0,
+    out_disc INTEGER DEFAULT 0,
+    crc INTEGER DEFAULT 0
+)
+"""
+
 # 랙에 직접 적어 넣는 항목 — 현황(스위치·방화벽·서버)에 등록하지 않는 것들.
 # 랙에는 KVM·콘솔·PDU처럼 관리 대상이 아닌 장비도 실장되고, '증설 예정이라
 # 비워둘 자리'도 표시해 둬야 한다. 현황 3종에 억지로 등록하면 수집 대상이
@@ -703,6 +725,7 @@ def init_schema(db_path):
                 CREATE_DEVICE_ENV_TABLE,
                 CREATE_RACK_LAYOUT_TABLE,
                 CREATE_RACK_ITEMS_TABLE,
+                CREATE_PORT_ERROR_HISTORY_TABLE,
                 CREATE_METRICS_HISTORY_TABLE,
                 CREATE_TRAFFIC_HISTORY_TABLE,
                 CREATE_PORT_STATE_TABLE,
@@ -2277,6 +2300,62 @@ def get_traffic_series(db_path, hours=24, limit=8000):
                 ("-%d hours" % int(hours), int(limit))).fetchall()]
         except Exception:
             return []
+
+
+def save_port_error_points(db_path, rows):
+    """포트 에러 증가분 기록 — rows=[(switch_id, port, in_err, out_err, in_disc, out_disc, crc)].
+
+    폴러가 부른다 — 실패해도 예외를 올리지 않는다(점 하나 손실이 폴러 중단보다 낫다).
+    """
+    if not rows:
+        return
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                conn.executemany(
+                    "INSERT INTO port_error_history "
+                    "(switch_id, port, ts, in_err, out_err, in_disc, out_disc, crc) "
+                    "VALUES (?,?, datetime('now','localtime'), ?,?,?,?,?)",
+                    [(int(sid), str(p)[:80], int(ie), int(oe), int(idc), int(odc), int(c))
+                     for sid, p, ie, oe, idc, odc, c in rows])
+            except Exception as e:
+                log_event("warning", "save_port_error_points_skipped", error=str(e)[:120])
+
+
+def get_port_error_totals(db_path, hours=24, limit=200):
+    """최근 N시간 포트별 에러 증가 합계 → [{switch_id, port, in_err, ...,  total}] (많은 순).
+
+    관제 '에러 증가 포트' 카드용. 누적 카운터가 아니라 그 기간에 실제로 늘어난 양이다.
+    """
+    with get_db(db_path) as conn:
+        try:
+            return [dict(r) for r in conn.execute(
+                "SELECT switch_id, port, "
+                "  SUM(in_err) AS in_err, SUM(out_err) AS out_err, "
+                "  SUM(in_disc) AS in_disc, SUM(out_disc) AS out_disc, SUM(crc) AS crc, "
+                "  SUM(in_err+out_err+in_disc+out_disc+crc) AS total, "
+                "  MAX(ts) AS last_ts, COUNT(*) AS samples "
+                "FROM port_error_history "
+                "WHERE ts >= datetime('now','localtime', ?) "
+                "GROUP BY switch_id, port HAVING total > 0 "
+                "ORDER BY total DESC LIMIT ?",
+                ("-%d hours" % int(hours), int(limit))).fetchall()]
+        except Exception:
+            return []
+
+
+def prune_port_error_history(db_path, days=7):
+    """포트 에러 이력 정리. 트래픽(30일)보다 짧게 둔다 — 에러는 '지금 늘고 있는가'가
+    중요하고, 오래된 증가분은 이미 조치했거나 무의미하다."""
+    with _db_lock:
+        with get_db(db_path) as conn:
+            try:
+                cur = conn.execute(
+                    "DELETE FROM port_error_history WHERE ts < datetime('now','localtime', ?)",
+                    ("-%d days" % int(days),))
+                return cur.rowcount or 0
+            except Exception:
+                return 0
 
 
 def prune_traffic_history(db_path, days=30):

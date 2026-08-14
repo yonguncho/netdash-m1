@@ -60,6 +60,8 @@ def test_init_db_creates_core_tables(tmp_path):
         "port_state",
         # 업링크 트래픽 이력(bps) — 지표 폴러가 IF-MIB 카운터 델타로 기록
         "traffic_history",
+        # 포트 에러 증가분 — 누적값이 아니라 주기 사이 델타(늘어난 포트만)
+        "port_error_history",
     }
     assert expected == tables
 

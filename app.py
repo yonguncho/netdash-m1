@@ -4341,6 +4341,7 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "alert_cpu_pct": db.get_setting(db_path, "alert_cpu_pct", "80"),
                 "alert_mem_pct": db.get_setting(db_path, "alert_mem_pct", "80"),
                 "alert_sessions": db.get_setting(db_path, "alert_sessions", "0"),
+                "alert_port_errors": db.get_setting(db_path, "alert_port_errors", "10"),
                 "snmp_has_community": bool(
                     db.get_setting(db_path, "snmp_community_blob", "")),
             })
@@ -4414,7 +4415,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                     pass
             # 임계값 알람 — %는 0~100, 세션은 0~10,000,000. 0=끔.
             for _k, _hi in (("alert_cpu_pct", 100), ("alert_mem_pct", 100),
-                            ("alert_sessions", 10_000_000)):
+                            ("alert_sessions", 10_000_000),
+                            ("alert_port_errors", 1_000_000)):
                 if _k in data:
                     try:
                         db.set_setting(db_path, _k,

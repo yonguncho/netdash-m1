@@ -20,11 +20,23 @@ from . import db, utils
 
 DEFAULT_MINUTES = 5
 RETENTION_DAYS = 30
+ERROR_RETENTION_DAYS = 7      # 포트 에러 증가분 — 오래된 것은 이미 조치했거나 무의미
 
 # IF-MIB 64bit 트래픽 카운터(32bit ifIn/OutOctets는 1G에서 34초면 한 바퀴 돈다)
 _IF_HC_IN = "1.3.6.1.2.1.31.1.1.1.6"
 _IF_HC_OUT = "1.3.6.1.2.1.31.1.1.1.10"
 _IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"
+
+# 포트 에러·폐기 카운터(IF-MIB, 32bit) + CRC(EtherLike-MIB dot3StatsFCSErrors).
+# CRC는 IF-MIB에 없어서 따로 읽는다 — 물리 계층(케이블·SFP) 문제의 가장 직접적 신호다.
+_IF_IN_DISC = "1.3.6.1.2.1.2.2.1.13"
+_IF_IN_ERR = "1.3.6.1.2.1.2.2.1.14"
+_IF_OUT_DISC = "1.3.6.1.2.1.2.2.1.19"
+_IF_OUT_ERR = "1.3.6.1.2.1.2.2.1.20"
+_DOT3_FCS_ERR = "1.3.6.1.2.1.10.7.2.1.3"
+
+_ERR_KO = {"in_err": "수신오류", "out_err": "송신오류",
+           "in_disc": "수신폐기", "out_disc": "송신폐기", "crc": "CRC"}
 
 _thread = None
 _stop = threading.Event()
@@ -32,6 +44,9 @@ _stop = threading.Event()
 # 직전 카운터 샘플 {(switch_id, port): (time.time(), in_octets, out_octets)}.
 # 메모리로 충분 — 재시작하면 첫 주기는 기준선만 잡고 다음 주기부터 bps가 나온다.
 _prev_traffic = {}
+
+# 포트 에러 직전 샘플 {switch_id: {port: {키: 카운터}}} — 위와 같은 이유로 메모리.
+_prev_errors = {}
 
 # 임계값 상태 {(fw_id, metric): 초과 여부} — 같은 초과 상태에서 매 주기 재알람 금지.
 # 메모리라 재시작 후 여전히 초과면 한 번 다시 알린다(지속 중인 이상은 알리는 게 맞다).
@@ -94,6 +109,124 @@ def _walk_traffic(ip, community, budget=8.0):
                 pass
     return {p: (v[0], v[1]) for p, v in out.items()
             if v[0] is not None and v[1] is not None}
+
+
+def _walk_errors(ip, community, budget=10.0):
+    """{포트이름: {in_err, out_err, in_disc, out_disc, crc}} — 물리 포트만.
+
+    IF-MIB의 에러/폐기 카운터 넷 + EtherLike-MIB의 FCS(=CRC) 에러.
+    CRC는 IF-MIB에 없어서 dot3StatsFCSErrors를 따로 읽는다. 이 MIB을 지원하지
+    않는 장비가 있으므로 실패해도 나머지 넷은 그대로 쓴다.
+    """
+    from .snmp_collect import _Session
+    from .status_monitor import _is_physical
+    sess = _Session(ip, community, budget=budget)
+    names = {}
+    for oid, val in sess.walk(_IF_NAME, max_rows=1024):
+        idx = oid.rsplit(".", 1)[1]
+        names[idx] = val.decode("utf-8", "replace") if isinstance(val, bytes) else str(val)
+    out = {}
+    for base, key in ((_IF_IN_ERR, "in_err"), (_IF_OUT_ERR, "out_err"),
+                      (_IF_IN_DISC, "in_disc"), (_IF_OUT_DISC, "out_disc")):
+        for oid, val in sess.walk(base, max_rows=1024):
+            idx = oid.rsplit(".", 1)[1]
+            nm = (names.get(idx) or "").strip()
+            if not _is_physical(nm):
+                continue
+            try:
+                out.setdefault(nm[:80], {})[key] = int(val)
+            except (TypeError, ValueError):
+                pass
+    try:
+        for oid, val in sess.walk(_DOT3_FCS_ERR, max_rows=1024):
+            idx = oid.rsplit(".", 1)[1]
+            nm = (names.get(idx) or "").strip()
+            if not _is_physical(nm) or nm[:80] not in out:
+                continue
+            try:
+                out[nm[:80]]["crc"] = int(val)
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        pass                      # EtherLike-MIB 미지원 — CRC만 빠진다
+    return out
+
+
+def compute_error_delta(prev, cur, port_filter=None):
+    """직전 샘플 대비 증가분 → {포트: {키: 증가량}}. prev를 제자리 갱신.
+
+    카운터가 줄면(장비 재부팅·카운터 초기화) 그 항목은 버린다 — 32bit 카운터라
+    랩어라운드도 있는데, 그걸 증가로 세면 멀쩡한 포트가 갑자기 40억 에러가 된다.
+    첫 관측은 기준선만 잡고 넘어간다(툴을 켠 순간 과거 누적이 증가로 잡히면
+    안 된다 — 그게 지금 ports 테이블 누적값이 쓸모없는 이유다).
+    """
+    KEYS = ("in_err", "out_err", "in_disc", "out_disc", "crc")
+    delta = {}
+    for port, vals in cur.items():
+        if port_filter and port.lower() not in port_filter:
+            continue
+        old = prev.get(port)
+        prev[port] = dict(vals)
+        if not old:
+            continue                      # 첫 관측 — 기준선만
+        d = {}
+        for k in KEYS:
+            c, o = vals.get(k), old.get(k)
+            if c is None or o is None:
+                continue
+            diff = c - o
+            if diff > 0:
+                d[k] = diff
+        if d:
+            delta[port] = d
+    return delta
+
+
+def error_alert_limit(db_path):
+    """한 주기에 이만큼 이상 늘면 이벤트를 낸다. 0이면 알람 끔."""
+    try:
+        return max(0, int(db.get_setting(db_path, "alert_port_errors", "10") or 10))
+    except (TypeError, ValueError):
+        return 10
+
+
+def collect_port_errors(db_path, community):
+    """전 스위치 포트 에러 증가분 수집·기록. 반환: 기록한 행 수.
+
+    증가한 포트만 저장한다. 임계를 넘으면 이벤트를 남겨 알람 벨·이메일·관제
+    티커로 흘러가게 한다(포트 DOWN 이벤트와 같은 경로).
+    """
+    limit = error_alert_limit(db_path)
+    rows = []
+    for sw in db.get_switches(db_path):
+        ip, sid = sw.get("ip"), sw["id"]
+        if not ip:
+            continue
+        try:
+            cur = _walk_errors(ip, community)
+        except Exception:
+            continue                      # SNMP 미지원/차단 — 조용히 건너뜀
+        if not cur:
+            continue
+        prev = _prev_errors.setdefault(sid, {})
+        delta = compute_error_delta(prev, cur)
+        name = sw.get("name") or ip
+        for port, d in delta.items():
+            total = sum(d.values())
+            rows.append((sid, port, d.get("in_err", 0), d.get("out_err", 0),
+                         d.get("in_disc", 0), d.get("out_disc", 0), d.get("crc", 0)))
+            if limit and total >= limit:
+                try:
+                    parts = ", ".join("%s %d" % (_ERR_KO.get(k, k), v)
+                                      for k, v in sorted(d.items()))
+                    db.save_device_event(
+                        db_path, "port_errors", "warning", switch_id=sid,
+                        label=sw.get("name"),
+                        message="포트 에러 증가: %s %s (%s)" % (name, port, parts))
+                except Exception:
+                    pass
+    db.save_port_error_points(db_path, rows)
+    return len(rows)
 
 
 def compute_bps(prev, cur, now):
@@ -292,6 +425,13 @@ def poll_once(db_path, demo_mode=False):
     except Exception as e:
         utils.log_event("warning", "metrics_poll_traffic_error", error=str(e)[:120])
 
+    # ⑤ 포트 에러 증가분 — 끊어진 뒤가 아니라 나빠지는 중에 알기 위한 것.
+    #    ports 테이블의 누적값과 달리 '이번 주기에 늘어난 양'만 남긴다.
+    try:
+        points += collect_port_errors(db_path, community)
+    except Exception as e:
+        utils.log_event("warning", "metrics_poll_porterr_error", error=str(e)[:120])
+
     return points
 
 
@@ -315,6 +455,8 @@ def _loop(db_path, demo_mode):
             try:
                 removed = db.prune_metrics_history(db_path, RETENTION_DAYS)
                 removed += db.prune_traffic_history(db_path, RETENTION_DAYS)
+                # 에러 이력은 짧게 — '지금 늘고 있는가'가 관심사다
+                removed += db.prune_port_error_history(db_path, ERROR_RETENTION_DAYS)
                 if removed:
                     utils.log_event("info", "metrics_history_pruned", removed=removed)
             except Exception:

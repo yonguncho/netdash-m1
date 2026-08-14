@@ -389,7 +389,17 @@ def main():
                     else:
                         ok("대역 팝업 닫기")
             pg.click("[data-wtab='switch']")
-            pg.wait_for_timeout(400)
+            pg.wait_for_timeout(700)
+            # 포트 에러 증가 카드(v6.38) — 데이터가 없어도 사유 문구가 떠야 한다
+            pec = pg.query_selector(".wcard:has-text('포트 에러 증가')")
+            if not pec:
+                fail("관제 스위치 탭에 '포트 에러 증가' 카드가 없음")
+            else:
+                t = pec.inner_text()
+                if "늘어난 포트가 없습니다" in t or pec.query_selector("tbody tr"):
+                    ok("포트 에러 증가 카드")
+                else:
+                    fail("포트 에러 카드가 비어 있는데 사유 문구도 없음")
             rb = pg.query_selector("[data-hours='168']")
             if rb:
                 rb.click()

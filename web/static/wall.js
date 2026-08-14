@@ -55,7 +55,7 @@ function ico(name) {
 
 var KIND_KO = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
-  port_down: "포트 다운", port_up: "포트 복구",
+  port_down: "포트 다운", port_up: "포트 복구", port_errors: "포트 에러 증가",
   threshold_over: "임계 초과", threshold_clear: "임계 해제",
   device_moved: "설비 이동", config_changed: "설정 변경",
   switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
@@ -382,6 +382,38 @@ function meter(label, pct, disp) {
     "<span class='wmeter__v'>" + esc(disp || (pct + "%")) + "</span></div>";
 }
 
+/* 포트 에러 '증가' 카드 — 누적 카운터가 아니라 최근 24시간에 늘어난 양.
+   포트 DOWN은 이미 끊어진 뒤의 신호다. 여기 뜨는 포트는 아직 붙어 있지만
+   물리 계층(케이블·SFP·광 레벨)이 나빠지는 중일 가능성이 높다. */
+function portErrCard(rows) {
+  if (!rows.length) {
+    return wcard("포트 에러 증가",
+      "최근 24시간 · 증가한 포트만 · 지표 폴러가 SNMP로 주기 수집",
+      "<p class='wnone'>최근 24시간 에러가 늘어난 포트가 없습니다.</p>", "wcard--6");
+  }
+  var body =
+    "<table class='wtable'><thead><tr><th>스위치</th><th>포트</th>" +
+    "<th>합계</th><th>내역</th><th>최근</th></tr></thead><tbody>" +
+    rows.map(function (r) {
+      var parts = [];
+      if (r.crc) parts.push("CRC " + _n(r.crc));
+      if (r.in_err) parts.push("수신오류 " + _n(r.in_err));
+      if (r.out_err) parts.push("송신오류 " + _n(r.out_err));
+      if (r.in_disc) parts.push("수신폐기 " + _n(r.in_disc));
+      if (r.out_disc) parts.push("송신폐기 " + _n(r.out_disc));
+      var click = r.id ? " class='wsub__row' data-swid='" + r.id + "'" : "";
+      return "<tr" + click + "><td><b>" + esc(r.name) + "</b></td>" +
+        "<td><code>" + esc(r.port) + "</code></td>" +
+        "<td class='wsub__bad'><b>" + _n(r.total) + "</b></td>" +
+        "<td><small>" + esc(parts.join(" · ")) + "</small></td>" +
+        "<td><small>" + esc(String(r.last_ts || "").slice(5)) + "</small></td></tr>";
+    }).join("") + "</tbody></table>";
+  return wcard("포트 에러 증가",
+    "최근 24시간 늘어난 양(누적값 아님) · CRC·수신오류는 케이블/SFP 의심 · " +
+    "행 클릭 → 스위치 상세",
+    body, "wcard--6" + (rows.length > 8 ? " wcard--tall" : ""));
+}
+
 /* ── 스위치 탭 ── */
 function renderSwitchTab(s) {
   var el = document.getElementById("wtab-switch");
@@ -424,6 +456,7 @@ function renderSwitchTab(s) {
             return { name: t.name, v: t.temp_c, d: t.temp_c + "°C" };
           }), { c0: "#c2410c", c1: "#fb923c" }), "wcard--6")
       : "") +
+    portErrCard(s.port_errors || []) +
     "<div class='wcard wcard--6'><h3>포트 사용 추이" + rangeBtns() +
       "</h3><div id='ch-ports' class='wchartbox'></div></div>" +
     "<div class='wcard wcard--6'><h3>온도 추이<span class='hint'>스위치별</span></h3>" +
@@ -1406,7 +1439,7 @@ var _tvLastEvtSig = null;
 
 // 알람성 이벤트 종류 → 보여줄 탭
 var _TV_JUMP = {
-  port_down: "switch", switch_unreachable: "switch",
+  port_down: "switch", port_errors: "switch", switch_unreachable: "switch",
   flapping: "switch", looping: "switch",
   firewall_unreachable: "firewall", threshold_over: "firewall",
   device_offline: "facility",

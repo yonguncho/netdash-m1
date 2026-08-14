@@ -204,6 +204,7 @@ function _applyLocFilter(list, inputId) {
       _setVal("ac-metrics-minutes", d.metrics_poll_minutes || "5");
       _setVal("ac-status-minutes", d.status_poll_minutes || "10");
       _setVal("ac-alert-cpu", d.alert_cpu_pct != null ? d.alert_cpu_pct : "80");
+      _setVal("ac-alert-porterr", d.alert_port_errors != null ? d.alert_port_errors : "10");
       _setVal("ac-alert-mem", d.alert_mem_pct != null ? d.alert_mem_pct : "80");
       _setVal("ac-alert-sessions", d.alert_sessions != null ? d.alert_sessions : "0");
       // 커뮤니티는 자격증명이라 서버가 값을 안 내려준다 — 저장 여부만 안내한다.
@@ -285,6 +286,7 @@ function _applyLocFilter(list, inputId) {
       metrics_poll_minutes: _val("ac-metrics-minutes", "5"),
       status_poll_minutes: _val("ac-status-minutes", "10"),
       alert_cpu_pct: _val("ac-alert-cpu", "80"),
+      alert_port_errors: _val("ac-alert-porterr", "10"),
       alert_mem_pct: _val("ac-alert-mem", "80"),
       alert_sessions: _val("ac-alert-sessions", "0"),
       snmp_community: _val("ac-snmp-community", ""),

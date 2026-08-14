@@ -99,9 +99,33 @@ def _switch_stats(conn, db_path):
     except Exception:
         pass
 
+    # 포트 에러 '증가' 상위 — 누적값이 아니라 최근 24시간에 실제로 늘어난 양.
+    # 끊어진 뒤 알리는 포트 DOWN과 달리, 나빠지는 중인 물리 링크를 먼저 찾는다.
+    port_errors = []
+    try:
+        names = {s["id"]: s.get("name") for s in db.get_switches(db_path)}
+        name_ids = {}
+        for r in _rows(conn, "SELECT name, MIN(id) AS id, COUNT(*) AS c "
+                             "FROM switches GROUP BY name"):
+            if (r["c"] or 0) == 1:
+                name_ids[r["name"]] = r["id"]
+        for e in db.get_port_error_totals(db_path, hours=24, limit=10):
+            nm = names.get(e["switch_id"]) or str(e["switch_id"])
+            row = {"name": nm, "port": e["port"], "total": e["total"],
+                   "in_err": e["in_err"], "out_err": e["out_err"],
+                   "in_disc": e["in_disc"], "out_disc": e["out_disc"],
+                   "crc": e["crc"], "last_ts": (e.get("last_ts") or "")[:16]}
+            sid = name_ids.get(nm)
+            if sid:
+                row["id"] = sid            # 클릭 → 스위치 상세
+            port_errors.append(row)
+    except Exception:
+        pass
+
     return {"total": total, "by_status": by_status, "by_vendor": by_vendor[:8],
             "by_kind": by_kind[:6], "ports": ports, "alerts": alerts,
-            "reach": reach, "top_ports": top, "temps": temps[:8]}
+            "reach": reach, "top_ports": top, "temps": temps[:8],
+            "port_errors": port_errors}
 
 
 def _firewall_stats(conn, db_path):
