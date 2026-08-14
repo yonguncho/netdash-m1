@@ -1,8 +1,43 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.38.0 커밋 완료 (9aa93e7) — exe 빌드·릴리스 진행 중.
-pytest 1798 PASS / 16 FAIL(전부 아래 DPAPI 환경 문제, 코드 무관) + selfcheck PASS.
-(v6.37.0 = a6349e0·d7f580c·00f23b7, 릴리스·배포본 교체 완료)
+**현재 버전**: v6.39.0 커밋 완료 (d93b581 버그수정 + f6b3ec5 기능) — 빌드·릴리스 중.
+pytest **1822 PASS / 16 FAIL**(전부 아래 DPAPI 환경 문제, 코드 무관) + selfcheck PASS.
+(v6.38.0 = 9aa93e7 릴리스 완료 / v6.37.0 = a6349e0·d7f580c·00f23b7)
+
+## v6.39.0 — 랙 이동 버그(사용자 신고) + 관제 통계(2순위) + 수집 가시화(3순위)
+
+### ⚠ 재발 방지가 중요한 버그 — 랙 항목 드래그가 엉뚱한 스위치를 옮겼다
+
+`_ruEndpoint(kind, id)`가 **모르는 종류를 기본값 `/api/switches/<id>`로** 보냈다.
+랙 직접 입력 항목(kind='item')이 거기 떨어져 **항목 id와 같은 id의 스위치**
+location이 바뀌었다. 재현: `PUT /api/switches/18` → 스위치 18이 'ZZ88U20'으로.
+- 수정: 모르는 종류 → **null**(스위치로 새지 않음) / `_ruSavePut`은 URL 없으면
+  요청 안 함 / `_ruSaveItemMove`가 rack_items API로 저장.
+- **selfcheck에 실제 드래그 단계** 추가 — 이동 전후 `window._switches`의 location
+  목록을 비교해 장비가 안 움직였는지 확인.
+- 교훈: **기본값 분기(`return "/api/switches/"`)가 조용한 데이터 손상의 통로**였다.
+  종류 분기에서 기본값으로 남의 리소스를 지목하면 안 된다.
+
+### 2순위 관제 통계
+- 온도 임계 설정화(`temp_warn_c`/`temp_crit_c`) — `temp_level/summarize/collect_env`가
+  임계를 인자로 받고 `collector.temp_thresholds()`가 설정에서 읽음(뒤집힌 입력 스왑).
+- `wallstats._risk_stats` — 임계 대비 %로 환산한 통합 순위(70% 미만 제외) +
+  평소 대비 이상치(최근 24h vs 7일 평균, 표본 12개 이상) + SNMP 무응답 목록.
+  관제 요약 탭 `#wall-risk`(장애 목록 **위**). **삭제된 장비 제외** — device_env에
+  잔재가 남아 이름 대신 id 숫자가 뜨던 것.
+
+### 3순위 수집 가시화
+- `snmp_env.probe_switch` + `POST /api/switches/<id>/snmp-probe` + 표의 [SNMP] 버튼.
+- 관제 'SNMP 무응답 장비' 목록.
+
+### 부수 수정(중요)
+- `collect_env` 시그니처 변경으로 기존 mock이 깨졌는데 **폴러가 예외를 삼켜
+  온도만 조용히 빠졌다** — 시그니처 오류 같은 코드 버그도 삼키는 구조.
+- **기존 flaky 테스트 2건**(traffic): 두 호출이 밀리초 안에 끝나 `dt=0` → bps
+  통째 폐기. 내 변경 없이도 3회 중 2회 실패. 테스트 시계 고정으로 해소.
+- selfcheck: 관제 진입 후 주기 갱신(10·30·60초)을 멈춘다 — 검증 중 재렌더로
+  잡아둔 요소가 DOM에서 떨어져 클릭이 실패했다(제품 결함 아님).
+  `[data-swid]`는 탭 범위로 한정(숨은 요약 탭 위험도 카드가 먼저 잡힘).
 
 ## v6.38.0 — 포트 에러 '증가분' 감지 (SNMP 개선 1순위)
 
