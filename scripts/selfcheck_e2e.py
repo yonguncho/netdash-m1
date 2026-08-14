@@ -239,11 +239,67 @@ def main():
                             fail("저장한 예약 자리가 랙에 안 그려짐")
                         else:
                             ok("랙 직접 입력: %s U%s 예약 자리 표시" % (rk, un))
+                            # 드래그 이동 — 예전엔 이 저장이 /api/switches/<id>로
+                            # 나가 **같은 id의 스위치**가 옮겨졌다(v6.39.0 회귀).
+                            sw_before = pg.evaluate(
+                                "() => (window._switches||[]).map("
+                                "s => s.id + ':' + (s.location||''))")
+                            dstu = str(int(un) - 3) if int(un) > 4 else str(int(un) + 3)
+                            dst = pg.query_selector(
+                                "#room-rack-view .ru--empty[data-rack='%s']"
+                                "[data-unit='%s']" % (rk, dstu))
+                            sb = tb = None
+                            if dst:
+                                # 둘 다 화면 안에 있어야 좌표가 나온다(랙은 42U라 길다)
+                                dst.scroll_into_view_if_needed()
+                                made.scroll_into_view_if_needed()
+                                pg.wait_for_timeout(300)
+                                sb, tb = made.bounding_box(), dst.bounding_box()
+                            if not sb or not tb:
+                                fail("랙 항목 이동 검증 불가(대상 칸 U%s 없음/화면 밖)" % dstu)
+                            else:
+                                pg.mouse.move(sb["x"] + sb["width"] / 2,
+                                              sb["y"] + sb["height"] / 2)
+                                pg.mouse.down()
+                                pg.mouse.move(sb["x"] + sb["width"] / 2 + 12,
+                                              sb["y"] + sb["height"] / 2 + 12, steps=6)
+                                pg.wait_for_timeout(150)
+                                pg.mouse.move(tb["x"] + tb["width"] / 2,
+                                              tb["y"] + tb["height"] / 2, steps=14)
+                                pg.wait_for_timeout(200)
+                                pg.mouse.up()
+                                pg.wait_for_timeout(1600)
+                                movedc = pg.query_selector(
+                                    "#room-rack-view .ru--item[data-rack='%s']"
+                                    "[data-unit='%s']" % (rk, dstu))
+                                sw_after = pg.evaluate(
+                                    "() => (window._switches||[]).map("
+                                    "s => s.id + ':' + (s.location||''))")
+                                if not movedc:
+                                    fail("랙 항목 드래그 이동이 반영되지 않음")
+                                elif sw_before != sw_after:
+                                    fail("랙 항목을 옮겼는데 스위치 위치가 바뀜 "
+                                         "(엉뚱한 장비 이동 회귀)")
+                                else:
+                                    ok("랙 항목 드래그 이동 (장비 위치 불변)")
+                                    made = movedc      # 아래 삭제 단계가 새 위치를 쓴다
+                                    un = dstu
                             # 원상복구 — 셀프체크가 DB에 잔재를 남기면 안 된다.
                             # 삭제 confirm은 위의 전역 _dlg 핸들러가 받는다.
-                            made.click()
-                            pg.wait_for_timeout(700)
-                            dl = pg.query_selector("#btn-rack-item-delete")
+                            # 이동 후 랙뷰가 다시 그려져 예전 핸들은 DOM에서 떨어진다
+                            # → 셀렉터로 다시 찾는다.
+                            cur = pg.query_selector(
+                                "#room-rack-view .ru--item[data-rack='%s']"
+                                "[data-unit='%s']" % (rk, un))
+                            if not cur:
+                                fail("삭제할 랙 항목을 다시 찾지 못함(U%s)" % un)
+                                dl = None
+                            else:
+                                cur.scroll_into_view_if_needed()
+                                pg.wait_for_timeout(200)
+                                cur.click()
+                                pg.wait_for_timeout(700)
+                                dl = pg.query_selector("#btn-rack-item-delete")
                             if dl and dl.is_visible():
                                 dl.click()
                                 pg.wait_for_timeout(1200)
@@ -342,6 +398,12 @@ def main():
             print("[5] 관제 탭·차트·팝업")
             pg.goto(URL + "/wall")
             pg.wait_for_timeout(2500)
+            # 첫 렌더가 끝난 뒤 주기 갱신(10·30·60초)을 멈춘다. 여기서 볼 것은
+            # '클릭 흐름'인데, 검증 도중 화면이 다시 그려지면 잡아둔 요소가 DOM에서
+            # 떨어져 클릭이 실패한다(제품 결함이 아니라 검증 방식의 문제).
+            pg.evaluate("() => { const last = setInterval(() => {}, 99999);"
+                        " for (let i = 1; i <= last; i++) clearInterval(i); }")
+            pg.wait_for_timeout(300)
             for tab in ("switch", "firewall", "facility", "summary"):
                 pg.click("[data-wtab='%s']" % tab)
                 pg.wait_for_timeout(600)
@@ -349,11 +411,13 @@ def main():
             # 대역별 IP 사용 현황(v6.36) — 행 클릭 → 그 대역의 IP 목록 팝업
             pg.click("[data-wtab='facility']")
             pg.wait_for_timeout(700)
-            subrow = pg.query_selector(".wsub__row")
+            subrow = pg.query_selector("#wtab-facility .wsub__row")
             if not subrow:
                 fail("설비 탭에 대역별 IP 사용 현황이 없음")
             else:
-                subrow.click()
+                # 관제 통계는 30초마다 다시 그린다 — 미리 잡아둔 핸들은 그 사이
+                # DOM에서 떨어진다. 클릭 시점에 셀렉터로 다시 찾게 한다.
+                pg.click("#wtab-facility .wsub__row")
                 pg.wait_for_timeout(1500)
                 modal = pg.query_selector("#wsw-modal")
                 iprows = pg.query_selector_all("#wsw-body .wtable tbody tr")
@@ -486,7 +550,9 @@ def main():
                 ok("장비 선택 칩 토글")
             pg.click("[data-wtab='switch']")
             pg.wait_for_timeout(400)
-            row = pg.query_selector("[data-swid]")
+            # 탭 범위로 한정한다 — 숨겨진 요약 탭(위험도 카드)에도 data-swid가
+            # 있어서, 전역 셀렉터는 '보이지 않는 행'을 먼저 잡는다.
+            row = pg.query_selector("#wtab-switch [data-swid]")
             if row:
                 row.click()
                 pg.wait_for_timeout(1200)

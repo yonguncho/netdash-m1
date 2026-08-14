@@ -178,6 +178,39 @@ def test_index_html_has_rack_item_modal():
         assert el in html, el
 
 
+def test_move_does_not_use_device_endpoint():
+    """v6.39.0 회귀: 랙 항목을 드래그로 옮기면 **엉뚱한 스위치**가 이동하던 버그.
+
+    원인은 `_ruEndpoint`가 모르는 종류를 조용히 /api/switches/<id> 로 보낸 것.
+    랙 항목 id와 같은 id의 스위치 location이 바뀌었다(실기기 재현 확인).
+    """
+    js = _read("web", "static", "app.js")
+    ep = js[js.index("function _ruEndpoint("):]
+    ep = ep[:ep.index("\n}")]
+    # 기본값으로 스위치에 떨어지면 안 된다 — 모르면 null
+    assert "return null" in ep, "알 수 없는 종류가 스위치로 새면 남의 데이터가 바뀐다"
+    assert 'kind === "sw"' in ep, "스위치는 명시적으로만 매칭돼야 한다"
+
+
+def test_move_saves_through_rack_items_api():
+    js = _read("web", "static", "app.js")
+    assert "function _ruSaveItemMove(" in js
+    mv = js[js.index("function _ruSaveItemMove("):]
+    mv = mv[:mv.index("\n}\n")]
+    assert "/api/room/rack-items" in mv
+    # 드래그 종료 지점에서 항목과 장비를 갈라야 한다
+    assert 'if (kind === "item")' in js
+    assert "_ruSaveItemMove(devId" in js
+
+
+def test_save_put_refuses_unknown_kind():
+    """URL이 없으면 요청 자체를 보내지 않아야 한다(빈 URL로 현재 페이지에 PUT 금지)."""
+    js = _read("web", "static", "app.js")
+    sp = js[js.index("function _ruSavePut("):]
+    sp = sp[:sp.index("\nfunction ")]
+    assert "if (!url)" in sp and "return Promise.resolve()" in sp
+
+
 def test_reserved_slot_has_distinct_style():
     """예약 자리가 일반 장비처럼 보이면 '비었다'는 뜻이 전달되지 않는다."""
     css = _read("web", "static", "style.css")

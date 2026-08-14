@@ -108,6 +108,7 @@ document.addEventListener("click", function (e) {
     case "collect-switch": e.stopPropagation(); openCredentialModal(obj); break;
     case "edit-switch": editSwitch(obj); break;
     case "diagnose-switch": diagnoseSwitch(nid); break;
+    case "snmp-probe-switch": snmpProbeSwitch(nid); break;
     case "terminal-switch": openTerminal(nid); break;
     case "delete-switch": deleteSwitch(nid); break;
     case "collect-fw":
@@ -205,6 +206,8 @@ function _applyLocFilter(list, inputId) {
       _setVal("ac-status-minutes", d.status_poll_minutes || "10");
       _setVal("ac-alert-cpu", d.alert_cpu_pct != null ? d.alert_cpu_pct : "80");
       _setVal("ac-alert-porterr", d.alert_port_errors != null ? d.alert_port_errors : "10");
+      _setVal("ac-temp-warn", d.temp_warn_c != null ? d.temp_warn_c : "55");
+      _setVal("ac-temp-crit", d.temp_crit_c != null ? d.temp_crit_c : "70");
       _setVal("ac-alert-mem", d.alert_mem_pct != null ? d.alert_mem_pct : "80");
       _setVal("ac-alert-sessions", d.alert_sessions != null ? d.alert_sessions : "0");
       // 커뮤니티는 자격증명이라 서버가 값을 안 내려준다 — 저장 여부만 안내한다.
@@ -287,6 +290,8 @@ function _applyLocFilter(list, inputId) {
       status_poll_minutes: _val("ac-status-minutes", "10"),
       alert_cpu_pct: _val("ac-alert-cpu", "80"),
       alert_port_errors: _val("ac-alert-porterr", "10"),
+      temp_warn_c: _val("ac-temp-warn", "55"),
+      temp_crit_c: _val("ac-temp-crit", "70"),
       alert_mem_pct: _val("ac-alert-mem", "80"),
       alert_sessions: _val("ac-alert-sessions", "0"),
       snmp_community: _val("ac-snmp-community", ""),
@@ -1793,7 +1798,12 @@ var _RU_H = 21;   // 슬롯 한 칸(20px) + gap(1px)
 function _ruEndpoint(kind, id) {
   if (kind === "fw") return "/api/firewalls/" + id;
   if (kind === "srv") return "/api/servers/" + id;
-  return "/api/switches/" + id;
+  if (kind === "sw") return "/api/switches/" + id;
+  /* 모르는 종류를 스위치로 넘기지 않는다. 예전엔 여기가 기본값 /api/switches 라,
+     랙 직접 입력 항목(kind='item')을 끌면 **그 항목 id와 같은 id의 스위치**
+     위치가 바뀌었다 — 사용자에겐 "엉뚱한 스위치가 옮겨진다"로 보였다.
+     새 종류가 생겨도 조용히 남의 데이터를 고치는 일이 없게 null을 준다. */
+  return null;
 }
 
 // 랙 위치/높이 저장 PUT — 네트워크 단절 시 1회 자동 재시도.
@@ -1802,8 +1812,15 @@ function _ruEndpoint(kind, id) {
 // 멱등이라 재시도가 안전한데, 예전엔 한 번 실패하면 변경을 그냥 버리고
 // 원인 불명의 TypeError만 띄웠다.
 function _ruSavePut(kind, devId, loc, doneMsg) {
+  var url = _ruEndpoint(kind, devId);
+  if (!url) {
+    // 종류를 모르면 아무것도 건드리지 않는다 — 남의 데이터를 고치느니 실패가 낫다.
+    console.error("랙 저장: 알 수 없는 종류", kind, devId);
+    alert("이 항목은 여기서 옮길 수 없습니다(알 수 없는 종류: " + kind + ").");
+    return Promise.resolve();
+  }
   function attempt(retryLeft) {
-    return fetch(_ruEndpoint(kind, devId), {
+    return fetch(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ location: loc }),
@@ -1839,6 +1856,32 @@ function _ruSavePut(kind, devId, loc, doneMsg) {
 
 function _ruLocation(rack, unit, h) {
   return h > 1 ? (rack + "U" + unit + "-U" + (unit + h - 1)) : (rack + "U" + unit);
+}
+
+/* 랙 직접 입력 항목의 이동 저장 — 장비와 저장소가 다르다(rack_items 테이블).
+   장비용 PUT(_ruSavePut)에 태우면 엉뚱한 장비를 고치게 된다. */
+function _ruSaveItemMove(itemId, rack, unit) {
+  var it = (_roomRackItems || []).filter(function (x) {
+    return String(x.id) === String(itemId);
+  })[0];
+  if (!it) { console.error("랙 항목을 찾을 수 없음", itemId); return; }
+  fetch("/api/room/rack-items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: it.id, rack: rack, unit: unit,
+                           height: it.height, name: it.name,
+                           item_type: it.item_type, note: it.note })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      // 겹침 등 서버 판정은 그대로 알린다(화면에서만 막으면 창 두 개로 뚫린다)
+      if (!res.ok) alert(res.error || "위치 저장 실패");
+      _loadRackItems(function () { renderRoom(_switches); });
+    })
+    .catch(function (e) {
+      alert("위치 저장 오류 — 서버에 연결할 수 없습니다.\n(" + e + ")");
+      _loadRackItems(function () { renderRoom(_switches); });
+    });
 }
 
 document.addEventListener("mousedown", function (e) {
@@ -2019,6 +2062,12 @@ document.addEventListener("mousedown", function (e) {
     }, true);
     if (!target) return;                      // 놓을 자리가 아님 — 원위치
     if (target.rack === fromRack && target.unit === fromUnit) return;
+    if (kind === "item") {
+      // 직접 입력 항목은 저장소가 다르다(rack_items) — 장비용 PUT에 태우면
+      // 같은 id의 장비를 고치게 된다.
+      _ruSaveItemMove(devId, target.rack, target.unit);
+      return;
+    }
     var loc = _ruLocation(target.rack, target.unit, h);
     _ruSavePut(kind, devId, loc, "위치 저장");
   }
@@ -2331,6 +2380,9 @@ function renderSwitchTable(switches) {
       "title='실제 배너/프롬프트/show version 응답을 확인(벤더 미인식 원인 파악)' " +
       "data-action='diagnose-switch' data-id='" + sw.id + "'>진단</button> " +
       "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
+      "title='이 스위치가 SNMP로 무엇을 주는지 확인(온도·포트 에러가 안 나올 때)' " +
+      "data-action='snmp-probe-switch' data-id='" + sw.id + "'>SNMP</button> " +
+      "<button class='btn btn--secondary' style='font-size:12px;padding:4px 10px' " +
       "title='SSH 터미널로 직접 접속' data-action='terminal-switch' data-id='" + sw.id + "'>💻</button> " +
       "<button class='btn btn--ghost' style='font-size:12px;padding:4px 10px' " +
       "data-action='delete-switch' data-id='" + sw.id + "'>삭제</button></td></tr>";
@@ -2467,6 +2519,36 @@ function snmpProbeFirewall(id) {
       sub.forEach(function (s) { L.push("  " + s.oid + "  =  " + s.value); });
       L.push("");
       L.push("※ '(응답 없음)'인 항목은 이 장비/펌웨어가 해당 OID를 주지 않는다는 뜻입니다.");
+      out.textContent = L.join("\n");
+    })
+    .catch(function (e) { if (out) out.textContent = "조회 오류: " + e; });
+}
+
+/* 스위치 SNMP 확인 — 온도·에러가 안 채워질 때 '왜'를 스스로 확인하는 경로.
+   커뮤니티가 틀린 것인지, 장비가 그 MIB을 안 쓰는 것인지 구분해 준다. */
+function snmpProbeSwitch(id) {
+  var out = document.getElementById("diag-result");
+  openModal("modal-diagnose");
+  if (out) out.textContent = "SNMP 조회 중... (최대 25초)";
+  fetch("/api/switches/" + id + "/snmp-probe", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!out) return;
+      if (!res.ok) { out.textContent = "SNMP 확인 실패: " + (res.error || ""); return; }
+      var p = res.probe || {}, L = [];
+      L.push("스위치 SNMP 확인 — " + (res.name || "") + " (" + (res.ip || "") + ")");
+      L.push("");
+      if (p.sysdescr) L.push("장비 설명: " + p.sysdescr);
+      if (p.sysname) L.push("호스트네임: " + p.sysname);
+      L.push("");
+      L.push("── 항목별 확인 ──");
+      (p.checks || []).forEach(function (c) {
+        L.push("  [" + (c.ok ? "OK " : "없음") + "] " + c.name + " — " + c.detail);
+      });
+      L.push("");
+      L.push("※ '없음'이 곧 고장은 아닙니다. 그 MIB을 제공하지 않는 장비가 흔하고,");
+      L.push("   그 경우 해당 항목(온도·CRC 등)만 화면에서 빠집니다.");
+      L.push("※ 'SNMP 응답'부터 실패하면 커뮤니티·허용 호스트·중간 방화벽을 확인하세요.");
       out.textContent = L.join("\n");
     })
     .catch(function (e) { if (out) out.textContent = "조회 오류: " + e; });
