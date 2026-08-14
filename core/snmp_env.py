@@ -82,18 +82,25 @@ def _real_value(raw, scale_code, precision):
     return val
 
 
-def temp_level(c):
-    """온도 → 표기 등급. 임계값은 화면 표기용(장비 자체 알람을 대체하지 않는다)."""
+def temp_level(c, warn_c=None, crit_c=None):
+    """온도 → 표기 등급. 임계값은 화면 표기용(장비 자체 알람을 대체하지 않는다).
+
+    임계를 인자로 받는 이유: 장비마다 정상 온도가 다르다. 광 모듈이 꽉 찬
+    코어와 액세스 스위치가 같은 기준일 수 없어, 고정값이면 한쪽은 오탐이고
+    다른 쪽은 미탐이 된다. 값을 주지 않으면 기본값을 쓴다.
+    """
     if c is None:
         return None
-    if c >= CRIT_C:
+    crit = CRIT_C if crit_c is None else crit_c
+    warn = WARN_C if warn_c is None else warn_c
+    if c >= crit:
         return "critical"
-    if c >= WARN_C:
+    if c >= warn:
         return "warning"
     return "normal"
 
 
-def _decode(sess, max_rows=256):
+def _decode(sess, max_rows=256, warn_c=None, crit_c=None):
     """세션에서 센서 테이블을 읽어 정규화된 센서 목록을 만든다.
 
     세션을 인자로 받는 이유: 실장비 없이도 테스트할 수 있게 하기 위함이다
@@ -126,20 +133,20 @@ def _decode(sess, max_rows=256):
              "value": round(val, 1) if val is not None else None,
              "status": status}
         if tcode == _T_CELSIUS:
-            s["level"] = temp_level(val)
+            s["level"] = temp_level(val, warn_c, crit_c)
         sensors.append(s)
     sensors.sort(key=lambda x: (x["type"] != "celsius", x["name"]))
     return sensors
 
 
-def summarize(sensors):
-    """센서 목록 → 화면·저장용 요약."""
+def summarize(sensors, warn_c=None, crit_c=None):
+    """센서 목록 → 화면·저장용 요약. 임계는 설정값(없으면 기본값)."""
     temps = [s for s in sensors if s["type"] == "celsius" and s["value"] is not None]
     fans = [s for s in sensors if s["type"] == "rpm"]
     max_c = max((s["value"] for s in temps), default=None)
     # 센서가 스스로 '비정상'이라고 말하면 온도 수치와 무관하게 그걸 따른다.
     bad = [s for s in sensors if s["status"] == "nonoperational"]
-    level = temp_level(max_c)
+    level = temp_level(max_c, warn_c, crit_c)
     if bad and level != "critical":
         level = "warning"
     return {"sensors": sensors, "temp_count": len(temps), "fan_count": len(fans),
@@ -147,7 +154,8 @@ def summarize(sensors):
             "bad_sensors": [s["name"] for s in bad][:10]}
 
 
-def collect_env(ip, community="public", timeout=2.0, budget=20.0):
+def collect_env(ip, community="public", timeout=2.0, budget=20.0,
+                warn_c=None, crit_c=None):
     """장비 하나의 환경 정보를 SNMP로 읽는다.
 
     반환: {sensors, temp_count, fan_count, max_temp_c, level, bad_sensors}
@@ -155,8 +163,77 @@ def collect_env(ip, community="public", timeout=2.0, budget=20.0):
     장비가 흔하다). 무응답·차단은 SnmpSilent/SnmpClosed 예외로 올린다.
     """
     sess = _Session(ip, community, timeout=timeout, budget=budget)
-    sensors = _decode(sess)
-    out = summarize(sensors)
+    sensors = _decode(sess, warn_c=warn_c, crit_c=crit_c)
+    out = summarize(sensors, warn_c, crit_c)
     utils.log_event("info", "snmp_env_collected", ip=ip,
                     sensors=len(sensors), max_temp_c=out.get("max_temp_c"))
+    return out
+
+
+def probe_switch(ip, community="public", timeout=2.0, budget=25.0):
+    """스위치가 SNMP로 실제 무엇을 주는지 훑는다(진단용).
+
+    방화벽에는 진단 버튼이 있었는데 스위치에는 없어서, 온도·포트 지표가 안 채워질 때
+    커뮤니티가 틀린 건지 장비가 그 MIB을 안 쓰는 건지 확인할 방법이 없었다.
+
+    반환: {"reachable": bool, "sysdescr": str, "sysname": str,
+           "sensors": n, "ports": n, "checks": [{name, ok, detail}]}
+    """
+    from .snmp_collect import _Session
+    _SYS_DESCR_O = "1.3.6.1.2.1.1.1.0"
+    _SYS_NAME_O = "1.3.6.1.2.1.1.5.0"
+    _IF_NAME_O = "1.3.6.1.2.1.31.1.1.1.1"
+    _IF_HC_IN_O = "1.3.6.1.2.1.31.1.1.1.6"
+    _IF_IN_ERR_O = "1.3.6.1.2.1.2.2.1.14"
+    _DOT3_FCS_O = "1.3.6.1.2.1.10.7.2.1.3"
+
+    sess = _Session(ip, community, timeout=timeout, budget=budget)
+    out = {"reachable": False, "sysdescr": "", "sysname": "",
+           "sensors": 0, "ports": 0, "checks": []}
+
+    def _add(name, ok, detail):
+        out["checks"].append({"name": name, "ok": bool(ok), "detail": detail})
+
+    # ① 기본 응답 — 여기서 실패하면 커뮤니티/허용호스트/방화벽 문제다
+    try:
+        for o, v in sess.get([_SYS_DESCR_O, _SYS_NAME_O]):
+            txt = v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v)
+            if o == _SYS_DESCR_O:
+                out["sysdescr"] = txt[:300]
+            elif o == _SYS_NAME_O:
+                out["sysname"] = txt[:120]
+        out["reachable"] = bool(out["sysdescr"] or out["sysname"])
+    except Exception as e:
+        _add("SNMP 응답", False, "무응답: %s" % type(e).__name__)
+        return out
+    _add("SNMP 응답", out["reachable"],
+         out["sysdescr"][:120] if out["reachable"] else "빈 응답(커뮤니티 확인)")
+    if not out["reachable"]:
+        return out
+
+    # ② 온도·팬(ENTITY-SENSOR-MIB) — 없는 장비가 흔하다(정상 범주)
+    try:
+        sensors = _decode(sess)
+        temps = [s for s in sensors if s["type"] == "celsius"]
+        out["sensors"] = len(sensors)
+        _add("온도 센서 (ENTITY-SENSOR-MIB)", bool(temps),
+             "센서 %d개(온도 %d개)" % (len(sensors), len(temps)) if sensors
+             else "이 장비는 이 MIB을 제공하지 않습니다(온도 표시 불가)")
+    except Exception as e:
+        _add("온도 센서 (ENTITY-SENSOR-MIB)", False, "실패: %s" % type(e).__name__)
+
+    # ③ 포트 목록·트래픽·에러 — 폴러가 쓰는 것들
+    for label, base, note in (
+            ("포트 이름 (IF-MIB ifName)", _IF_NAME_O, "포트 %d개"),
+            ("트래픽 카운터 (ifHCInOctets)", _IF_HC_IN_O, "%d개 포트에서 응답"),
+            ("에러 카운터 (ifInErrors)", _IF_IN_ERR_O, "%d개 포트에서 응답"),
+            ("CRC 카운터 (EtherLike-MIB)", _DOT3_FCS_O, "%d개 포트에서 응답")):
+        try:
+            rows = list(sess.walk(base, max_rows=256))
+            if base == _IF_NAME_O:
+                out["ports"] = len(rows)
+            _add(label, bool(rows),
+                 (note % len(rows)) if rows else "응답 없음(이 MIB 미지원)")
+        except Exception as e:
+            _add(label, False, "실패: %s" % type(e).__name__)
     return out

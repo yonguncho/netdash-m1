@@ -713,6 +713,13 @@
             <div style="flex:1"><label>포트 에러 알람(개/주기) <span style="color:#94a3b8">— 한 주기에 이만큼 늘면 알람. 0 = 끔</span></label>
               <input id="ac-alert-porterr" type="number" min="0" max="1000000" placeholder="10"></div>
           </div>
+          <div class="field-row" style="margin-top:8px">
+            <div style="flex:1"><label>온도 경고 임계(°C) <span style="color:#94a3b8">— 이 온도부터 주황 표기</span></label>
+              <input id="ac-temp-warn" type="number" min="0" max="150" placeholder="55"></div>
+            <div style="flex:1"><label>온도 위험 임계(°C) <span style="color:#94a3b8">— 이 온도부터 빨강 표기</span></label>
+              <input id="ac-temp-crit" type="number" min="0" max="150" placeholder="70"></div>
+            <div style="flex:1"></div>
+          </div>
           <p class="ac-section__hint">여기 지정한 커뮤니티 하나로 ① SSH가 닫힌 서버의 사양 ② 스위치·방화벽 온도(ENTITY-SENSOR-MIB) ③ FortiGate CPU·메모리·세션 ④ 업링크 트래픽(64bit 카운터) ⑤ 포트 에러·폐기·CRC 증가분(IF-MIB·EtherLike-MIB)을 읽습니다. 임계값 알람은 지표 기록 주기마다 판정해 초과 시 알람 벨·이메일·관제 티커로 알립니다. 포트 에러는 <b>누적값이 아니라 주기 사이 증가분</b>이라, 늘어난 포트만 관제 '포트 에러 증가' 카드에 뜹니다(케이블·SFP 열화를 끊어지기 전에 찾는 용도). 장비 쪽에는 이 PC IP를 SNMP 허용 호스트로 등록해야 합니다.</p>
         </div>
 

@@ -407,6 +407,27 @@ def _parse_serial(vendor, text):
     return None
 
 
+def temp_thresholds(db_path):
+    """온도 경고·위험 임계(°C). 설정이 없으면 snmp_env 기본값.
+
+    장비마다 정상 온도가 다르다 — 코드에 박아두면 한쪽은 오탐, 다른 쪽은
+    미탐이 된다(사용자가 조정할 수 있어야 하는 값).
+    """
+    from . import snmp_env
+    out = []
+    for key, default in (("temp_warn_c", snmp_env.WARN_C),
+                         ("temp_crit_c", snmp_env.CRIT_C)):
+        try:
+            v = float(db.get_setting(db_path, key, "") or default)
+        except (TypeError, ValueError):
+            v = default
+        out.append(v)
+    # 경고가 위험보다 높으면 등급이 뒤집힌다 — 잘못 넣어도 동작은 지키게 스왑.
+    if out[0] > out[1]:
+        out.reverse()
+    return out[0], out[1]
+
+
 def collect_env_snmp(db_path, kind, device_id, ip, budget=15.0):
     """장비 환경 정보(온도·팬)를 SNMP로 읽어 저장. 반환: 저장한 dict 또는 None.
 
@@ -426,8 +447,10 @@ def collect_env_snmp(db_path, kind, device_id, ip, budget=15.0):
         from . import snmp_env
     except Exception:
         return None
+    warn_c, crit_c = temp_thresholds(db_path)
     try:
-        env = snmp_env.collect_env(ip, community, budget=budget)
+        env = snmp_env.collect_env(ip, community, budget=budget,
+                                   warn_c=warn_c, crit_c=crit_c)
     except snmp_env.SnmpClosed:
         utils.log_event("info", "env_snmp_closed", kind=kind, device_id=device_id)
         return None

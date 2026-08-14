@@ -374,6 +374,8 @@ def poll_once(db_path, demo_mode=False):
         return points
 
     # ② FortiGate — CPU/메모리/세션 + 온도. 주기 폴링이므로 짧은 예산.
+    from .collector import temp_thresholds
+    _warn_c, _crit_c = temp_thresholds(db_path)
     try:
         from . import snmp_fortigate, snmp_env
         for fw in db.list_firewalls(db_path):
@@ -386,7 +388,8 @@ def poll_once(db_path, demo_mode=False):
             except Exception:
                 pass
             try:
-                e = snmp_env.collect_env(fw["host"], community, budget=6.0)
+                e = snmp_env.collect_env(fw["host"], community, budget=6.0,
+                                         warn_c=_warn_c, crit_c=_crit_c)
                 temp = e.get("max_temp_c")
             except Exception:
                 pass
@@ -409,7 +412,8 @@ def poll_once(db_path, demo_mode=False):
             if not sw.get("ip"):
                 continue
             try:
-                e = snmp_env.collect_env(sw["ip"], community, budget=6.0)
+                e = snmp_env.collect_env(sw["ip"], community, budget=6.0,
+                                         warn_c=_warn_c, crit_c=_crit_c)
                 if e.get("max_temp_c") is not None:
                     db.save_metrics_point(db_path, "switch", sw["id"],
                                           temp_c=e["max_temp_c"])

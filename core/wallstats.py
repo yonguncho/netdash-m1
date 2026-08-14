@@ -430,6 +430,134 @@ def _facility_stats(conn):
             "offline_by_switch": offline_by_switch, "offline_24h": offline_24h}
 
 
+def _risk_stats(db_path):
+    """'지금 가장 위험한 장비' 통합 순위 + 평소 대비 이상치.
+
+    CPU·메모리·온도·포트 사용률을 각각 다른 카드에서 보면 관제 화면에서 제일
+    먼저 봐야 할 것이 무엇인지 알 수 없다. 하나의 순위로 합친다.
+
+    등급은 임계 대비 비율(pct_of_limit)로 매긴다 — 단위가 다른 지표(%·°C·개)를
+    한 줄에 세우려면 '임계까지 얼마나 왔나'로 환산해야 비교가 된다.
+    """
+    from . import collector
+    warn_c, crit_c = collector.temp_thresholds(db_path)
+
+    def _limit(key, default):
+        try:
+            return float(db.get_setting(db_path, key, "") or default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    cpu_lim = _limit("alert_cpu_pct", 80) or 80
+    mem_lim = _limit("alert_mem_pct", 80) or 80
+    items = []
+
+    def _add(name, kind, metric, value, limit, unit, dev_id=None):
+        if value is None or not limit:
+            return
+        pct = round(float(value) * 100.0 / float(limit))
+        if pct < 70:
+            return                      # 여유 있는 것까지 나열하면 순위가 묻힌다
+        items.append({"name": name, "kind": kind, "metric": metric,
+                      "value": value, "limit": limit, "unit": unit,
+                      "pct_of_limit": pct,
+                      "level": "critical" if pct >= 100 else "warning",
+                      "id": dev_id})
+
+    try:
+        fw_names = {f["id"]: (f.get("name") or f.get("host")) for f in db.list_firewalls(db_path)}
+        for fid, e in (db.get_device_env_map(db_path, "firewall") or {}).items():
+            nm = fw_names.get(fid)
+            if not nm:
+                # 현황에서 삭제된 장비의 지표가 device_env에 남아 있을 수 있다.
+                # 이름 대신 id 숫자를 띄우면 사용자에겐 정체불명의 '6'이 보인다 —
+                # 이미 없는 장비를 '위험'이라 알릴 이유도 없다.
+                continue
+            m = e.get("metrics") or {}
+            _add(nm, "firewall", "CPU", m.get("cpu_pct"), cpu_lim, "%", fid)
+            _add(nm, "firewall", "메모리", m.get("mem_pct"), mem_lim, "%", fid)
+            _add(nm, "firewall", "온도", e.get("max_temp_c"), crit_c, "°C", fid)
+    except Exception:
+        pass
+    try:
+        sw_names = {s["id"]: s.get("name") for s in db.get_switches(db_path)}
+        for sid, e in (db.get_device_env_map(db_path, "switch") or {}).items():
+            nm = sw_names.get(sid)
+            if not nm:
+                continue                # 삭제된 스위치의 잔재 — 위 방화벽과 같은 이유
+            _add(nm, "switch", "온도", e.get("max_temp_c"), crit_c, "°C", sid)
+    except Exception:
+        pass
+
+    items.sort(key=lambda x: -x["pct_of_limit"])
+
+    # 평소 대비 이상치 — 30일 이력이 있으니 '자기 자신의 평소'와 비교한다.
+    # 절대 임계보다 오탐이 적다(장비마다 정상 범위가 다르다).
+    anomalies = []
+    try:
+        for r in _rows_db(db_path,
+            "SELECT kind, device_id, "
+            "  AVG(CASE WHEN ts >= datetime('now','localtime','-24 hours') "
+            "           THEN sessions END) AS recent, "
+            "  AVG(CASE WHEN ts <  datetime('now','localtime','-24 hours') "
+            "           THEN sessions END) AS baseline, "
+            "  COUNT(*) AS n "
+            "FROM metrics_history WHERE kind='firewall' AND sessions IS NOT NULL "
+            "  AND ts >= datetime('now','localtime','-7 days') "
+            "GROUP BY kind, device_id HAVING n >= 12 AND baseline > 0"):
+            rec, base = r["recent"], r["baseline"]
+            if rec is None or not base:
+                continue
+            ratio = rec / base
+            if ratio < 1.8 and ratio > 0.4:
+                continue                # 평소 범위 — 알릴 것 없음
+            anomalies.append({
+                "name": fw_names.get(r["device_id"]) or str(r["device_id"]),
+                "kind": "firewall", "metric": "동시 세션",
+                "recent": int(rec), "baseline": int(base),
+                "ratio": round(ratio, 2),
+                "direction": "급증" if ratio >= 1.8 else "급감"})
+    except Exception:
+        pass
+    anomalies.sort(key=lambda x: -abs(x["ratio"] - 1))
+
+    # SNMP로 아무것도 못 받은 장비 — 지금까지는 화면에 '지표 없음'만 떠서
+    # 커뮤니티가 틀린 건지 장비가 SNMP를 안 켠 건지 알 수 없었다.
+    no_snmp = []
+    try:
+        env_sw = db.get_device_env_map(db_path, "switch") or {}
+        for s in db.get_switches(db_path):
+            if not s.get("ip"):
+                continue
+            e = env_sw.get(s["id"]) or {}
+            if e.get("max_temp_c") is None and not (e.get("sensors") or []):
+                no_snmp.append({"name": s.get("name") or s["ip"], "ip": s["ip"],
+                                "kind": "switch", "id": s["id"]})
+        env_fw = db.get_device_env_map(db_path, "firewall") or {}
+        for f in db.list_firewalls(db_path):
+            host = f.get("host")
+            if not host:
+                continue
+            e = env_fw.get(f["id"]) or {}
+            m = e.get("metrics") or {}
+            if e.get("max_temp_c") is None and m.get("cpu_pct") is None:
+                no_snmp.append({"name": f.get("name") or host, "ip": host,
+                                "kind": "firewall", "id": f["id"]})
+    except Exception:
+        pass
+
+    return {"top": items[:10], "critical": sum(1 for x in items if x["level"] == "critical"),
+            "anomalies": anomalies[:6],
+            "no_snmp": no_snmp[:12], "no_snmp_total": len(no_snmp),
+            "limits": {"cpu": cpu_lim, "mem": mem_lim,
+                       "temp_warn": warn_c, "temp_crit": crit_c}}
+
+
+def _rows_db(db_path, sql, args=()):
+    with db.get_db(db_path) as conn:
+        return _rows(conn, sql, args)
+
+
 def build(db_path):
     """관제 대시보드 통계 전체. 실패한 구획은 비어도 나머지는 살린다."""
     out = {}
@@ -441,4 +569,8 @@ def build(db_path):
                 out[key] = fn()
             except Exception:
                 out[key] = {}
+    try:
+        out["risk"] = _risk_stats(db_path)
+    except Exception:
+        out["risk"] = {}
     return out

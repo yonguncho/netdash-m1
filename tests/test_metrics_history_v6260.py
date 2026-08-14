@@ -78,7 +78,7 @@ def test_poll_once_records_firewall_snmp(temp_db, monkeypatch):
                         lambda ip, c, budget=8.0: {"cpu_pct": 12, "mem_pct": 40,
                                                    "sessions": 100})
     monkeypatch.setattr(snmp_env, "collect_env",
-                        lambda ip, c, budget=6.0: {"max_temp_c": 45.0})
+                        lambda ip, c, budget=6.0, **kw: {"max_temp_c": 45.0})
     n = metrics_poller.poll_once(temp_db, demo_mode=False)
     rows = db.get_metrics_series(temp_db, "firewall", hours=1)
     assert len(rows) == 1 and rows[0]["cpu"] == 12 and rows[0]["temp_c"] == 45.0
@@ -102,7 +102,7 @@ def test_poll_once_survives_dead_device(temp_db, monkeypatch):
         return {"cpu_pct": 30, "mem_pct": 50, "sessions": 5}
     monkeypatch.setattr(snmp_fortigate, "collect_health", health)
     monkeypatch.setattr(snmp_env, "collect_env",
-                        lambda ip, c, budget=6.0: (_ for _ in ()).throw(
+                        lambda ip, c, budget=6.0, **kw: (_ for _ in ()).throw(
                             snmp_env.SnmpSilent("dead")))
     metrics_poller.poll_once(temp_db, demo_mode=False)
     rows = db.get_metrics_series(temp_db, "firewall", hours=1)

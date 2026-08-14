@@ -47,7 +47,7 @@ def test_poller_snmp_runs_by_default(temp_db, monkeypatch):
     monkeypatch.setattr(collector, "_snmp_community_if_enabled", lambda p: "public")
     monkeypatch.setattr(snmp_fortigate, "collect_health",
                         lambda ip, c, budget=8.0: {"cpu_pct": 11})
-    monkeypatch.setattr(snmp_env, "collect_env", lambda ip, c, budget=6.0: {})
+    monkeypatch.setattr(snmp_env, "collect_env", lambda ip, c, budget=6.0, **kw: {})
     monkeypatch.setattr(metrics_poller, "collect_traffic", lambda p, c: 0)
     metrics_poller.poll_once(temp_db, demo_mode=False)
     rows = db.get_metrics_series(temp_db, "firewall", hours=1)

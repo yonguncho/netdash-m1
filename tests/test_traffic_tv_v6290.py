@@ -57,6 +57,8 @@ def test_collect_traffic_uplinks_only(temp_db, monkeypatch):
     it = iter(samples)
     monkeypatch.setattr(metrics_poller, "_walk_traffic",
                         lambda ip, c, budget=8.0: next(it))
+    _clock = iter([1000.0, 1300.0])          # 두 주기 사이 300초
+    monkeypatch.setattr(metrics_poller.time, "time", lambda: next(_clock))
     assert metrics_poller.collect_traffic(temp_db, "public") == 0   # 기준선
     assert metrics_poller.collect_traffic(temp_db, "public") == 1   # 업링크만
     rows = db.get_traffic_series(temp_db, hours=1)
@@ -74,6 +76,8 @@ def test_collect_traffic_standalone_falls_back_to_busiest(temp_db, monkeypatch):
     it = iter([base, nxt])
     monkeypatch.setattr(metrics_poller, "_walk_traffic",
                         lambda ip, c, budget=8.0: next(it))
+    _clock = iter([1000.0, 1300.0])          # 위와 같은 이유(dt=0 방지)
+    monkeypatch.setattr(metrics_poller.time, "time", lambda: next(_clock))
     metrics_poller.collect_traffic(temp_db, "public")
     assert metrics_poller.collect_traffic(temp_db, "public") == 3
     ports = {r["port"] for r in db.get_traffic_series(temp_db, hours=1)}
@@ -155,7 +159,7 @@ def test_threshold_wired_into_poll(temp_db, monkeypatch):
                         lambda ip, c, budget=8.0: {"cpu_pct": 95, "mem_pct": 40,
                                                    "sessions": 10})
     monkeypatch.setattr(snmp_env, "collect_env",
-                        lambda ip, c, budget=6.0: {})
+                        lambda ip, c, budget=6.0, **kw: {})
     monkeypatch.setattr(metrics_poller, "collect_traffic", lambda p, c: 0)
     metrics_poller.poll_once(temp_db, demo_mode=False)
     assert len(_events(temp_db, "threshold_over")) == 1

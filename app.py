@@ -3425,6 +3425,44 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"ok": False, "error": "Internal server error"}), 500
 
+    @app.route("/api/switches/<int:sw_id>/snmp-probe", methods=["POST"])
+    @rate_limit("sw_snmp_probe", max_requests=10, window_seconds=60)
+    def switch_snmp_probe(sw_id):
+        """스위치가 SNMP로 무엇을 주는지 확인 — 온도·에러가 안 채워질 때의 진단.
+
+        방화벽에만 있던 진단을 스위치에도 연다. 커뮤니티가 틀린 건지, 장비가
+        그 MIB을 안 쓰는 건지 사용자가 직접 구분할 수 있어야 한다.
+        """
+        try:
+            sw = db.get_switch(db_path, sw_id)
+            if not sw:
+                return jsonify({"ok": False, "error": "스위치를 찾을 수 없습니다"}), 404
+            community = collector._snmp_community_if_enabled(db_path)
+            if not community:
+                return jsonify({"ok": False, "error":
+                                "SNMP가 꺼져 있거나 커뮤니티가 설정되지 않았습니다 "
+                                "— 상단 ⚙설정 → SNMP에서 먼저 지정하세요"}), 400
+            from core import snmp_env
+            try:
+                out = snmp_env.probe_switch(sw["ip"], community)
+            except snmp_env.SnmpClosed:
+                return jsonify({"ok": False, "error":
+                                "161/UDP에서 응답할 프로세스가 없습니다 — 장비에서 "
+                                "SNMP 에이전트가 켜져 있는지 확인하세요"})
+            except snmp_env.SnmpError:
+                return jsonify({"ok": False, "error":
+                                "응답이 없습니다. 순서대로 확인하세요: "
+                                "① ⚙설정의 SNMP 커뮤니티가 장비 설정값과 같은지 "
+                                "② 장비에서 이 PC IP가 SNMP 허용 호스트로 등록됐는지 "
+                                "③ 중간 방화벽이 161/UDP를 막는지 "
+                                "— SNMPv2c는 커뮤니티가 틀리면 오류 없이 무응답입니다"})
+            return jsonify({"ok": True, "ip": sw["ip"],
+                            "name": sw.get("name"), "probe": out})
+        except Exception as e:
+            log_event("error", "sw_snmp_probe_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
+
     @app.route("/api/facility/explain", methods=["GET"])
     @rate_limit("facility_explain", max_requests=60, window_seconds=60)
     def facility_explain():
@@ -4342,6 +4380,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                 "alert_mem_pct": db.get_setting(db_path, "alert_mem_pct", "80"),
                 "alert_sessions": db.get_setting(db_path, "alert_sessions", "0"),
                 "alert_port_errors": db.get_setting(db_path, "alert_port_errors", "10"),
+                "temp_warn_c": db.get_setting(db_path, "temp_warn_c", "55"),
+                "temp_crit_c": db.get_setting(db_path, "temp_crit_c", "70"),
                 "snmp_has_community": bool(
                     db.get_setting(db_path, "snmp_community_blob", "")),
             })
@@ -4416,7 +4456,8 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # 임계값 알람 — %는 0~100, 세션은 0~10,000,000. 0=끔.
             for _k, _hi in (("alert_cpu_pct", 100), ("alert_mem_pct", 100),
                             ("alert_sessions", 10_000_000),
-                            ("alert_port_errors", 1_000_000)):
+                            ("alert_port_errors", 1_000_000),
+                            ("temp_warn_c", 150), ("temp_crit_c", 150)):
                 if _k in data:
                     try:
                         db.set_setting(db_path, _k,
