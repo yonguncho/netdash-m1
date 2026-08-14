@@ -333,6 +333,35 @@ def check_thresholds(db_path, fw_id, name, cpu, mem, sessions):
     return fired
 
 
+def check_temp(db_path, kind, dev_id, name, temp_c, crit_c):
+    """온도 임계 초과/복귀 알람. 반환: 낸 이벤트 수.
+
+    관제에는 '지금 몇 도인가'를 나열하지 않는다(그건 상세보기에서 본다).
+    **임계를 넘은 것만** 알람으로 올려 장애 목록·티커에 흐르게 한다.
+    복귀는 임계-3°C에서 알린다(임계 근처를 오르내리며 알람이 쏟아지지 않게).
+    """
+    if temp_c is None or not crit_c:
+        return 0
+    key = (kind, dev_id, "temp")
+    was = _over_state.get(key, False)
+    fired = 0
+    if not was and temp_c > crit_c:
+        _over_state[key] = True
+        fired = 1
+        db.save_device_event(
+            db_path, "temp_over", "warning", label=name,
+            switch_id=dev_id if kind == "switch" else None,
+            message="%s 온도 임계 초과: %s°C (임계 %s°C)" % (name, temp_c, crit_c))
+    elif was and temp_c <= crit_c - 3:
+        _over_state[key] = False
+        fired = 1
+        db.save_device_event(
+            db_path, "temp_clear", "info", label=name,
+            switch_id=dev_id if kind == "switch" else None,
+            message="%s 온도 정상 복귀: %s°C (임계 %s°C)" % (name, temp_c, crit_c))
+    return fired
+
+
 def poll_once(db_path, demo_mode=False):
     """한 주기 실행 — 기록한 점 수를 반환(테스트·진단용).
 
@@ -398,8 +427,9 @@ def poll_once(db_path, demo_mode=False):
                                       cpu=cpu, mem=mem, sessions=sess, temp_c=temp)
                 points += 1
             try:
-                check_thresholds(db_path, fw["id"], fw.get("name") or fw["host"],
-                                 cpu, mem, sess)
+                nm = fw.get("name") or fw["host"]
+                check_thresholds(db_path, fw["id"], nm, cpu, mem, sess)
+                check_temp(db_path, "firewall", fw["id"], nm, temp, _crit_c)
             except Exception:
                 pass
     except Exception as e:
@@ -418,6 +448,10 @@ def poll_once(db_path, demo_mode=False):
                     db.save_metrics_point(db_path, "switch", sw["id"],
                                           temp_c=e["max_temp_c"])
                     points += 1
+                    # 임계 초과만 관제 알람으로 — 온도 나열은 상세보기 몫이다
+                    check_temp(db_path, "switch", sw["id"],
+                               sw.get("name") or sw["ip"],
+                               e["max_temp_c"], _crit_c)
             except Exception:
                 continue
     except Exception as e:

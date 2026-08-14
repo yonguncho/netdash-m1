@@ -55,7 +55,7 @@ function ico(name) {
 
 var KIND_KO = {
   new_device: "새 설비", device_offline: "설비 연결 끊김", device_online: "설비 복구",
-  port_down: "포트 다운", port_up: "포트 복구", port_errors: "포트 에러 증가",
+  port_down: "포트 다운", port_up: "포트 복구", port_errors: "포트 에러 증가", temp_over: "온도 임계 초과", temp_clear: "온도 정상",
   threshold_over: "임계 초과", threshold_clear: "임계 해제",
   device_moved: "설비 이동", config_changed: "설정 변경",
   switch_unreachable: "스위치 연결 실패", switch_recovered: "스위치 복구",
@@ -845,79 +845,8 @@ function renderFacilityTab(c) {
     "</div>";
 }
 
-/* 위험도 통합 순위 + 평소 대비 이상치 (요약 탭 상단).
-
-   CPU·메모리·온도를 각각 다른 카드에서 보면 '지금 제일 먼저 봐야 할 것'이
-   무엇인지 알 수 없다. 단위가 다른 지표를 '임계까지 얼마나 왔나'(%)로 환산해
-   한 줄에 세운다. */
-function renderRisk(r) {
-  var el = document.getElementById("wall-risk");
-  if (!el) return;
-  r = r || {};
-  var top = r.top || [], ano = r.anomalies || [];
-  var riskBody = top.length
-    ? "<table class='wtable'><thead><tr><th>장비</th><th>지표</th><th>현재</th>" +
-      "<th>임계</th><th>임계 대비</th></tr></thead><tbody>" +
-      top.map(function (x) {
-        var pct = x.pct_of_limit;
-        var mf = pct >= 100 ? "mf-crit" : (pct >= 85 ? "mf-warn" : "mf-ok");
-        var click = (x.id && x.kind === "switch")
-          ? " class='wsub__row' data-swid='" + x.id + "'" : "";
-        return "<tr" + click + "><td><b>" + esc(x.name) + "</b></td>" +
-          "<td>" + esc(x.metric) + "</td>" +
-          "<td><b>" + esc(String(x.value)) + esc(x.unit || "") + "</b></td>" +
-          "<td><small>" + esc(String(x.limit)) + esc(x.unit || "") + "</small></td>" +
-          "<td><span class='wsub__bar'><span class='wmeter__t'>" +
-            "<span class='wmeter__f " + mf + "' style='width:" +
-            Math.max(2, Math.min(100, pct)) + "%'></span></span>" +
-            "<b>" + pct + "%</b></span></td></tr>";
-      }).join("") + "</tbody></table>"
-    : "<p class='wnone'>임계에 근접한 장비가 없습니다.</p>";
-
-  var anoBody = ano.length
-    ? "<table class='wtable'><thead><tr><th>장비</th><th>지표</th>" +
-      "<th>최근 24시간</th><th>평소</th><th>변화</th></tr></thead><tbody>" +
-      ano.map(function (a) {
-        var up = a.direction === "급증";
-        return "<tr><td><b>" + esc(a.name) + "</b></td><td>" + esc(a.metric) + "</td>" +
-          "<td><b>" + _n(a.recent) + "</b></td><td><small>" + _n(a.baseline) + "</small></td>" +
-          "<td" + (up ? " class='wsub__bad'" : "") + ">" + esc(a.direction) +
-          " <small>(" + esc(String(a.ratio)) + "배)</small></td></tr>";
-      }).join("") + "</tbody></table>"
-    : "<p class='wnone'>평소와 크게 다른 장비가 없습니다.</p>";
-
-  /* SNMP로 아무것도 못 받은 장비 — '지표 없음'만 뜨면 커뮤니티가 틀린 건지
-     장비가 SNMP를 안 켠 건지 알 수 없다. 목록으로 드러내 확인하게 한다. */
-  var ns = r.no_snmp || [];
-  var nsCard = ns.length
-    ? wcard("SNMP 무응답 장비 (" + (r.no_snmp_total || ns.length) + ")",
-        "온도·부하가 하나도 안 들어온 장비 — 본 화면의 [SNMP] 버튼으로 원인을 확인하세요",
-        "<table class='wtable'><thead><tr><th>장비</th><th>IP</th><th>종류</th>" +
-        "</tr></thead><tbody>" +
-        ns.map(function (x) {
-          return "<tr><td><b>" + esc(x.name) + "</b></td><td><code>" + esc(x.ip) +
-            "</code></td><td>" + (x.kind === "firewall" ? "방화벽" : "스위치") +
-            "</td></tr>";
-        }).join("") + "</tbody></table>" +
-        ((r.no_snmp_total || 0) > ns.length
-          ? "<p class='wswm__foot'>외 " + ((r.no_snmp_total) - ns.length) + "대</p>" : ""),
-        "wcard--12" + (ns.length > 8 ? " wcard--tall" : ""))
-    : "";
-
-  el.innerHTML = "<div class='wgrid'>" +
-    wcard("임계 근접 장비" + (r.critical ? " (임계 초과 " + r.critical + ")" : ""),
-      "CPU·메모리·온도를 임계 대비 비율로 환산해 한 줄로 — 70% 이상만 표시",
-      riskBody, "wcard--6" + (top.length > 8 ? " wcard--tall" : "")) +
-    wcard("평소와 다른 장비",
-      "최근 24시간을 지난 7일 평균과 비교 — 절대 임계보다 오탐이 적습니다",
-      anoBody, "wcard--6") +
-    nsCard +
-    "</div>";
-}
-
 function renderStats() {
   if (!_WSTAT) return;
-  renderRisk(_WSTAT.risk);
   renderSwitchTab(_WSTAT.switches);
   renderFirewallTab(_WSTAT.firewalls);
   renderFacilityTab(_WSTAT.facility);
@@ -1510,7 +1439,7 @@ var _tvLastEvtSig = null;
 
 // 알람성 이벤트 종류 → 보여줄 탭
 var _TV_JUMP = {
-  port_down: "switch", port_errors: "switch", switch_unreachable: "switch",
+  port_down: "switch", port_errors: "switch", temp_over: "switch", switch_unreachable: "switch",
   flapping: "switch", looping: "switch",
   firewall_unreachable: "firewall", threshold_over: "firewall",
   device_offline: "facility",

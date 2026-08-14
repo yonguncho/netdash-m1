@@ -977,8 +977,29 @@ function renderDetailEnv(env) {
   var box = document.getElementById("detail-env");
   if (!box) return;
   var sensors = (env && env.sensors) || [];
-  if (!sensors.length) { box.innerHTML = ""; box.style.display = "none"; return; }
+  if (!sensors.length) {
+    /* 온도는 여기서 본다(관제에는 임계 초과만 알람으로 올린다) — 그래서 값이
+       없을 때 그냥 사라지면 '이 장비는 원래 없는지' 알 수 없다. 사유를 남긴다. */
+    box.style.display = "";
+    box.innerHTML =
+      "<h4 style='margin:12px 0 6px'>환경 정보 (SNMP)</h4>" +
+      "<p style='font-size:12.5px;color:#64748b'>온도 정보가 없습니다. " +
+      "장비에 이 PC의 IP가 <b>SNMP 허용 호스트</b>로 등록돼 있는지 확인하세요" +
+      "(스위치 현황의 <b>[SNMP]</b> 버튼으로 진단할 수 있습니다).</p>";
+    return;
+  }
   box.style.display = "";
+  /* 최고 온도를 먼저 크게 — 센서 목록만 나열하면 '지금 몇 도인지'가 안 들어온다 */
+  var maxC = env.max_temp_c;
+  var lvl0 = env.level || "normal";
+  var c0 = lvl0 === "critical" ? "#b91c1c" : lvl0 === "warning" ? "#b45309" : "#0f766e";
+  var head = (maxC === null || maxC === undefined) ? "" :
+    "<div style='display:flex;align-items:baseline;gap:8px;margin:2px 0 8px'>" +
+    "<span style='font-size:26px;font-weight:800;color:" + c0 + "'>" +
+    escHtml(String(maxC)) + "°C</span>" +
+    "<span style='font-size:12px;color:#64748b'>현재 최고 온도 · 센서 " +
+    (env.temp_count || 0) + "개" +
+    (env.fan_count ? " · 팬 " + env.fan_count + "개" : "") + "</span></div>";
   var rows = sensors.map(function (s) {
     var unit = s.type === "celsius" ? "°C" : (s.type === "rpm" ? " RPM" : "");
     var lvl = s.level || "";
@@ -991,7 +1012,7 @@ function renderDetailEnv(env) {
       "<td>" + escHtml(s.type) + st + "</td></tr>";
   }).join("");
   box.innerHTML =
-    "<h4 style='margin:12px 0 6px'>환경 정보 (SNMP)</h4>" +
+    "<h4 style='margin:12px 0 6px'>환경 정보 (SNMP)</h4>" + head +
     "<table class='data-table'><thead><tr><th>센서</th><th>값</th><th>종류</th></tr></thead>" +
     "<tbody>" + rows + "</tbody></table>" +
     (env.updated ? "<p style='font-size:11px;color:#64748b;margin-top:6px'>수집: " +
