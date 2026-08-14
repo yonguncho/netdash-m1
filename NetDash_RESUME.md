@@ -1,7 +1,31 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.37.0 커밋 완료 (a6349e0·d7f580c·00f23b7) — exe 빌드·릴리스 진행 중.
-pytest 1780 PASS / 16 FAIL(전부 아래 DPAPI 환경 문제, 코드 무관) + selfcheck PASS.
+**현재 버전**: v6.38.0 커밋 완료 (9aa93e7) — exe 빌드·릴리스 진행 중.
+pytest 1798 PASS / 16 FAIL(전부 아래 DPAPI 환경 문제, 코드 무관) + selfcheck PASS.
+(v6.37.0 = a6349e0·d7f580c·00f23b7, 릴리스·배포본 교체 완료)
+
+## v6.38.0 — 포트 에러 '증가분' 감지 (SNMP 개선 1순위)
+
+사용자가 SNMP 수집·정합·관제 표시 개선을 요청 → 현황 분석 후 우선순위를 제안하고
+**1순위(포트 에러 증가 감지)·전 포트** 선택을 받아 구현.
+
+- **발견**: `ports`에 crc/in/out error가 이미 있었으나 **부팅 이후 누적값**이라
+  언제 늘었는지 알 수 없고, 쓰이는 곳은 스위치 상세 한 곳(관제엔 없음).
+- `metrics_poller._walk_errors` — IF-MIB ifIn/OutErrors·Discards +
+  EtherLike-MIB `dot3StatsFCSErrors`(CRC, IF-MIB에 없어 따로. 미지원이면 CRC만 빠짐).
+- `compute_error_delta` — **첫 관측은 기준선만**(과거 누적이 '증가'로 잡히면 안 됨),
+  카운터 감소(재부팅·32bit 랩)는 버림.
+- `port_error_history` 테이블 — **증가한 포트만**, 보존 7일(트래픽 30일보다 짧게).
+- 임계 초과 시 `port_errors` 이벤트 → 알람 벨·이메일·티커(포트 DOWN과 같은 경로).
+  설정 `alert_port_errors` 기본 10, 0=끔.
+- 관제 스위치 탭 '포트 에러 증가' 카드(24시간 합계 상위, 내역 분해, 행 클릭→상세).
+- 부하: 기존 ifHCOctets/ifName walk와 **같은 세션에 OID만 추가**.
+- 테스트 19건 `tests/test_port_errors_v6380.py`.
+
+**미착수(사용자 승인 대기)**: 2순위 관제 통계 강화(온도 임계 설정화·임계 근접
+통합 순위·평소 대비 이상치), 3순위 수집 실패 가시화(스위치 probe·SNMP 무응답
+목록·미지원 OID 캐시). 하지 말자고 제안한 것: SNMP v3, 스위치 CPU/메모리(벤더별
+MIB 4벌), 전 포트 트래픽 시계열(데이터 폭증).
 
 ## ⚠ 빌드 PC의 Windows DPAPI 암호화 고장 (2026-08-13 확인, 미해결)
 
