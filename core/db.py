@@ -1976,6 +1976,56 @@ def purge_registered_devices_from_facility(db_path):
                 return 0
 
 
+def dedupe_facility_by_ip(db_path):
+    """같은 IP가 여러 대역 표기로 중복 저장된 행 정리. 반환: 삭제 건수.
+
+    유일 제약이 (subnet, ip)라서 **대역 표기가 다르면 같은 IP가 별도 행**이 된다.
+    10.92.140.0/24로 수집한 뒤 같은 구간을 10.92.140.0/22로 다시 수집하면
+    같은 설비가 설비 현황에 두 줄로 보인다(사용자 신고).
+
+    IP는 망에서 유일하므로 한 IP당 한 행만 남긴다 — **가장 최근에 갱신된 행**을
+    남기는데, 그게 사용자가 마지막으로 수집한 현재 상태에 가장 가깝다.
+    """
+    with _db_lock:
+        with get_db(db_path) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "DELETE FROM facility_hosts WHERE rowid NOT IN ("
+                    "  SELECT rowid FROM ("
+                    "    SELECT rowid, ROW_NUMBER() OVER ("
+                    "      PARTITION BY ip"
+                    "      ORDER BY IFNULL(updated,'') DESC, rowid DESC) AS rn"
+                    "    FROM facility_hosts WHERE IFNULL(ip,'') <> ''"
+                    "  ) WHERE rn = 1"
+                    ") AND IFNULL(ip,'') <> ''")
+                return cur.rowcount or 0
+            except Exception as e:
+                log_event("warning", "facility_dedupe_failed", error=str(e)[:120])
+                return 0
+
+
+def _drop_other_subnet_rows(conn, hosts):
+    """저장 직전, 같은 IP가 **다른 대역 표기**로 남아 있으면 지운다.
+
+    화면에서 거르지 않고 저장 경계에서 막는다 — 설비 목록·관제·엑셀 세 곳을
+    각각 챙기면 언젠가 한 곳을 빠뜨린다(v6.15.0에서 겪은 패턴).
+    """
+    n = 0
+    for h in hosts:
+        ip, sub = h.get("ip"), h.get("subnet")
+        if not ip:
+            continue
+        try:
+            cur = conn.execute(
+                "DELETE FROM facility_hosts WHERE ip=? AND IFNULL(subnet,'')<>IFNULL(?,'')",
+                (ip, sub))
+            n += cur.rowcount or 0
+        except Exception:
+            pass
+    return n
+
+
 def save_facility_hosts(db_path, hosts):
     """설비 현황 저장(subnet+ip 기준 upsert).
     hosts=[{subnet,ip,mac,switch_id,switch_name,port,online,direct,via,port_desc}]."""
@@ -1992,6 +2042,8 @@ def save_facility_hosts(db_path, hosts):
                 has_desc = "port_desc" in cols
             except Exception:
                 pass
+            # 같은 IP가 다른 대역 표기로 남아 있으면 먼저 치운다(중복 줄 방지)
+            _drop_other_subnet_rows(conn, hosts)
             for h in hosts:
                 try:
                     if has_desc:
@@ -2047,6 +2099,10 @@ def replace_facility_subnet(db_path, subnet, hosts):
             except Exception:
                 pass
             cur.execute("DELETE FROM facility_hosts WHERE subnet=?", (subnet,))
+            # 같은 IP가 **다른 대역 표기**로 남아 있으면 함께 치운다.
+            # 위 DELETE는 이 대역만 지우므로, /24로 수집했던 행이 /22 재수집 뒤에도
+            # 남아 같은 설비가 두 줄로 보였다(사용자 신고).
+            _drop_other_subnet_rows(conn, hosts or [])
             for h in (hosts or []):
                 if has_desc:
                     cur.execute(

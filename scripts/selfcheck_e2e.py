@@ -335,6 +335,22 @@ def main():
                 pg.wait_for_timeout(200)
             else:
                 fail("설비 선택 체크박스 없음")
+            # 재매칭 결과가 화면에 남는지 — 예전엔 #fac-progress 에 써서 설비 상태
+            # 폴링이 곧바로 지웠고, 정리 건수 안내가 통째로 묻혔다(v6.39.2).
+            rfb = pg.query_selector("#btn-fac-refresh")
+            if rfb:
+                rfb.click()
+                note = ""
+                for _ in range(25):
+                    pg.wait_for_timeout(1000)
+                    el = pg.query_selector("#fac-rematch-note")
+                    note = el.inner_text() if el else ""
+                    if "완료" in note or "실패" in note or "오류" in note:
+                        break
+                if "재매칭 완료" in note:
+                    ok("재매칭 결과 표시: " + note[:56])
+                else:
+                    fail("재매칭 결과가 화면에 안 남음(폴링이 지웠을 수 있음): %r" % note[:60])
             diag = pg.query_selector("[data-action='explain-facility']")
             if diag:
                 if "진단 결과" not in (diag.inner_text() or ""):
@@ -411,6 +427,16 @@ def main():
             # 대역별 IP 사용 현황(v6.36) — 행 클릭 → 그 대역의 IP 목록 팝업
             pg.click("[data-wtab='facility']")
             pg.wait_for_timeout(700)
+            # 연결 실패 구역(TPS) 카드(v6.39.3) — 데이터가 없어도 사유가 떠야 한다
+            zc = pg.query_selector(".wcard:has-text('연결 실패 구역')")
+            if not zc:
+                fail("설비 탭에 '연결 실패 구역 (TPS)' 카드가 없음")
+            else:
+                zt = zc.inner_text()
+                if "연결 실패한 설비가 없습니다" in zt or zc.query_selector("tbody tr"):
+                    ok("연결 실패 구역(TPS) 카드")
+                else:
+                    fail("연결 실패 구역 카드가 비었는데 사유 문구도 없음")
             subrow = pg.query_selector("#wtab-facility .wsub__row")
             if not subrow:
                 fail("설비 탭에 대역별 IP 사용 현황이 없음")

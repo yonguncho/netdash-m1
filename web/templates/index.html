@@ -507,6 +507,12 @@
         </div>
       </div>
       <div id="fac-progress" style="margin:8px 0;font-size:13px;color:#475569"></div>
+      <!-- 재매칭 결과는 여기 따로 쓴다. #fac-progress 에 쓰면 설비 상태 폴링
+           (renderFacilityProgress)이 곧바로 innerHTML을 비워 사용자가 결과를
+           볼 수 없었다(등록 장비 제외·중복 정리 건수가 그대로 묻혔다). -->
+      <div id="fac-rematch-note" style="margin:6px 0;font-size:13px;color:#166534;
+           background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px;
+           display:none"></div>
       <div id="fac-summary" style="margin:4px 0 8px;font-size:12px;color:#64748b"></div>
       <div class="table-wrap">
         <table class="data-table">

@@ -3485,8 +3485,12 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
             # 개수를 화면에 알려주려고 여기서 먼저 부른다(rematch 안에도 있어
             # 다른 호출 경로까지 덮지만, 그쪽은 0건이 되므로 중복 삭제는 없다).
             excluded = db.purge_registered_devices_from_facility(db_path)
+            # 같은 IP가 대역 표기만 다르게 중복된 행 정리 — 개수를 화면에 알린다
+            # (조용히 지우면 '왜 줄었지?'가 되고, 안 알리면 고쳐진 줄 모른다).
+            deduped = db.dedupe_facility_by_ip(db_path)
             n = facility_mod.rematch(db_path)
-            return jsonify({"ok": True, "updated": n, "excluded": excluded})
+            return jsonify({"ok": True, "updated": n, "excluded": excluded,
+                            "deduped": deduped})
         except Exception as e:
             log_event("error", "facility_rematch_error", error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500

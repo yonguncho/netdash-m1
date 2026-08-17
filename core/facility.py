@@ -1623,6 +1623,11 @@ def rematch(db_path):
     removed = db.purge_registered_devices_from_facility(db_path)
     if removed:
         utils.log_event("info", "facility_purged_registered_devices", count=removed)
+    # 같은 IP가 대역 표기만 다르게 중복 저장된 행 정리(예: /24로 수집 후 /22 재수집).
+    # 저장 시점 필터는 새 수집에만 걸리므로 이미 쌓인 중복은 여기서 걷어낸다.
+    deduped = db.dedupe_facility_by_ip(db_path)
+    if deduped:
+        utils.log_event("info", "facility_deduped_by_ip", count=deduped)
     hosts = db.get_facility_hosts(db_path)
     if not hosts:
         return 0

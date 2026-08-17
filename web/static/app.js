@@ -3244,22 +3244,32 @@ function explainFacility(ip, remarks) {
   if (ex) ex.addEventListener("click", function () { downloadFile("/api/facility/export?format=xlsx"); });
   // 설비 TXT 전용 버튼은 제거됐다 — 툴바 '⬇ 다운로드'(형식 선택)로 통합
   var rf = document.getElementById("btn-fac-refresh");
+  /* 결과는 #fac-rematch-note 에 쓴다 — #fac-progress 는 설비 상태 폴링이
+     주기적으로 innerHTML을 비우므로, 거기 쓴 결과는 사용자가 보기 전에 지워졌다. */
+  function _facNote(msg, bad) {
+    var el = document.getElementById("fac-rematch-note");
+    if (!el) { if (msg) alert(msg); return; }
+    if (!msg) { el.style.display = "none"; el.textContent = ""; return; }
+    el.style.display = "";
+    el.textContent = msg;
+    el.style.color = bad ? "#b91c1c" : "#166534";
+    el.style.background = bad ? "#fef2f2" : "#f0fdf4";
+    el.style.borderColor = bad ? "#fecaca" : "#bbf7d0";
+  }
   if (rf) rf.addEventListener("click", function () {
     rf.disabled = true;
-    var prog = document.getElementById("fac-progress");
-    if (prog) prog.textContent = "최신 MAC 테이블 기준으로 재대조 중...";
+    _facNote("최신 MAC 테이블 기준으로 재대조 중...");
     fetch("/api/facility/rematch", { method: "POST" })
       .then(function (r) { return r.json(); })
       .then(function (res) {
-        if (prog) {
-          prog.textContent = res.ok
-            ? ("재매칭 완료 (" + res.updated + "건 갱신" +
-               (res.excluded ? ", 등록 장비 " + res.excluded + "건 제외 — 스위치/방화벽/서버 현황에 있음" : "") + ")")
-            : (res.error || "재매칭 실패");
-        }
+        _facNote(res.ok
+          ? ("재매칭 완료 — " + res.updated + "건 갱신" +
+             (res.excluded ? " · 등록 장비 " + res.excluded + "건 제외(스위치/방화벽/서버 현황에 있음)" : "") +
+             (res.deduped ? " · 중복 " + res.deduped + "건 정리(같은 IP가 대역 표기만 다르게 저장돼 있었음)" : ""))
+          : (res.error || "재매칭 실패"), !res.ok);
         loadFacility();
       })
-      .catch(function (e) { console.error(e); if (prog) prog.textContent = "재매칭 오류"; })
+      .catch(function (e) { console.error(e); _facNote("재매칭 오류: " + e, true); })
       .then(function () { rf.disabled = false; });
   });
 })();
