@@ -116,6 +116,32 @@ def main():
                 % row1)
             rows = card.query_selector_all("tbody tr")
             assert rows and "TPS01" in rows[0].inner_text(), "실패 많은 순 정렬이 아니다"
+
+            # 구역 클릭 → 설비 목록 팝업 + 재확인 버튼 (v6.40)
+            rows[0].click()
+            pg.wait_for_timeout(1800)
+            modal = pg.query_selector("#wsw-modal")
+            assert modal and modal.is_visible(), "구역을 눌렀는데 팝업이 안 열린다"
+            zname = pg.inner_text("#wsw-name")
+            zsub = pg.inner_text("#wsw-sub")
+            zbody = pg.inner_text("#wsw-body")
+            print("--- 구역 팝업 ---")
+            print(zname, "|", zsub)
+            print(zbody[:300])
+            assert "TPS01" in zname, zname
+            assert "연결 실패" in zsub, zsub
+            iprows = pg.query_selector_all("#wsw-body .wtable tbody tr")
+            assert len(iprows) >= 6, "구역 설비 목록이 비었다: %d행" % len(iprows)
+            assert "203.0.113." in zbody, "설비 IP가 안 보인다"
+            btn = pg.query_selector("#zone-recollect")
+            assert btn, "재확인(재수집) 버튼이 없다"
+            assert "재확인" in btn.inner_text(), btn.inner_text()
+            assert not btn.is_disabled(), "연결 실패가 있는데 버튼이 비활성"
+            for bad in ("undefined", "NaN", "[object"):
+                assert bad not in zbody, "구역 팝업에 %s 노출" % bad
+            pg.screenshot(path=os.path.join(OUT, "zone_modal.png"), full_page=True)
+            pg.click("#wsw-modal .wswm__x")
+            pg.wait_for_timeout(400)
             card.scroll_into_view_if_needed()
             pg.wait_for_timeout(300)
             pg.screenshot(path=os.path.join(OUT, "facility_tab.png"), full_page=True)

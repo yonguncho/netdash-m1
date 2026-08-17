@@ -3375,6 +3375,24 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/wall/facility-zone", methods=["GET"])
+    def wall_facility_zone():
+        """한 TPS 구역의 설비 목록(관제 '연결 실패 구역' 카드 클릭 → 팝업).
+
+        어느 구역인지만 알면 현장에는 갈 수 있지만, 가기 전에 '어떤 설비인지'를
+        한 번 더 확인할 수 있어야 한다.
+        """
+        label = (request.args.get("label") or "").strip()
+        if not label or len(label) > 120:
+            return jsonify({"error": "구역(label)이 필요합니다"}), 400
+        try:
+            from core import wallstats
+            return jsonify(wallstats.facility_zone_hosts(db_path, label))
+        except Exception as e:
+            log_event("error", "wall_facility_zone_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/wall/facility-subnet", methods=["GET"])
     def wall_facility_subnet():
         """한 대역의 설비 IP 목록(관제 설비 탭 → 대역 클릭 → 리스트업)."""

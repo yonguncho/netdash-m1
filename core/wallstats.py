@@ -438,11 +438,11 @@ def _facility_stats(conn, db_path=None):
             "offline_by_location": offline_by_location}
 
 
-def _offline_by_tps_location(conn, db_path=None):
-    """지금 연결 실패인 설비를 TPS 구역별로 집계 → [{label, phase, building,
-    floor, tps, offline, total, switches[]}] (실패 많은 순).
+def _facility_zone_resolver(conn, db_path=None, rows=None):
+    """설비 → (연결 스위치, 구역 라벨)을 판정하는 함수를 만들어 돌려준다.
 
-    관제에서 필요한 건 '어느 스위치'가 아니라 **어디로 가야 하나**다.
+    구역 집계와 구역 팝업이 **같은 기준**을 써야 한다 — 따로 구현하면
+    카드에 5건인데 팝업엔 3건 같은 어긋남이 생긴다(이 저장소에서 반복된 패턴).
 
     연결 스위치는 설비 현황 화면과 **같은 3단계**로 찾는다:
       ① 현재 MAC 기준 switch_name
@@ -450,19 +450,21 @@ def _offline_by_tps_location(conn, db_path=None):
       ③ 포트 Description에 적힌 설비 IP(find_ports_by_description)
     끊긴 설비는 MAC이 에이징으로 지워져 ①이 비는 일이 흔하다 — 그것만 보면
     정작 '연결 실패'가 죄다 '위치 미확인'으로 떨어진다(사용자 지적).
+
+    반환: (rows, switch_of(h), zone_of(switch_name))
     """
     from . import tps_location
 
-    # 설비의 연결 스위치 이름 → 스위치 hostname/name (위치 파싱 재료)
     sw_meta = {}
     for r in _rows(conn, "SELECT name, hostname, location FROM switches"):
         if r["name"]:
             sw_meta[r["name"]] = dict(r)      # sqlite3.Row에는 .get()이 없다
 
-    # 실패 설비 목록 — 스위치가 비는 것만 보강 대상으로 추린다
-    rows = [dict(r) for r in _rows(conn,
-        "SELECT ip, mac, IFNULL(switch_name,'') AS sw, online FROM facility_hosts")]
-    weak = [h for h in rows if h["online"] == 0 and not h["sw"]]
+    if rows is None:
+        rows = [dict(r) for r in _rows(conn,
+            "SELECT ip, mac, subnet, port, IFNULL(switch_name,'') AS sw, online, updated "
+            "FROM facility_hosts")]
+    weak = [h for h in rows if h.get("online") == 0 and not h.get("sw")]
     hist, desc = {}, {}
     if weak and db_path:
         try:
@@ -475,8 +477,8 @@ def _offline_by_tps_location(conn, db_path=None):
         except Exception:
             desc = {}
 
-    def _switch_of(h):
-        if h["sw"]:
+    def switch_of(h):
+        if h.get("sw"):
             return h["sw"]
         hx = re.sub(r"[^0-9a-f]", "", (h.get("mac") or "").lower())
         hh = hist.get(hx) if len(hx) == 12 else None
@@ -489,32 +491,72 @@ def _offline_by_tps_location(conn, db_path=None):
             return dm["switch_name"]
         return ""
 
+    def zone_of(sw):
+        meta = sw_meta.get(sw) or {}
+        info = tps_location.parse(meta.get("hostname") or sw)
+        if info:
+            return info["label"], info
+        return ((meta.get("location") or "").strip() or "위치 미확인"), None
+
+    return rows, switch_of, zone_of
+
+
+def facility_zone_hosts(db_path, label, limit=500):
+    """한 구역(TPS)의 설비 목록 — 관제 카드 클릭 시 '어떤 설비인지' 확인용.
+
+    집계와 같은 판정을 쓰도록 _facility_zone_resolver를 공유한다.
+    연결 실패를 먼저, 그다음 IP 순.
+    """
+    with db.get_db(db_path) as conn:
+        rows, switch_of, zone_of = _facility_zone_resolver(conn, db_path)
+    hosts = []
+    for h in rows:
+        sw = switch_of(h)
+        lbl, _info = zone_of(sw)
+        if lbl != label:
+            continue
+        hosts.append({"ip": h.get("ip"), "mac": h.get("mac") or "",
+                      "subnet": h.get("subnet") or "",
+                      "switch_name": sw, "port": h.get("port") or "",
+                      "online": bool(h.get("online")),
+                      # 원본 switch_name이 비었는데 스위치를 찾았다면 추정값이다
+                      "inferred": bool(sw and not h.get("sw")),
+                      "updated": (h.get("updated") or "")[:16]})
+    hosts.sort(key=lambda x: (x["online"], _ip_sort_key(x["ip"])))
+    total = len(hosts)
+    offline = sum(1 for h in hosts if not h["online"])
+    return {"label": label, "hosts": hosts[:limit], "count": min(total, limit),
+            "total": total, "offline": offline, "truncated": total > limit}
+
+
+def _offline_by_tps_location(conn, db_path=None):
+    """지금 연결 실패인 설비를 TPS 구역별로 집계 → [{label, phase, building,
+    floor, tps, offline, total, switches[]}] (실패 많은 순).
+
+    관제에서 필요한 건 '어느 스위치'가 아니라 **어디로 가야 하나**다.
+    """
+    rows, switch_of, zone_of = _facility_zone_resolver(conn, db_path)
+
     counts = {}
     for h in rows:
-        key = _switch_of(h)
+        key = switch_of(h)
         c = counts.setdefault(key, [0, 0])
         c[1] += 1
-        if h["online"] == 0:
+        if h.get("online") == 0:
             c[0] += 1
 
     agg = {}
     for sw, (off, tot) in counts.items():
         if not off:
             continue                      # 실패가 없는 구역은 관제에 올릴 것이 없다
-        meta = sw_meta.get(sw) or {}
-        info = tps_location.parse(meta.get("hostname") or sw)
-        if info:
-            key = info["label"]
-            ent = agg.setdefault(key, {
-                "label": key, "phase": info["phase"],
-                "building": info["building_name"], "floor": info["floor"],
-                "tps": info["tps"], "offline": 0, "total": 0, "switches": []})
-        else:
-            # 위치를 못 읽으면 스위치의 location 텍스트라도 쓰고, 그것도 없으면 미확인
-            key = (meta.get("location") or "").strip() or "위치 미확인"
-            ent = agg.setdefault(key, {
-                "label": key, "phase": None, "building": "", "floor": None,
-                "tps": "", "offline": 0, "total": 0, "switches": []})
+        key, info = zone_of(sw)
+        ent = agg.setdefault(key, {
+            "label": key,
+            "phase": info["phase"] if info else None,
+            "building": info["building_name"] if info else "",
+            "floor": info["floor"] if info else None,
+            "tps": info["tps"] if info else "",
+            "offline": 0, "total": 0, "switches": []})
         ent["offline"] += off
         ent["total"] += tot
         if sw and sw not in ent["switches"]:

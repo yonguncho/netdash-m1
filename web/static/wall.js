@@ -829,7 +829,8 @@ function tpsOfflineCard(rows) {
       /* 구역 전체가 끊겼으면 개별 설비 문제가 아니라 스위치·전원·업링크를
          먼저 본다 — 그 판단이 서게 비율을 함께 보여준다. */
       var all = (x.total && x.offline >= x.total);
-      return "<tr><td><b>" + esc(x.label) + "</b>" +
+      return "<tr class='wsub__row' data-zone='" + esc(x.label) + "'>" +
+        "<td><b>" + esc(x.label) + "</b>" +
         (all ? " <span class='wst wst--bad'>구역 전체</span>" : "") + "</td>" +
         "<td class='wsub__bad'><b>" + _n(x.offline) + "</b></td>" +
         "<td>" + _n(x.total) + " <small>(" + pct + "%)</small></td>" +
@@ -838,8 +839,125 @@ function tpsOfflineCard(rows) {
   var totalOff = rows.reduce(function (a, x) { return a + (x.offline || 0); }, 0);
   return wcard("연결 실패 구역 (TPS) — " + rows.length + "곳 / " + _n(totalOff) + "대",
     "설비가 끊긴 곳을 공장·건물·층·TPS 단위로 · 실패 많은 순 · " +
+    "행을 클릭하면 그 구역의 설비 목록이 열립니다 · " +
     "'구역 전체'는 그 구역 설비가 모두 끊긴 상태(스위치·전원·업링크 먼저 확인)",
     body, "wcard--6" + (rows.length > 8 ? " wcard--tall" : ""));
+}
+
+/* 구역 클릭 → 그 구역의 설비 목록. 현장에 가기 전에 '어떤 설비인지' 확인하고,
+   여기서 바로 재확인(재수집)까지 걸 수 있게 한다. */
+var _zoneCur = null;          // 재수집 후 같은 구역을 다시 그리기 위해 보관
+
+function openZoneModal(label) {
+  var modal = document.getElementById("wsw-modal");
+  var body = document.getElementById("wsw-body");
+  if (!modal || !body) return;
+  _zoneCur = label;
+  modal.style.display = "";
+  var box = modal.querySelector(".wswm__box");
+  if (box) box.classList.add("wswm__box--wide");
+  document.getElementById("wsw-name").textContent = label;
+  document.getElementById("wsw-sub").textContent = "불러오는 중...";
+  body.innerHTML = "<p class='wnone'>불러오는 중...</p>";
+  _loadZone(label);
+}
+
+function _loadZone(label) {
+  var body = document.getElementById("wsw-body");
+  fetch("/api/wall/facility-zone?label=" + encodeURIComponent(label))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var hosts = d.hosts || [];
+      var sub = document.getElementById("wsw-sub");
+      if (sub) {
+        sub.textContent = "설비 " + (d.total || 0) + "대 · 연결 실패 " +
+          (d.offline || 0) + "대";
+      }
+      if (!hosts.length) {
+        body.innerHTML = "<p class='wnone'>이 구역에 설비가 없습니다.</p>";
+        return;
+      }
+      /* 연결 스위치를 아니까 여기서 바로 재확인을 건다 — 화면을 옮겨 다니며
+         같은 대상을 다시 찾을 필요가 없다. */
+      var sws = [];
+      hosts.forEach(function (h) {
+        if (h.switch_name && sws.indexOf(h.switch_name) < 0) sws.push(h.switch_name);
+      });
+      body.innerHTML =
+        "<div class='zone__bar'>" +
+        "<button id='zone-recollect' class='wall-cat__bulk'" +
+          (d.offline ? "" : " disabled") + ">" + ico("refresh") +
+          " 연결 실패 " + (d.offline || 0) + "대 재확인</button>" +
+        "<span class='zone__hint'>연결 스위치를 통해 다시 ping합니다" +
+          (sws.length ? " · 대상 스위치: " + esc(sws.join(", ")) : "") + "</span>" +
+        "<span id='zone-msg' class='zone__msg'></span></div>" +
+        "<table class='wtable'><thead><tr><th>IP</th><th>상태</th>" +
+        "<th>연결 스위치</th><th>포트</th><th>MAC</th><th>대역</th><th>갱신</th>" +
+        "</tr></thead><tbody>" +
+        hosts.map(function (h) {
+          var st = h.online
+            ? "<span class='wst wst--ok'>온라인</span>"
+            : "<span class='wst wst--bad'>연결 실패</span>";
+          /* 추정으로 찾은 스위치는 그렇다고 밝힌다 — 현재 MAC이 아니라 과거
+             이력·포트 설명에서 찾은 것이라 현장과 다를 수 있다. */
+          var sw = h.switch_name
+            ? esc(h.switch_name) +
+              (h.inferred ? " <small class='wsub__na'>(추정)</small>" : "")
+            : "<small class='wsub__na'>미확인</small>";
+          return "<tr><td><b>" + esc(h.ip) + "</b></td><td>" + st + "</td>" +
+            "<td>" + sw + "</td><td>" + esc(h.port || "-") + "</td>" +
+            "<td>" + esc(h.mac || "-") + "</td>" +
+            "<td><small>" + esc(h.subnet || "-") + "</small></td>" +
+            "<td><small>" + esc(String(h.updated || "-").slice(5)) + "</small></td></tr>";
+        }).join("") + "</tbody></table>" +
+        (d.truncated ? "<p class='wswm__foot'>" + d.total + "대 중 앞 " +
+          hosts.length + "대만 표시했습니다.</p>" : "");
+
+      var btn = document.getElementById("zone-recollect");
+      if (btn) btn.addEventListener("click", function () { _zoneRecollect(sws, btn); });
+    })
+    .catch(function () {
+      body.innerHTML = "<p class='wnone'>구역 정보를 불러오지 못했습니다.</p>";
+    });
+}
+
+/* 구역의 연결 스위치별로 오프라인 설비만 재확인(대역 전체 스윕 아님).
+   기존 '전체 재수집'과 같은 경로를 쓴다 — 스위치마다 세션 하나만 연다. */
+function _zoneRecollect(switches, btn) {
+  var msg = document.getElementById("zone-msg");
+  btn.disabled = true;
+  if (msg) msg.textContent = "재확인 중... (대상 스위치에 접속합니다)";
+  var targets = (switches && switches.length) ? switches.slice() : [null];
+  var sum = { checked: 0, online: 0, still: 0, nogw: 0, nocred: 0 };
+  function step(i) {
+    if (i >= targets.length) {
+      if (msg) {
+        msg.textContent = "재확인 완료 — " + sum.checked + "대 확인, 복구 " +
+          sum.online + "대, 여전히 실패 " + sum.still + "대" +
+          (sum.nogw ? " · 게이트웨이 없음 " + sum.nogw : "") +
+          (sum.nocred ? " · 계정 없음 " + sum.nocred : "");
+      }
+      btn.disabled = false;
+      if (_zoneCur) _loadZone(_zoneCur);      // 목록을 서버 기준으로 다시 그린다
+      if (typeof refresh === "function") refresh();
+      return;
+    }
+    fetch("/api/facility/recollect-offline", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(targets[i] ? { switch: targets[i] } : {})
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        sum.checked += res.checked || 0;
+        sum.online += res.online || 0;
+        sum.still += res.still_offline || 0;
+        sum.nogw += (res.no_gateway || []).length;
+        sum.nocred += (res.no_cred || []).length;
+      })
+      .catch(function () {})
+      .then(function () { step(i + 1); });
+  }
+  step(0);
 }
 
 /* ── 설비 탭 ── */
@@ -957,6 +1075,8 @@ document.addEventListener("click", function (e) {
   if (row) { openWallSwitchModal(row.getAttribute("data-swid")); return; }
   var sub = e.target.closest && e.target.closest("[data-subnet]");
   if (sub) { openSubnetModal(sub.getAttribute("data-subnet")); return; }
+  var zone = e.target.closest && e.target.closest("[data-zone]");
+  if (zone) { openZoneModal(zone.getAttribute("data-zone")); return; }
   var x = e.target.closest && e.target.closest("[data-close]");
   if (x) {
     var m = document.getElementById("wsw-modal");

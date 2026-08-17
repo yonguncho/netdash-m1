@@ -437,6 +437,24 @@ def main():
                     ok("연결 실패 구역(TPS) 카드")
                 else:
                     fail("연결 실패 구역 카드가 비었는데 사유 문구도 없음")
+                # 구역 클릭 → 설비 목록 팝업 + 재확인 버튼(v6.40)
+                zrow = zc.query_selector("tbody tr[data-zone]")
+                if zrow:
+                    zrow.click()
+                    pg.wait_for_timeout(1600)
+                    zm = pg.query_selector("#wsw-modal")
+                    zrows = pg.query_selector_all("#wsw-body .wtable tbody tr")
+                    if not (zm and zm.is_visible()) or not zrows:
+                        fail("구역 클릭 → 설비 목록 팝업이 안 열림")
+                    elif not pg.query_selector("#zone-recollect"):
+                        fail("구역 팝업에 재확인 버튼이 없음")
+                    else:
+                        ok("구역 팝업: 설비 %d행 + 재확인 버튼" % len(zrows))
+                    text_problems(pg, "구역 팝업")
+                    x = pg.query_selector("#wsw-modal .wswm__x")
+                    if x:
+                        x.click()
+                        pg.wait_for_timeout(300)
             subrow = pg.query_selector("#wtab-facility .wsub__row")
             if not subrow:
                 fail("설비 탭에 대역별 IP 사용 현황이 없음")

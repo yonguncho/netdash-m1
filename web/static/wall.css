@@ -463,3 +463,12 @@ body {
 .wsub__cap { color:#5b6f8c; }
 .wsub__na { color:#5b6f8c; }
 .wsub__bad { color:#fb7185; }
+
+/* v6.40 구역 팝업 — 목록 위 조치 바(재확인 버튼 + 결과 문구) */
+.zone__bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  margin: 0 0 10px; padding-bottom: 10px;
+  border-bottom: 1px solid rgba(148,163,184,.14);
+}
+.zone__hint { font-size: 11px; color: #5b6f8c; }
+.zone__msg { font-size: 12px; color: #8fa3bd; margin-left: auto; }

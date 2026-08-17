@@ -256,3 +256,69 @@ def test_online_facility_without_switch_does_not_create_zone(dbf):
     db.save_facility_hosts(dbf, [{"subnet": "10.8.0.0/24", "ip": "10.8.0.1",
                                   "mac": "aa:00", "switch_name": "", "online": 1}])
     assert _zones(dbf) == []
+
+
+# ── 구역 팝업 + 재확인 (v6.40) ────────────────────────────────────
+# 사용자 요청: 구역을 클릭하면 어떤 설비인지 IP·정보를 한 번 더 확인하고,
+# 연결 스위치를 아는 김에 거기서 바로 재확인(재수집)까지 걸 수 있어야 한다.
+
+def test_zone_hosts_lists_that_zone_only(dbf):
+    _sw(dbf, "TPS-F1B02_1F01_FA_SW1", "10.1.1.1")
+    _sw(dbf, "TPS-F2B1A_3F05_SW1", "10.2.1.1")
+    _fac(dbf, "10.1.0.0/24", "10.1.0.1", "TPS-F1B02_1F01_FA_SW1", 0)
+    _fac(dbf, "10.1.0.0/24", "10.1.0.2", "TPS-F1B02_1F01_FA_SW1", 1)
+    _fac(dbf, "10.2.0.0/24", "10.2.0.1", "TPS-F2B1A_3F05_SW1", 0)
+    out = wallstats.facility_zone_hosts(dbf, "1공장 Assembly(B02) 1층 TPS01")
+    ips = [h["ip"] for h in out["hosts"]]
+    assert ips == ["10.1.0.1", "10.1.0.2"], ips     # 연결 실패 먼저, 그다음 IP 순
+    assert out["total"] == 2 and out["offline"] == 1
+
+
+def test_zone_hosts_matches_card_count(dbf):
+    """카드와 팝업이 다른 판정을 쓰면 '카드 5건인데 팝업 3건'이 된다."""
+    sw = _tps_switch(dbf, "TPS-SW-A", "10.1.1.1", "TPS-F1B02_1F01_FA_SW1")
+    _snapshot_with(dbf, sw, mac="aabbccddee01")
+    db.save_facility_hosts(dbf, [
+        {"subnet": "10.5.0.0/24", "ip": "10.5.0.11", "mac": "aa:bb:cc:dd:ee:01",
+         "switch_name": "", "online": 0},                      # 이력으로 보강되는 건
+        {"subnet": "10.5.0.0/24", "ip": "10.5.0.12", "switch_name": "TPS-SW-A",
+         "online": 0}])
+    z = _zones(dbf)[0]
+    out = wallstats.facility_zone_hosts(dbf, z["label"])
+    assert out["offline"] == z["offline"], (out["offline"], z["offline"])
+    assert out["total"] == z["total"]
+
+
+def test_zone_hosts_marks_inferred_switch(dbf):
+    """추정으로 찾은 스위치는 그렇다고 밝혀야 한다 — 현장과 다를 수 있다."""
+    sw = _tps_switch(dbf, "TPS-SW-A", "10.1.1.1", "TPS-F1B02_1F01_FA_SW1")
+    _snapshot_with(dbf, sw, mac="aabbccddee01")
+    db.save_facility_hosts(dbf, [
+        {"subnet": "10.5.0.0/24", "ip": "10.5.0.11", "mac": "aa:bb:cc:dd:ee:01",
+         "switch_name": "", "online": 0}])
+    out = wallstats.facility_zone_hosts(dbf, "1공장 Assembly(B02) 1층 TPS01")
+    assert out["hosts"][0]["inferred"] is True
+    assert out["hosts"][0]["switch_name"] == "TPS-SW-A"
+
+
+def test_zone_hosts_unknown_zone_is_empty(dbf):
+    out = wallstats.facility_zone_hosts(dbf, "없는 구역")
+    assert out["hosts"] == [] and out["total"] == 0
+
+
+def test_wall_js_zone_modal_and_recollect():
+    js = _read("web", "static", "wall.js")
+    assert "function openZoneModal(" in js
+    assert "data-zone='" in js and "[data-zone]" in js
+    assert "/api/wall/facility-zone?label=" in js
+    # 연결 스위치를 아는 김에 바로 재확인까지
+    assert "zone-recollect" in js
+    assert "/api/facility/recollect-offline" in js
+
+
+def test_zone_api_route_exists():
+    import inspect
+    import app as app_mod
+    src = inspect.getsource(app_mod)
+    assert '"/api/wall/facility-zone"' in src
+    assert "facility_zone_hosts(db_path, label)" in src
