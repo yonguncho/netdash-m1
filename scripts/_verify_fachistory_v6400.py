@@ -115,6 +115,22 @@ def main():
             pg.click("[data-wtab='facility']")
             pg.wait_for_timeout(1500)
             # 시드 구역을 명시적으로 — 개발 DB의 다른 설비 때문에 1위가 아닐 수 있다
+            # 설비 탭 '연결 실패 설비' 목록(v6.40.1) — 끊긴 시점·경과가 보여야 한다
+            ohc = pg.query_selector(".wcard:has-text('연결 실패 설비')")
+            assert ohc, "설비 탭에 '연결 실패 설비' 목록 카드가 없다"
+            oht = ohc.inner_text()
+            print("--- 연결 실패 설비 목록 ---")
+            print(oht[:340])
+            assert IP in oht, "시드 설비가 목록에 없다"
+            assert "끊긴 시점" in oht and "경과" in oht
+            ohrow = ohc.query_selector("tr[data-fachist='%s']" % IP)
+            assert ohrow, "설비 행이 이력 클릭 대상이 아니다"
+            rowtxt = ohrow.inner_text()
+            assert "Gi1/0/12" in rowtxt, "연결 포트가 안 보인다: %r" % rowtxt
+            assert "TPS-F1B02" in rowtxt, "연결 스위치가 안 보인다: %r" % rowtxt
+            assert "일" in rowtxt or "시간" in rowtxt, "경과 시간이 안 보인다: %r" % rowtxt
+            pg.screenshot(path=os.path.join(OUT, "offline_hosts.png"), full_page=True)
+
             zrow = pg.query_selector("tr[data-zone*='TPS01']")
             assert zrow, "시드 구역(TPS01) 행이 없다"
             zrow.click()

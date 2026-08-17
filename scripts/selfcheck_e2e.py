@@ -432,6 +432,17 @@ def main():
                 pg.click("[data-wtab='%s']" % tab)
                 pg.wait_for_timeout(600)
             text_problems(pg, "관제 전체 탭")
+            # 연결 실패 설비 목록(v6.40.1) — 설비 탭에도 개별 설비가 보여야 한다
+            ohc = pg.query_selector(".wcard:has-text('연결 실패 설비')")
+            if not ohc:
+                fail("설비 탭에 '연결 실패 설비' 목록 카드가 없음")
+            else:
+                oht = ohc.inner_text()
+                if "연결 실패한 설비가 없습니다" in oht or ohc.query_selector("tbody tr"):
+                    ok("연결 실패 설비 목록")
+                else:
+                    fail("연결 실패 설비 카드가 비었는데 사유 문구도 없음")
+
             # 대역별 IP 사용 현황(v6.36) — 행 클릭 → 그 대역의 IP 목록 팝업
             pg.click("[data-wtab='facility']")
             pg.wait_for_timeout(700)

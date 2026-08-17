@@ -1038,6 +1038,45 @@ function _zoneRecollect(switches, btn) {
   step(0);
 }
 
+/* 지금 끊긴 설비 목록 — 구역 카드가 '어디로 가야 하나'라면 이건 '무엇이'다.
+   요약·장애 탭에만 있어서 설비 탭에서는 개별 설비를 볼 수 없었다(사용자 지적). */
+function offlineHostsCard(rows, total) {
+  if (!rows.length) {
+    return wcard("연결 실패 설비",
+      "지금 끊긴 설비 · 최근 끊긴 순 · 행을 클릭하면 연결 이력",
+      "<p class='wnone'>연결 실패한 설비가 없습니다.</p>", "wcard--12");
+  }
+  var body =
+    "<table class='wtable'><thead><tr><th>IP</th><th>연결 스위치</th><th>포트</th>" +
+    "<th>구역</th><th>끊긴 시점</th><th>경과</th></tr></thead><tbody>" +
+    rows.map(function (h) {
+      var sw = h.switch_name
+        ? esc(h.switch_name) +
+          (h.inferred ? " <small class='wsub__na'>(추정)</small>" : "")
+        : "<small class='wsub__na'>미확인</small>";
+      /* 끊긴 시각을 모르는 건 '기록 없음'으로 밝힌다 — 마지막 수집 시각을
+         끊긴 시각으로 쓰면 수집만 돌아도 값이 바뀌어 거짓이 된다. */
+      var since = h.since
+        ? esc(String(h.since).slice(5))
+        : "<small class='wsub__na'>기록 없음</small>";
+      var ago = (h.minutes === null || h.minutes === undefined)
+        ? "<small class='wsub__na'>-</small>"
+        : "<b class='wsub__bad'>" + esc(histDur(h.minutes)) + "</b>";
+      return "<tr class='wsub__row' data-fachist='" + esc(h.ip) + "'" +
+        " title='클릭하면 이 설비의 연결 이력(타임라인)'>" +
+        "<td><b>" + esc(h.ip) + "</b></td><td>" + sw + "</td>" +
+        "<td>" + esc(h.port || "-") + "</td>" +
+        "<td><small>" + esc(h.zone || "-") + "</small></td>" +
+        "<td>" + since + "</td><td>" + ago + "</td></tr>";
+    }).join("") + "</tbody></table>" +
+    ((total || 0) > rows.length
+      ? "<p class='wswm__foot'>" + total + "대 중 " + rows.length +
+        "대 표시(최근 끊긴 순) — 전체는 설비 현황에서 확인</p>" : "");
+  return wcard("연결 실패 설비 — " + _n(total || rows.length) + "대",
+    "지금 끊긴 설비 · 최근 끊긴 순 · 행을 클릭하면 연결 이력(타임라인)이 열립니다",
+    body, "wcard--12" + (rows.length > 8 ? " wcard--tall" : ""));
+}
+
 /* ── 설비 탭 ── */
 function renderFacilityTab(c) {
   var el = document.getElementById("wtab-facility");
@@ -1058,6 +1097,8 @@ function renderFacilityTab(c) {
     ]) +
     "<div class='wgrid'>" +
     tpsOfflineCard(c.offline_by_location || []) +
+    /* 구역(어디로 가야 하나) 다음에 설비(무엇이 끊겼나) — 관제에서 보는 순서 */
+    offlineHostsCard(c.offline_hosts || [], c.offline_hosts_total) +
     wcard("설비 최다 연결 스위치 TOP 10", "클릭 → 스위치 상세",
       rankList((c.by_switch || []).map(function (x) {
         return { id: x.id, name: x.name, v: x.count, d: _n(x.count) + " <small>대</small>" };

@@ -426,6 +426,10 @@ def _facility_stats(conn, db_path=None):
             sid = name_ids.get(e["name"])
             if sid:
                 e["id"] = sid
+    # 지금 끊긴 설비 목록 — 구역 집계가 '어디로 가야 하나'라면 이건 '무엇이'다.
+    # 요약·장애 탭에만 있어서 설비 탭에서는 개별 설비를 볼 수 없었다(사용자 지적).
+    offline_hosts = _offline_facility_list(conn, db_path)
+
     # 연결 실패 설비를 **TPS 구역(물리 위치)별**로 묶는다.
     # 스위치 이름만 보면 "어느 스위치"는 알아도 "어디로 가야 하나"를 모른다.
     # 호스트네임의 F{공장}B{건물}_{층}F{TPS} 패턴이 곧 현장 위치다.
@@ -435,7 +439,58 @@ def _facility_stats(conn, db_path=None):
             "direct": direct, "indirect": max(0, total - direct),
             "by_subnet": by_subnet, "by_switch": by_switch,
             "offline_by_switch": offline_by_switch, "offline_24h": offline_24h,
-            "offline_by_location": offline_by_location}
+            "offline_by_location": offline_by_location,
+            "offline_hosts": offline_hosts["hosts"],
+            "offline_hosts_total": offline_hosts["total"]}
+
+
+def _offline_facility_list(conn, db_path=None, limit=100):
+    """지금 연결 실패인 설비 목록 → {hosts:[{ip, switch_name, port, subnet,
+    since, minutes, inferred, zone}], total} (최근 끊긴 순).
+
+    '끊긴 시점'은 device_offline 이벤트의 최신 시각이다. 이벤트가 없으면
+    비워 둔다 — 마지막 수집 시각(updated)을 끊긴 시각으로 쓰면 거짓이 된다
+    (수집만 돌아도 값이 바뀐다).
+    """
+    import datetime as _dt
+
+    rows, switch_of, zone_of = _facility_zone_resolver(conn, db_path)
+    off = [h for h in rows if h.get("online") == 0]
+    if not off:
+        return {"hosts": [], "total": 0}
+
+    # IP별 최신 끊김 시각 — 설비마다 쿼리하지 않고 한 번에(관제는 30초 폴링)
+    since_map = {}
+    for r in _rows(conn,
+        "SELECT ip, MAX(ts) AS ts FROM device_events "
+        "WHERE kind='device_offline' AND IFNULL(ip,'')<>'' GROUP BY ip"):
+        since_map[r["ip"]] = r["ts"]
+
+    now = _dt.datetime.now()
+    out = []
+    for h in off:
+        sw = switch_of(h)
+        zone, _info = zone_of(sw) if sw else ("위치 미확인", None)
+        ts = since_map.get(h.get("ip"))
+        mins = None
+        if ts:
+            try:
+                t = _dt.datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S")
+                mins = max(0, int((now - t).total_seconds() // 60))
+            except (TypeError, ValueError):
+                mins = None
+        out.append({"ip": h.get("ip"), "mac": h.get("mac") or "",
+                    "subnet": h.get("subnet") or "",
+                    "switch_name": sw, "port": h.get("port") or "",
+                    "inferred": bool(sw and not h.get("sw")),
+                    "zone": zone if sw else "위치 미확인",
+                    "since": (str(ts)[:16] if ts else ""), "minutes": mins})
+    # 최근에 끊긴 것을 위로 — 방금 생긴 장애가 먼저 보여야 한다.
+    # 시각을 모르는 건(이벤트 없음) 맨 뒤로 보낸다.
+    out.sort(key=lambda x: (x["minutes"] is None,
+                            x["minutes"] if x["minutes"] is not None else 0,
+                            _ip_sort_key(x["ip"])))
+    return {"hosts": out[:limit], "total": len(out)}
 
 
 def _facility_zone_resolver(conn, db_path=None, rows=None):

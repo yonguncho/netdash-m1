@@ -162,3 +162,74 @@ def test_history_box_hidden_for_other_diagnoses():
         i = js.index(fn)
         blk = js[i:i + 700]
         assert "diag-history" in blk, "%s 에서 이력 영역을 숨기지 않는다" % fn
+
+
+# ── 관제 설비 탭: 연결 실패 설비 목록 (v6.40.1) ───────────────────
+# 사용자 요청: 요약·장애 탭에만 있던 '끊긴 설비' 목록이 설비 탭에도 있어야 한다.
+# 현재 끊긴 설비 / 연결 스위치·포트 / 끊긴 시점.
+
+def _offline_list(dbf):
+    return wallstats.build(dbf)["facility"]
+
+
+def test_offline_hosts_listed_with_switch_and_port(dbf):
+    _fac(dbf, "10.1.0.20", 0)
+    f = _offline_list(dbf)
+    assert f["offline_hosts_total"] == 1
+    h = f["offline_hosts"][0]
+    assert h["ip"] == "10.1.0.20"
+    assert h["switch_name"] == "SW1" and h["port"] == "Gi1/0/3"
+
+
+def test_offline_hosts_include_disconnect_time(dbf):
+    _fac(dbf, "10.1.0.21", 0)
+    _ev(dbf, "10.1.0.21", 2, "device_offline")
+    h = _offline_list(dbf)["offline_hosts"][0]
+    assert h["since"], "끊긴 시점이 비었다"
+    assert h["minutes"] is not None and h["minutes"] > 0
+
+
+def test_offline_hosts_without_event_say_so(dbf):
+    """끊긴 시각을 모르면 비워 둔다 — 마지막 수집 시각을 쓰면 거짓이 된다
+    (수집만 돌아도 값이 바뀐다)."""
+    _fac(dbf, "10.1.0.22", 0)
+    h = _offline_list(dbf)["offline_hosts"][0]
+    assert h["since"] == "" and h["minutes"] is None
+
+
+def test_offline_hosts_sorted_recent_first(dbf):
+    """방금 생긴 장애가 먼저 보여야 한다. 시각 모르는 건 맨 뒤."""
+    _fac(dbf, "10.1.0.30", 0)
+    _fac(dbf, "10.1.0.31", 0)
+    _fac(dbf, "10.1.0.32", 0)
+    _ev(dbf, "10.1.0.30", 5, "device_offline")
+    _ev(dbf, "10.1.0.31", 1, "device_offline")
+    ips = [h["ip"] for h in _offline_list(dbf)["offline_hosts"]]
+    assert ips == ["10.1.0.31", "10.1.0.30", "10.1.0.32"], ips
+
+
+def test_online_hosts_are_excluded(dbf):
+    _fac(dbf, "10.1.0.40", 1)
+    assert _offline_list(dbf)["offline_hosts"] == []
+
+
+def test_offline_hosts_carry_zone(dbf):
+    """구역까지 있어야 목록에서 바로 '어디로 가야 하나'가 보인다."""
+    with db.get_db(dbf) as conn:
+        db.save_switch(dbf, "SW1", "10.9.9.1", "cisco_ios")
+        conn.execute("UPDATE switches SET hostname=? WHERE name='SW1'",
+                     ("TPS-F1B02_1F01_FA_SW1",))
+        conn.commit()
+    _fac(dbf, "10.1.0.50", 0)
+    h = _offline_list(dbf)["offline_hosts"][0]
+    assert h["zone"] == "1공장 Assembly(B02) 1층 TPS01", h["zone"]
+
+
+def test_wall_js_renders_offline_hosts_card():
+    js = _read("web", "static", "wall.js")
+    assert "function offlineHostsCard(" in js
+    assert "offlineHostsCard(c.offline_hosts" in js
+    assert "연결 실패 설비" in js
+    assert "끊긴 시점" in js
+    # 목록 행에서 바로 이력으로 — 같은 진입점을 재사용한다
+    assert "data-fachist='" in js
