@@ -2492,6 +2492,8 @@ function editSwitch(sw) {
 function diagnoseSwitch(id) {
   var prog = document.getElementById("diag-result");
   openModal("modal-diagnose");
+  var _hb = document.getElementById("diag-history");
+  if (_hb) { _hb.style.display = "none"; _hb.innerHTML = ""; }
   if (prog) prog.textContent = "진단 중... (SSH 접속 → 배너/프롬프트/show version 확인, 최대 30초)";
   fetch("/api/switches/" + id + "/diagnose", {
     method: "POST", headers: {"Content-Type": "application/json"},
@@ -2520,6 +2522,8 @@ function diagnoseSwitch(id) {
 function snmpProbeFirewall(id) {
   var out = document.getElementById("diag-result");
   openModal("modal-diagnose");
+  var _hb = document.getElementById("diag-history");
+  if (_hb) { _hb.style.display = "none"; _hb.innerHTML = ""; }
   if (out) out.textContent = "SNMP 조회 중... (최대 25초)";
   fetch("/api/firewalls/" + id + "/snmp-probe", { method: "POST" })
     .then(function (r) { return r.json(); })
@@ -2550,6 +2554,8 @@ function snmpProbeFirewall(id) {
 function snmpProbeSwitch(id) {
   var out = document.getElementById("diag-result");
   openModal("modal-diagnose");
+  var _hb = document.getElementById("diag-history");
+  if (_hb) { _hb.style.display = "none"; _hb.innerHTML = ""; }
   if (out) out.textContent = "SNMP 조회 중... (최대 25초)";
   fetch("/api/switches/" + id + "/snmp-probe", { method: "POST" })
     .then(function (r) { return r.json(); })
@@ -2579,6 +2585,8 @@ function snmpProbeSwitch(id) {
 function diagnoseFirewall(id) {
   var out = document.getElementById("diag-result");
   openModal("modal-diagnose");
+  var _hb = document.getElementById("diag-history");
+  if (_hb) { _hb.style.display = "none"; _hb.innerHTML = ""; }
   if (out) out.textContent = "진단 중... (관리 포트 도달성 → 저장 계정 인증, 최대 20초)";
   fetch("/api/firewalls/" + id + "/diagnose", { method: "POST" })
     .then(function (r) { return r.json(); })
@@ -2607,6 +2615,8 @@ function diagnoseFirewall(id) {
 function diagnoseServer(id) {
   var out = document.getElementById("diag-result");
   openModal("modal-diagnose");
+  var _hb = document.getElementById("diag-history");
+  if (_hb) { _hb.style.display = "none"; _hb.innerHTML = ""; }
   if (out) out.textContent = "진단 중... (포트 스캔 → hostname → 연결 스위치 대조, 최대 30초)";
   fetch("/api/servers/" + id + "/diagnose", { method: "POST" })
     .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
@@ -3145,9 +3155,67 @@ document.addEventListener("change", function (e) {
 
 // 설비 1건의 연결 스위치 판정 근거 — 진단 팝업(modal-diagnose) 재사용.
 // textContent로만 넣는다(HTML 아님) — 스위치 이름·포트 설명에 <>가 섞여도 안전.
+/* 설비 연결 이력 타임라인 — 관제(wall.js)와 같은 모양으로 그린다.
+   '지금 끊겼다'만으로는 방금 생긴 일인지 3주째인지, 원래 오르내리는 장비인지
+   알 수 없다. 진단 팝업 위에 시간 축을 얹어 한 번에 보이게 한다. */
+function _facHistDur(min) {
+  if (min == null) return "-";
+  if (min < 60) return min + "분";
+  if (min < 1440) return Math.round(min / 60) + "시간";
+  var d = Math.floor(min / 1440), h = Math.round((min % 1440) / 60);
+  return d + "일" + (h ? " " + h + "시간" : "");
+}
+
+function loadFacilityHistory(ip) {
+  var box = document.getElementById("diag-history");
+  if (!box) return;
+  box.style.display = "";
+  box.innerHTML = "<div style='font-size:12px;color:#64748b'>연결 이력 불러오는 중...</div>";
+  fetch("/api/facility/history?ip=" + encodeURIComponent(ip) + "&days=30")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var segs = d.segments || [];
+      if (!segs.length) { box.style.display = "none"; return; }
+      var tot = segs.reduce(function (a, s) { return a + (s.minutes || 0); }, 0) || 1;
+      var COLOR = { online: "#10b981", offline: "#ef4444", unknown: "#cbd5e1" };
+      var KO = { online: "연결", offline: "끊김", unknown: "관측 없음" };
+      var bar = segs.map(function (s) {
+        var pct = Math.max(0.4, (s.minutes || 0) * 100 / tot);
+        return "<span style='display:block;height:100%;width:" + pct + "%;background:" +
+          COLOR[s.state] + "' title='" + escHtml(KO[s.state] + " · " + s.start +
+          " ~ " + s.end + " (" + _facHistDur(s.minutes) + ")") + "'></span>";
+      }).join("");
+      var evs = (d.events || []).slice(0, 12);
+      box.innerHTML =
+        "<div style='font-size:12.5px;font-weight:700;color:#334155;margin-bottom:6px'>" +
+        "연결 이력 (최근 " + d.days + "일) — 끊김 " + (d.flaps || 0) + "회 · 누적 " +
+        escHtml(_facHistDur(d.offline_minutes)) + "</div>" +
+        "<div style='display:flex;height:22px;border-radius:6px;overflow:hidden;" +
+        "border:1px solid #cbd5e1'>" + bar + "</div>" +
+        "<div style='display:flex;gap:14px;margin-top:5px;font-size:11px;color:#64748b'>" +
+        "<span><i style='display:inline-block;width:10px;height:10px;border-radius:2px;" +
+        "background:#10b981;margin-right:4px'></i>연결</span>" +
+        "<span><i style='display:inline-block;width:10px;height:10px;border-radius:2px;" +
+        "background:#ef4444;margin-right:4px'></i>끊김</span>" +
+        "<span><i style='display:inline-block;width:10px;height:10px;border-radius:2px;" +
+        "background:#cbd5e1;margin-right:4px'></i>관측 없음</span></div>" +
+        (evs.length
+          ? "<div style='margin-top:8px;font-size:12px;color:#475569;max-height:120px;overflow:auto'>" +
+            evs.map(function (e) {
+              return "<div>" + escHtml(e.ts) + " — " +
+                (e.online ? "<b style='color:#059669'>연결됨</b>"
+                          : "<b style='color:#b91c1c'>끊김</b>") + "</div>";
+            }).join("") + "</div>"
+          : "<div style='margin-top:8px;font-size:12px;color:#64748b'>" +
+            "이 기간에 상태가 바뀐 기록이 없습니다(계속 같은 상태).</div>");
+    })
+    .catch(function () { box.style.display = "none"; });
+}
+
 function explainFacility(ip, remarks) {
   var out = document.getElementById("diag-result");
   openModal("modal-diagnose");
+  loadFacilityHistory(ip);      // 판정 근거 위에 연결 이력 타임라인
   var head = remarks ? "── 진단 결과 ──\n" + remarks + "\n\n" : "";
   if (out) out.textContent = head + "판정 근거 조회 중...";
   fetch("/api/facility/explain?ip=" + encodeURIComponent(ip))

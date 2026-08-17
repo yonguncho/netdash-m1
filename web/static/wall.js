@@ -844,6 +844,82 @@ function tpsOfflineCard(rows) {
     body, "wcard--6" + (rows.length > 8 ? " wcard--tall" : ""));
 }
 
+/* 설비 연결 이력 타임라인 — '지금 끊겼다'만으로는 방금 생긴 일인지 3주째인지,
+   원래 오르내리는 장비인지 알 수 없다. 시간 축으로 한 번에 보여준다.
+   본 화면(app.js)에도 같은 모양이 있다 — 어느 쪽에서 봐도 같게 읽히도록. */
+function histDur(min) {
+  if (min == null) return "-";
+  if (min < 60) return min + "분";
+  if (min < 1440) return Math.round(min / 60) + "시간";
+  var d = Math.floor(min / 1440), h = Math.round((min % 1440) / 60);
+  return d + "일" + (h ? " " + h + "시간" : "");
+}
+
+function histTimelineHtml(d) {
+  var segs = d.segments || [];
+  var tot = segs.reduce(function (a, s) { return a + (s.minutes || 0); }, 0) || 1;
+  var COLOR = { online: "#10b981", offline: "#ef4444", unknown: "#334155" };
+  var KO = { online: "연결", offline: "끊김", unknown: "관측 없음" };
+  var bar = segs.map(function (s) {
+    var pct = Math.max(0.4, (s.minutes || 0) * 100 / tot);
+    return "<span class='hseg' style='width:" + pct + "%;background:" +
+      COLOR[s.state] + "' title='" + esc(KO[s.state] + " · " + s.start +
+      " ~ " + s.end + " (" + histDur(s.minutes) + ")") + "'></span>";
+  }).join("");
+  return "<div class='hbar'>" + bar + "</div>" +
+    "<div class='hlegend'>" +
+    "<span><i style='background:#10b981'></i>연결</span>" +
+    "<span><i style='background:#ef4444'></i>끊김</span>" +
+    "<span><i style='background:#334155'></i>관측 없음</span>" +
+    "<span class='hlegend__range'>최근 " + d.days + "일</span></div>";
+}
+
+function openFacHistory(ip, backLabel) {
+  var modal = document.getElementById("wsw-modal");
+  var body = document.getElementById("wsw-body");
+  if (!modal || !body) return;
+  modal.style.display = "";
+  var box = modal.querySelector(".wswm__box");
+  if (box) box.classList.add("wswm__box--wide");
+  document.getElementById("wsw-name").textContent = ip;
+  document.getElementById("wsw-sub").textContent = "연결 이력 불러오는 중...";
+  body.innerHTML = "<p class='wnone'>불러오는 중...</p>";
+  fetch("/api/facility/history?ip=" + encodeURIComponent(ip) + "&days=30")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var st = (d.now_online === null || d.now_online === undefined) ? "상태 미상"
+        : (d.now_online ? "현재 연결됨" : "현재 연결 실패");
+      document.getElementById("wsw-sub").textContent =
+        st + " · 최근 30일 끊김 " + (d.flaps || 0) + "회 · 누적 끊김 " +
+        histDur(d.offline_minutes) +
+        (d.switch_name ? " · " + d.switch_name + (d.port ? " " + d.port : "") : "");
+      var evs = d.events || [];
+      body.innerHTML =
+        (backLabel
+          ? "<div class='zone__bar'><button id='hist-back' class='wall-cat__bulk'>← 구역 목록으로</button></div>"
+          : "") +
+        histTimelineHtml(d) +
+        (evs.length
+          ? "<table class='wtable' style='margin-top:12px'><thead><tr>" +
+            "<th>시각</th><th>상태 변화</th></tr></thead><tbody>" +
+            evs.map(function (e) {
+              return "<tr><td>" + esc(e.ts) + "</td><td>" +
+                (e.online ? "<span class='wst wst--ok'>연결됨</span>"
+                          : "<span class='wst wst--bad'>끊김</span>") +
+                "</td></tr>";
+            }).join("") + "</tbody></table>"
+          : "<p class='wnone' style='margin-top:12px'>최근 30일 동안 상태가 바뀐 " +
+            "기록이 없습니다(계속 같은 상태).</p>");
+      var back = document.getElementById("hist-back");
+      if (back && backLabel) {
+        back.addEventListener("click", function () { openZoneModal(backLabel); });
+      }
+    })
+    .catch(function () {
+      body.innerHTML = "<p class='wnone'>연결 이력을 불러오지 못했습니다.</p>";
+    });
+}
+
 /* 구역 클릭 → 그 구역의 설비 목록. 현장에 가기 전에 '어떤 설비인지' 확인하고,
    여기서 바로 재확인(재수집)까지 걸 수 있게 한다. */
 var _zoneCur = null;          // 재수집 후 같은 구역을 다시 그리기 위해 보관
@@ -904,7 +980,9 @@ function _loadZone(label) {
             ? esc(h.switch_name) +
               (h.inferred ? " <small class='wsub__na'>(추정)</small>" : "")
             : "<small class='wsub__na'>미확인</small>";
-          return "<tr><td><b>" + esc(h.ip) + "</b></td><td>" + st + "</td>" +
+          return "<tr class='wsub__row' data-fachist='" + esc(h.ip) + "'" +
+            " title='클릭하면 이 설비의 연결 이력(타임라인)'>" +
+            "<td><b>" + esc(h.ip) + "</b></td><td>" + st + "</td>" +
             "<td>" + sw + "</td><td>" + esc(h.port || "-") + "</td>" +
             "<td>" + esc(h.mac || "-") + "</td>" +
             "<td><small>" + esc(h.subnet || "-") + "</small></td>" +
@@ -1077,6 +1155,8 @@ document.addEventListener("click", function (e) {
   if (sub) { openSubnetModal(sub.getAttribute("data-subnet")); return; }
   var zone = e.target.closest && e.target.closest("[data-zone]");
   if (zone) { openZoneModal(zone.getAttribute("data-zone")); return; }
+  var fh = e.target.closest && e.target.closest("[data-fachist]");
+  if (fh) { openFacHistory(fh.getAttribute("data-fachist"), _zoneCur); return; }
   var x = e.target.closest && e.target.closest("[data-close]");
   if (x) {
     var m = document.getElementById("wsw-modal");

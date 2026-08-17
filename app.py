@@ -3375,6 +3375,30 @@ def create_app(demo_mode=None, readonly_info=None, promote_watch=False):
                       error=collector._sanitize_error_msg(str(e)))
             return jsonify({"error": "Internal server error"}), 500
 
+    @app.route("/api/facility/history", methods=["GET"])
+    @rate_limit("facility_history", max_requests=60, window_seconds=60)
+    def facility_history_api():
+        """설비 1대의 연결/끊김 이력(타임라인). 관제·설비 현황 양쪽에서 쓴다.
+
+        '지금 끊겼다'만으로는 방금 생긴 일인지 3주째인지, 원래 오르내리는
+        장비인지 알 수 없다 — 시간 축으로 한 번에 보여주기 위한 조회다.
+        """
+        ip = (request.args.get("ip") or "").strip()
+        if not ip or len(ip) > 45:
+            return jsonify({"error": "설비 IP가 필요합니다"}), 400
+        try:
+            days = int(request.args.get("days") or 30)
+            days = max(1, min(365, days))
+        except (TypeError, ValueError):
+            days = 30
+        try:
+            from core import wallstats
+            return jsonify(wallstats.facility_history(db_path, ip, days=days))
+        except Exception as e:
+            log_event("error", "facility_history_error",
+                      error=collector._sanitize_error_msg(str(e)))
+            return jsonify({"error": "Internal server error"}), 500
+
     @app.route("/api/wall/facility-zone", methods=["GET"])
     def wall_facility_zone():
         """한 TPS 구역의 설비 목록(관제 '연결 실패 구역' 카드 클릭 → 팝업).

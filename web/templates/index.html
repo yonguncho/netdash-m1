@@ -838,6 +838,10 @@
         <button class="modal__close" data-close="modal-diagnose">&times;</button>
       </div>
       <div class="modal__body">
+        <!-- 연결 이력 타임라인(설비) — 진단 본문은 <pre>라 HTML을 못 넣는다.
+             '지금 끊겼다'만으로는 방금 생긴 일인지 3주째인지 알 수 없어,
+             시간 축을 위에 얹는다. 이력이 없으면 숨긴다. -->
+        <div id="diag-history" style="display:none;margin-bottom:12px"></div>
         <!-- 사용자 지적: 글씨가 너무 작다 — 14px·행간 1.7, 창도 넓힘 -->
         <pre id="diag-result" style="white-space:pre-wrap;word-break:break-all;font-size:14px;line-height:1.7;background:#0f172a;color:#e2e8f0;padding:18px 20px;border-radius:10px;max-height:66vh;overflow:auto;user-select:text"></pre>
         <p style="font-size:11px;color:#64748b;margin-top:6px">벤더가 계속 '알 수 없음'이면 이 내용을 복사해 전달해 주세요 — 실제 프롬프트/응답 형태를 보고 인식 패턴을 맞춥니다.</p>

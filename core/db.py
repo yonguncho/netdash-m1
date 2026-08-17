@@ -1584,6 +1584,24 @@ def save_device_event(db_path, kind, severity="info", subnet=None, ip=None,
         pass
 
 
+def get_facility_events(db_path, ip, days=30, limit=500):
+    """설비 1대의 연결/끊김 이벤트(오래된 순). 연결 이력 타임라인용.
+
+    device_online/device_offline만 본다 — 그 둘이 곧 '붙었다/끊겼다'다.
+    """
+    with get_db(db_path) as conn:
+        try:
+            cur = conn.execute(
+                "SELECT ts, kind, message FROM device_events "
+                "WHERE ip=? AND kind IN ('device_online','device_offline') "
+                "  AND ts >= datetime('now','localtime', ?) "
+                "ORDER BY ts ASC, id ASC LIMIT ?",
+                (str(ip), "-%d days" % int(days), int(limit)))
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+
 def list_device_events(db_path, limit=200, only_unack=False, kind=None, days=None):
     """최근 이벤트 목록(최신순). only_unack=미확인만, kind=종류 필터, days=최근 N일."""
     with get_db(db_path) as conn:

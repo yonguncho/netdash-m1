@@ -356,7 +356,15 @@ def main():
                 if "진단 결과" not in (diag.inner_text() or ""):
                     fail("설비 결과 컬럼 버튼 문구가 '진단 결과'가 아님")
                 diag.click()
-                pg.wait_for_timeout(900)
+                pg.wait_for_timeout(1500)
+                # 연결 이력 타임라인(v6.40) — 진단 팝업 위에 함께 떠야 한다
+                hb = pg.query_selector("#diag-history")
+                if hb and hb.is_visible() and "연결 이력" in hb.inner_text():
+                    ok("설비 진단 팝업에 연결 이력 타임라인")
+                elif hb and not hb.is_visible():
+                    ok("연결 이력 없음(구간 0) — 영역 숨김")
+                else:
+                    fail("설비 진단 팝업에 연결 이력이 없음")
                 if pg.query_selector("#modal-diagnose:not(.hidden)"):
                     ok("진단 결과 팝업 열림")
                     pg.evaluate("() => closeModal && closeModal('modal-diagnose')")

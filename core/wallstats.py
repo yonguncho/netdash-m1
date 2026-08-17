@@ -529,6 +529,88 @@ def facility_zone_hosts(db_path, label, limit=500):
             "total": total, "offline": offline, "truncated": total > limit}
 
 
+def facility_history(db_path, ip, days=30):
+    """설비 1대의 연결 이력 → 타임라인 구간 + 이벤트 목록.
+
+    '지금 끊겼다'만 보면 이게 방금 생긴 일인지 3주째인지, 원래 오르내리는
+    장비인지 알 수 없다. 진단 팝업에서 과거 연결 시점을 하나씩 찾아보는 건
+    번거롭다(사용자 지적) — 시간 축으로 한 번에 보여준다.
+
+    반환: {ip, days, now_online, segments[{state,start,end,minutes}],
+           events[{ts,kind}], flaps, offline_minutes, since}
+      segments: 이벤트 사이를 상태 구간으로 접은 것. 첫 이벤트 이전 구간은
+                관측이 없으므로 'unknown'(모르는 걸 초록으로 칠하지 않는다).
+    """
+    import datetime as _dt
+
+    evs = db.get_facility_events(db_path, ip, days=days)
+    now_online = None
+    subnet = ""
+    with db.get_db(db_path) as conn:
+        r = _rows(conn, "SELECT online, subnet, switch_name, port, mac, updated "
+                        "FROM facility_hosts WHERE ip=? LIMIT 1", (str(ip),))
+        cur = dict(r[0]) if r else {}
+    if cur:
+        now_online = bool(cur.get("online"))
+        subnet = cur.get("subnet") or ""
+
+    def _parse(ts):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return _dt.datetime.strptime(str(ts)[:19], fmt)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    now = _dt.datetime.now()
+    start_win = now - _dt.timedelta(days=int(days))
+    points = []
+    for e in evs:
+        t = _parse(e.get("ts"))
+        if t:
+            points.append((t, e.get("kind") == "device_online"))
+
+    segments = []
+
+    def _add(state, a, b):
+        if b <= a:
+            return
+        segments.append({"state": state,
+                         "start": a.strftime("%Y-%m-%d %H:%M"),
+                         "end": b.strftime("%Y-%m-%d %H:%M"),
+                         "minutes": int((b - a).total_seconds() // 60)})
+
+    if not points:
+        # 이벤트가 없다 = 이 기간에 상태가 바뀐 적 없다. 지금 상태로 채운다.
+        if now_online is not None:
+            _add("online" if now_online else "offline", start_win, now)
+    else:
+        # 첫 이벤트 이전은 관측이 없다 — 추측해서 칠하지 않는다.
+        _add("unknown", start_win, points[0][0])
+        for i, (t, is_on) in enumerate(points):
+            nxt = points[i + 1][0] if i + 1 < len(points) else now
+            _add("online" if is_on else "offline", t, nxt)
+
+    off_min = sum(s["minutes"] for s in segments if s["state"] == "offline")
+    # 끊김 횟수 — '오르내리는 장비'인지 판단하는 데 쓴다
+    flaps = sum(1 for _t, on in points if not on)
+    since = None
+    for s in reversed(segments):
+        if s["state"] in ("online", "offline"):
+            since = s["start"]
+            break
+    return {"ip": ip, "subnet": subnet, "days": int(days),
+            "now_online": now_online,
+            "switch_name": (cur.get("switch_name") or ""),
+            "port": (cur.get("port") or ""), "mac": (cur.get("mac") or ""),
+            "segments": segments,
+            "events": [{"ts": str(e.get("ts"))[:16],
+                        "kind": e.get("kind"),
+                        "online": e.get("kind") == "device_online"}
+                       for e in reversed(evs)][:100],
+            "flaps": flaps, "offline_minutes": off_min, "since": since}
+
+
 def _offline_by_tps_location(conn, db_path=None):
     """지금 연결 실패인 설비를 TPS 구역별로 집계 → [{label, phase, building,
     floor, tps, offline, total, switches[]}] (실패 많은 순).

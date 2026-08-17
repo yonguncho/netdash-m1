@@ -472,3 +472,20 @@ body {
 }
 .zone__hint { font-size: 11px; color: #5b6f8c; }
 .zone__msg { font-size: 12px; color: #8fa3bd; margin-left: auto; }
+
+/* v6.40 연결 이력 타임라인 — 구간을 시간 비율대로 이어 붙인 막대 */
+.hbar {
+  display: flex; height: 26px; border-radius: 6px; overflow: hidden;
+  border: 1px solid rgba(148,163,184,.2); background: #0b1220;
+}
+.hseg { display: block; height: 100%; }
+.hseg:hover { filter: brightness(1.25); }
+.hlegend {
+  display: flex; align-items: center; gap: 14px; margin-top: 6px;
+  font-size: 11px; color: #8fa3bd;
+}
+.hlegend i {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  margin-right: 4px; vertical-align: -1px;
+}
+.hlegend__range { margin-left: auto; color: #5b6f8c; }
