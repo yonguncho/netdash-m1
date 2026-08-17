@@ -8,6 +8,8 @@
 집계는 SQL로 한 번에 한다 — 장비가 수백 대일 때 파이썬에서 목록을 돌면
 10초 폴링마다 전체를 훑게 된다.
 """
+import re
+
 from . import db, reachability
 
 
@@ -370,7 +372,7 @@ def facility_subnet_hosts(db_path, subnet, limit=2000):
             "capacity": cap, "truncated": truncated}
 
 
-def _facility_stats(conn):
+def _facility_stats(conn, db_path=None):
     total = online = direct = 0
     r = _rows(conn, "SELECT COUNT(*) AS total, SUM(online) AS onl, "
                     "SUM(CASE WHEN direct=1 AND IFNULL(switch_name,'')<>'' THEN 1 ELSE 0 END) AS dir "
@@ -427,7 +429,7 @@ def _facility_stats(conn):
     # 연결 실패 설비를 **TPS 구역(물리 위치)별**로 묶는다.
     # 스위치 이름만 보면 "어느 스위치"는 알아도 "어디로 가야 하나"를 모른다.
     # 호스트네임의 F{공장}B{건물}_{층}F{TPS} 패턴이 곧 현장 위치다.
-    offline_by_location = _offline_by_tps_location(conn)
+    offline_by_location = _offline_by_tps_location(conn, db_path)
 
     return {"total": total, "online": online, "offline": max(0, total - online),
             "direct": direct, "indirect": max(0, total - direct),
@@ -436,13 +438,18 @@ def _facility_stats(conn):
             "offline_by_location": offline_by_location}
 
 
-def _offline_by_tps_location(conn):
+def _offline_by_tps_location(conn, db_path=None):
     """지금 연결 실패인 설비를 TPS 구역별로 집계 → [{label, phase, building,
     floor, tps, offline, total, switches[]}] (실패 많은 순).
 
     관제에서 필요한 건 '어느 스위치'가 아니라 **어디로 가야 하나**다.
-    위치를 못 읽는 스위치(패턴 불일치)는 '위치 미확인'으로 따로 묶는다 —
-    조용히 빼면 합계가 안 맞아 '왜 적지?'가 된다.
+
+    연결 스위치는 설비 현황 화면과 **같은 3단계**로 찾는다:
+      ① 현재 MAC 기준 switch_name
+      ② 과거 MAC 이력(get_mac_last_seen)
+      ③ 포트 Description에 적힌 설비 IP(find_ports_by_description)
+    끊긴 설비는 MAC이 에이징으로 지워져 ①이 비는 일이 흔하다 — 그것만 보면
+    정작 '연결 실패'가 죄다 '위치 미확인'으로 떨어진다(사용자 지적).
     """
     from . import tps_location
 
@@ -452,13 +459,46 @@ def _offline_by_tps_location(conn):
         if r["name"]:
             sw_meta[r["name"]] = dict(r)      # sqlite3.Row에는 .get()이 없다
 
+    # 실패 설비 목록 — 스위치가 비는 것만 보강 대상으로 추린다
+    rows = [dict(r) for r in _rows(conn,
+        "SELECT ip, mac, IFNULL(switch_name,'') AS sw, online FROM facility_hosts")]
+    weak = [h for h in rows if h["online"] == 0 and not h["sw"]]
+    hist, desc = {}, {}
+    if weak and db_path:
+        try:
+            hist = db.get_mac_last_seen(db_path, [h.get("mac") for h in weak]) or {}
+        except Exception:
+            hist = {}
+        try:
+            desc = db.find_ports_by_description(
+                db_path, [h.get("ip") for h in weak if h.get("ip")]) or {}
+        except Exception:
+            desc = {}
+
+    def _switch_of(h):
+        if h["sw"]:
+            return h["sw"]
+        hx = re.sub(r"[^0-9a-f]", "", (h.get("mac") or "").lower())
+        hh = hist.get(hx) if len(hx) == 12 else None
+        # 업링크에서만 보인 이력은 '거기 꽂혀 있었다'가 아니라 '길목을 지났다' —
+        # 위치로 쓰면 엉뚱한 구역이 된다(설비 현황도 같은 기준으로 구분한다).
+        if hh and hh.get("switch_name") and not hh.get("via_uplink"):
+            return hh["switch_name"]
+        dm = desc.get(h.get("ip"))
+        if dm and dm.get("switch_name"):
+            return dm["switch_name"]
+        return ""
+
+    counts = {}
+    for h in rows:
+        key = _switch_of(h)
+        c = counts.setdefault(key, [0, 0])
+        c[1] += 1
+        if h["online"] == 0:
+            c[0] += 1
+
     agg = {}
-    for r in _rows(conn,
-        "SELECT IFNULL(switch_name,'') AS sw, "
-        "  SUM(CASE WHEN online=0 THEN 1 ELSE 0 END) AS off, COUNT(*) AS tot "
-        "FROM facility_hosts GROUP BY sw"):
-        sw = r["sw"]
-        off, tot = r["off"] or 0, r["tot"] or 0
+    for sw, (off, tot) in counts.items():
         if not off:
             continue                      # 실패가 없는 구역은 관제에 올릴 것이 없다
         meta = sw_meta.get(sw) or {}
@@ -491,7 +531,7 @@ def build(db_path):
     with db.get_db(db_path) as conn:
         for key, fn in (("switches", lambda: _switch_stats(conn, db_path)),
                         ("firewalls", lambda: _firewall_stats(conn, db_path)),
-                        ("facility", lambda: _facility_stats(conn))):
+                        ("facility", lambda: _facility_stats(conn, db_path))):
             try:
                 out[key] = fn()
             except Exception:

@@ -22,7 +22,15 @@ def cleanup():
     with db.get_db(DBP) as conn:
         conn.execute("DELETE FROM facility_hosts WHERE subnet=?", (SUB,))
         for _, ip in SWS:
-            conn.execute("DELETE FROM switches WHERE ip=?", (ip,))
+            r = conn.execute("SELECT id FROM switches WHERE ip=?", (ip,)).fetchone()
+            if not r:
+                continue
+            sid = r["id"]
+            # 자식 행부터 — FK 때문에 스위치를 먼저 지울 수 없다
+            conn.execute("DELETE FROM mac_entries WHERE switch_id=?", (sid,))
+            conn.execute("DELETE FROM ports WHERE switch_id=?", (sid,))
+            conn.execute("DELETE FROM snapshots WHERE switch_id=?", (sid,))
+            conn.execute("DELETE FROM switches WHERE id=?", (sid,))
         conn.commit()
 
 
@@ -47,8 +55,20 @@ def seed():
     for i in range(2):
         rows.append({"subnet": SUB, "ip": "203.0.113.12%d" % i,
                      "switch_name": SWS[2][0], "online": 0})
+    # 끊겨서 MAC이 사라진 설비 — switch_name이 비어 있어도 과거 이력으로
+    # 구역을 찾아야 한다(사용자 지적: 죄다 '위치 미확인'으로 나왔다)
+    sw0 = [s for s in db.get_switches(DBP) if s["ip"] == SWS[0][1]][0]
+    with db.get_db(DBP) as conn:
+        conn.execute("INSERT INTO snapshots (switch_id, collected_at) "
+                     "VALUES (?, datetime('now','-1 day'))", (sw0["id"],))
+        snap = conn.execute("SELECT MAX(id) FROM snapshots").fetchone()[0]
+        conn.execute("INSERT INTO mac_entries (snapshot_id, switch_id, mac, port, vlan) "
+                     "VALUES (?,?,?,?,10)", (snap, sw0["id"], "aabbcc001199", "Gi1/0/7"))
+        conn.commit()
+    rows.append({"subnet": SUB, "ip": "203.0.113.199", "mac": "aa:bb:cc:00:11:99",
+                 "switch_name": "", "online": 0})
     db.save_facility_hosts(DBP, rows)
-    print("seeded 설비 %d건 (1공장 실패5/9, 2공장 실패2/2)" % len(rows))
+    print("seeded 설비 %d건 (1공장 실패5/9 + 끊겨서 스위치 미상 1건, 2공장 실패2/2)" % len(rows))
 
 
 def main():
@@ -87,6 +107,13 @@ def main():
             assert "1공장 Assembly(B02) 1층 TPS01" in txt, "TPS 구역 라벨이 없다"
             assert "2공장 Assembly(B1A) 3층 TPS05" in txt
             assert "구역 전체" in txt, "구역 전체 끊김 배지가 없다"
+            # 끊겨서 switch_name이 빈 설비도 과거 MAC 이력으로 구역을 찾아야 한다.
+            # → 1공장 실패가 5가 아니라 6이 되고, '위치 미확인'은 없어야 한다.
+            row1 = card.query_selector_all("tbody tr")[0].inner_text()
+            nums = [t for t in row1.replace("\t", " ").split() if t.isdigit()]
+            assert nums and nums[0] == "6", (
+                "끊긴 설비가 과거 이력으로 보강되지 않았다(위치 미확인으로 샜다): %r"
+                % row1)
             rows = card.query_selector_all("tbody tr")
             assert rows and "TPS01" in rows[0].inner_text(), "실패 많은 순 정렬이 아니다"
             card.scroll_into_view_if_needed()

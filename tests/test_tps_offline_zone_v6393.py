@@ -174,3 +174,85 @@ def test_problem_card_truncates_long_text():
     js = _read("web", "static", "wall.js")
     i = js.index("class='pcard'")
     assert "title='" in js[i - 200:i + 200], "잘린 전체 값을 볼 툴팁이 없다"
+
+
+# ── 끊긴 설비의 스위치 보강 (v6.39.4) ─────────────────────────────
+# 사용자 지적: 연결 실패 구역이 죄다 '위치 미확인'으로 나온다.
+# 끊긴 설비는 MAC이 에이징으로 지워져 switch_name이 비는데, 그것만 보면
+# 정작 '연결 실패'가 전부 위치 미확인이 된다. 설비 현황 화면과 같은
+# 3단계(현재 MAC → 과거 이력 → 포트 설명)로 찾아야 한다.
+
+def _tps_switch(dbf, name, ip, hostname):
+    db.save_switch(dbf, name, ip, "cisco_ios")
+    sw = [s for s in db.get_switches(dbf) if s["ip"] == ip][0]
+    with db.get_db(dbf) as conn:
+        conn.execute("UPDATE switches SET hostname=? WHERE id=?", (hostname, sw["id"]))
+        conn.commit()
+    return sw
+
+
+def _snapshot_with(dbf, sw, mac=None, port_desc=None, days_ago=1):
+    with db.get_db(dbf) as conn:
+        conn.execute("INSERT INTO snapshots (switch_id, collected_at) "
+                     "VALUES (?, datetime('now', ?))", (sw["id"], "-%d day" % days_ago))
+        snap = conn.execute("SELECT MAX(id) FROM snapshots").fetchone()[0]
+        if mac:
+            conn.execute("INSERT INTO mac_entries (snapshot_id, switch_id, mac, port, vlan) "
+                         "VALUES (?,?,?,?,10)", (snap, sw["id"], mac, "Gi1/0/5"))
+        if port_desc:
+            conn.execute("INSERT INTO ports (snapshot_id, switch_id, name, status, description) "
+                         "VALUES (?,?,?,'down',?)", (snap, sw["id"], "Gi1/0/9", port_desc))
+        conn.commit()
+
+
+def test_offline_facility_located_via_mac_history(dbf):
+    """끊겨서 MAC이 사라진 설비도 과거 이력으로 구역을 찾는다."""
+    sw = _tps_switch(dbf, "TPS-SW-A", "10.1.1.1", "TPS-F1B02_1F01_FA_SW1")
+    _snapshot_with(dbf, sw, mac="aabbccddee01")
+    db.save_facility_hosts(dbf, [{"subnet": "10.5.0.0/24", "ip": "10.5.0.11",
+                                  "mac": "aa:bb:cc:dd:ee:01",
+                                  "switch_name": "", "online": 0}])
+    z = _zones(dbf)
+    assert z and z[0]["label"] == "1공장 Assembly(B02) 1층 TPS01", z
+    assert "TPS-SW-A" in z[0]["switches"]
+
+
+def test_offline_facility_located_via_port_description(dbf):
+    """MAC 이력조차 없으면 포트 설명에 적힌 IP가 최후 단서다."""
+    sw = _tps_switch(dbf, "TPS-SW-B", "10.2.1.1", "TPS-F2B1A_3F05_SW1")
+    _snapshot_with(dbf, sw, port_desc="facility 10.6.0.22")
+    db.save_facility_hosts(dbf, [{"subnet": "10.6.0.0/24", "ip": "10.6.0.22",
+                                  "mac": "ff:ff:ff:ff:ff:ff",
+                                  "switch_name": "", "online": 0}])
+    z = _zones(dbf)
+    assert z and z[0]["label"] == "2공장 Assembly(B1A) 3층 TPS05", z
+
+
+def test_uplink_only_history_is_not_used_as_location(dbf):
+    """업링크에서만 보인 이력은 '지나간 길목'이지 설치 위치가 아니다 —
+    그걸 위치로 쓰면 엉뚱한 구역이 뜬다(설비 현황도 같은 기준)."""
+    from core import wallstats as ws
+    sw = _tps_switch(dbf, "BB-SW", "10.3.1.1", "TPS-F1B02_1F01_FA_SW1")
+    _snapshot_with(dbf, sw, mac="aabbccddee99")
+    db.save_facility_hosts(dbf, [{"subnet": "10.7.0.0/24", "ip": "10.7.0.5",
+                                  "mac": "aa:bb:cc:dd:ee:99",
+                                  "switch_name": "", "online": 0}])
+    import unittest.mock as mock
+    real = db.get_mac_last_seen
+
+    def fake(path, macs=None):
+        out = real(path, macs) or {}
+        for k in out:
+            out[k]["via_uplink"] = True      # 업링크 관측으로 바꿔치기
+        return out
+
+    with mock.patch.object(db, "get_mac_last_seen", fake):
+        z = ws.build(dbf)["facility"]["offline_by_location"]
+    assert z and z[0]["label"] == "위치 미확인", z
+
+
+def test_online_facility_without_switch_does_not_create_zone(dbf):
+    """정상인 설비는 구역을 만들지 않는다(실패가 있는 곳만 관제에 올린다)."""
+    db.save_facility_hosts(dbf, [{"subnet": "10.8.0.0/24", "ip": "10.8.0.1",
+                                  "mac": "aa:00", "switch_name": "", "online": 1}])
+    assert _zones(dbf) == []
