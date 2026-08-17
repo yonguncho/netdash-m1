@@ -1,8 +1,38 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.39.1 커밋 완료 (75f853e) — 빌드·릴리스 중.
-pytest **1819 PASS / 16 FAIL**(전부 아래 DPAPI 환경 문제, 코드 무관) + selfcheck PASS.
-(v6.39.0 = d93b581+f6b3ec5 릴리스 완료 / v6.38.0 = 9aa93e7)
+**현재 버전**: v6.39.3 커밋 완료 (ddf2361 설비중복 + c6033ed TPS구역·카드정렬) — 빌드·릴리스 중.
+pytest **1875 PASS / 실패 0** + selfcheck PASS.
+(v6.39.1 = 75f853e / v6.39.0 = d93b581+f6b3ec5 / v6.38.0 = 9aa93e7 — 모두 릴리스 완료)
+
+## ✅ DPAPI 환경 문제 해소 (2026-08-17 확인)
+
+그동안 항상 실패하던 자격증명 테스트 16건이 **전부 통과**했다. 빌드 PC의
+`CryptProtectData` 액세스 거부가 사라졌다(원인은 FortiEDR 정책으로 추정했으나
+확정 못 함 — 재발하면 `NetDash_RESUME` 이력과 FortiEDR 콘솔을 함께 볼 것).
+→ 이제 **pytest 실패 0이 정상 기준**이다. 실패가 보이면 진짜 회귀다.
+
+## v6.39.2 — 설비 중복 수집 (사용자 신고)
+
+같은 IP·MAC이 두 줄로 보였다. 유일 제약이 `(subnet, ip)`라 **대역 표기가 다르면
+같은 IP가 별도 행**(/24로 수집 후 /22로 재수집).
+- `_drop_other_subnet_rows` — 저장 직전 같은 IP의 다른 대역 행 삭제.
+  `save_facility_hosts`·`replace_facility_subnet` **양쪽**에 적용.
+- `dedupe_facility_by_ip` — 기존 중복 정리(가장 최근 갱신을 남김), rematch에서 호출.
+- **함께 고침**: 재매칭 결과가 `#fac-progress`에 쓰여 설비 상태 폴링
+  (`renderFacilityProgress`)이 곧바로 비웠다 → 사용자가 결과를 못 봤다.
+  전용 영역 `#fac-rematch-note`로 분리. **교훈: 폴링이 갱신하는 영역에
+  일회성 결과를 쓰면 안 된다.**
+
+## v6.39.3 — 연결 실패 TPS 구역 + 관제 카드 격자 정렬 (사용자 요청)
+
+- `wallstats._offline_by_tps_location` — 스위치 hostname의
+  `F{공장}B{건물}_{층}F{TPS}`(tps_location.parse)로 현재 실패 설비를 구역 집계.
+  같은 TPS의 스위치 여러 대는 한 구역으로 합침. 패턴 없으면 location 텍스트 →
+  '위치 미확인'. 관제 설비 탭 맨 앞 카드 + '구역 전체' 배지(비율 100%).
+- 관제 장애 카드: `.wall-cat__grid` 가 flex-wrap이라 **내용 길이가 곧 카드 폭**
+  이었다("긴 네모, 짧은 네모") → `grid` + `auto-fill/minmax(300px,1fr)` +
+  `grid-auto-rows: 1fr`(줄이 바뀌어도 높이 유지). 넘침은 이름·IP 1줄(…),
+  사유 2줄(line-clamp), 전체 값은 `title` 툴팁. 실측 폭 366px 단일.
 
 ## v6.39.1 — 관제를 장애 중심으로 되돌림 (사용자 방향)
 
