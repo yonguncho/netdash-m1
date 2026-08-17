@@ -424,10 +424,65 @@ def _facility_stats(conn):
             sid = name_ids.get(e["name"])
             if sid:
                 e["id"] = sid
+    # 연결 실패 설비를 **TPS 구역(물리 위치)별**로 묶는다.
+    # 스위치 이름만 보면 "어느 스위치"는 알아도 "어디로 가야 하나"를 모른다.
+    # 호스트네임의 F{공장}B{건물}_{층}F{TPS} 패턴이 곧 현장 위치다.
+    offline_by_location = _offline_by_tps_location(conn)
+
     return {"total": total, "online": online, "offline": max(0, total - online),
             "direct": direct, "indirect": max(0, total - direct),
             "by_subnet": by_subnet, "by_switch": by_switch,
-            "offline_by_switch": offline_by_switch, "offline_24h": offline_24h}
+            "offline_by_switch": offline_by_switch, "offline_24h": offline_24h,
+            "offline_by_location": offline_by_location}
+
+
+def _offline_by_tps_location(conn):
+    """지금 연결 실패인 설비를 TPS 구역별로 집계 → [{label, phase, building,
+    floor, tps, offline, total, switches[]}] (실패 많은 순).
+
+    관제에서 필요한 건 '어느 스위치'가 아니라 **어디로 가야 하나**다.
+    위치를 못 읽는 스위치(패턴 불일치)는 '위치 미확인'으로 따로 묶는다 —
+    조용히 빼면 합계가 안 맞아 '왜 적지?'가 된다.
+    """
+    from . import tps_location
+
+    # 설비의 연결 스위치 이름 → 스위치 hostname/name (위치 파싱 재료)
+    sw_meta = {}
+    for r in _rows(conn, "SELECT name, hostname, location FROM switches"):
+        if r["name"]:
+            sw_meta[r["name"]] = dict(r)      # sqlite3.Row에는 .get()이 없다
+
+    agg = {}
+    for r in _rows(conn,
+        "SELECT IFNULL(switch_name,'') AS sw, "
+        "  SUM(CASE WHEN online=0 THEN 1 ELSE 0 END) AS off, COUNT(*) AS tot "
+        "FROM facility_hosts GROUP BY sw"):
+        sw = r["sw"]
+        off, tot = r["off"] or 0, r["tot"] or 0
+        if not off:
+            continue                      # 실패가 없는 구역은 관제에 올릴 것이 없다
+        meta = sw_meta.get(sw) or {}
+        info = tps_location.parse(meta.get("hostname") or sw)
+        if info:
+            key = info["label"]
+            ent = agg.setdefault(key, {
+                "label": key, "phase": info["phase"],
+                "building": info["building_name"], "floor": info["floor"],
+                "tps": info["tps"], "offline": 0, "total": 0, "switches": []})
+        else:
+            # 위치를 못 읽으면 스위치의 location 텍스트라도 쓰고, 그것도 없으면 미확인
+            key = (meta.get("location") or "").strip() or "위치 미확인"
+            ent = agg.setdefault(key, {
+                "label": key, "phase": None, "building": "", "floor": None,
+                "tps": "", "offline": 0, "total": 0, "switches": []})
+        ent["offline"] += off
+        ent["total"] += tot
+        if sw and sw not in ent["switches"]:
+            ent["switches"].append(sw)
+
+    out = list(agg.values())
+    out.sort(key=lambda x: (-x["offline"], x["label"]))
+    return out[:12]
 
 
 def build(db_path):

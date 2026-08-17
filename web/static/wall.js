@@ -134,7 +134,12 @@ function renderProblems() {
           ? "<button class='pcard__recollect' data-ip='" + esc(p.fip || "") +
             "' data-subnet='" + esc(p.subnet || "") + "' title='이 설비 대역을 연결 게이트웨이에서 재수집'>재수집</button>"
           : "";
-        return "<div class='pcard'><div class='pcard__name'>" + esc(p.name || "-") + "</div>" +
+        /* 카드 폭을 균일하게 맞추면서 긴 값은 …로 자른다 — 잘린 전체 값은
+           툴팁으로 볼 수 있어야 정보가 사라지지 않는다. */
+        var full = [p.name || "-", p.ip || "", p.detail || ""]
+          .filter(Boolean).join(" · ");
+        return "<div class='pcard' title='" + esc(full) + "'>" +
+          "<div class='pcard__name'>" + esc(p.name || "-") + "</div>" +
           (p.ip ? "<div class='pcard__ip'>" + esc(p.ip) + "</div>" : "") +
           (p.detail ? "<div class='pcard__why'>" + esc(p.detail) + "</div>" : "") +
           rc + "</div>";
@@ -807,6 +812,36 @@ function openSubnetModal(subnet) {
     });
 }
 
+/* 연결 실패 설비의 TPS 구역(물리 위치) — 관제에서 필요한 건 '어느 스위치'가
+   아니라 **어디로 가야 하나**다. 스위치 호스트네임의 F{공장}B{건물}_{층}F{TPS}
+   패턴이 곧 현장 위치이고, 같은 TPS의 스위치 여러 대는 한 구역으로 합쳐진다. */
+function tpsOfflineCard(rows) {
+  if (!rows.length) {
+    return wcard("연결 실패 구역 (TPS)",
+      "설비가 끊긴 곳을 공장·건물·층·TPS 단위로 — 실패가 있는 구역만",
+      "<p class='wnone'>연결 실패한 설비가 없습니다.</p>", "wcard--6");
+  }
+  var body =
+    "<table class='wtable'><thead><tr><th>구역</th><th>연결 실패</th>" +
+    "<th>구역 설비</th><th>스위치</th></tr></thead><tbody>" +
+    rows.map(function (x) {
+      var pct = x.total ? Math.round(x.offline * 100 / x.total) : 0;
+      /* 구역 전체가 끊겼으면 개별 설비 문제가 아니라 스위치·전원·업링크를
+         먼저 본다 — 그 판단이 서게 비율을 함께 보여준다. */
+      var all = (x.total && x.offline >= x.total);
+      return "<tr><td><b>" + esc(x.label) + "</b>" +
+        (all ? " <span class='wst wst--bad'>구역 전체</span>" : "") + "</td>" +
+        "<td class='wsub__bad'><b>" + _n(x.offline) + "</b></td>" +
+        "<td>" + _n(x.total) + " <small>(" + pct + "%)</small></td>" +
+        "<td><small>" + esc((x.switches || []).join(", ")) + "</small></td></tr>";
+    }).join("") + "</tbody></table>";
+  var totalOff = rows.reduce(function (a, x) { return a + (x.offline || 0); }, 0);
+  return wcard("연결 실패 구역 (TPS) — " + rows.length + "곳 / " + _n(totalOff) + "대",
+    "설비가 끊긴 곳을 공장·건물·층·TPS 단위로 · 실패 많은 순 · " +
+    "'구역 전체'는 그 구역 설비가 모두 끊긴 상태(스위치·전원·업링크 먼저 확인)",
+    body, "wcard--6" + (rows.length > 8 ? " wcard--tall" : ""));
+}
+
 /* ── 설비 탭 ── */
 function renderFacilityTab(c) {
   var el = document.getElementById("wtab-facility");
@@ -826,6 +861,7 @@ function renderFacilityTab(c) {
         color: c.indirect ? "#fbbf24" : "#34d399" }
     ]) +
     "<div class='wgrid'>" +
+    tpsOfflineCard(c.offline_by_location || []) +
     wcard("설비 최다 연결 스위치 TOP 10", "클릭 → 스위치 상세",
       rankList((c.by_switch || []).map(function (x) {
         return { id: x.id, name: x.name, v: x.count, d: _n(x.count) + " <small>대</small>" };
