@@ -18,6 +18,7 @@ DBP = os.path.join(ROOT, "netdash.db")
 URL = "http://127.0.0.1:8082"
 SUB = "203.0.113.0/24"
 IP = "203.0.113.55"
+IP2 = "203.0.113.56"   # 과거 포트 표기 확인용
 SW = "TPS-F1B02_1F01_FA_SW1"
 SWIP = "203.0.113.201"
 
@@ -25,8 +26,8 @@ SWIP = "203.0.113.201"
 def cleanup():
     from core import db
     with db.get_db(DBP) as conn:
-        conn.execute("DELETE FROM device_events WHERE ip=?", (IP,))
-        conn.execute("DELETE FROM facility_hosts WHERE ip=?", (IP,))
+        conn.execute("DELETE FROM device_events WHERE ip IN (?,?)", (IP, IP2))
+        conn.execute("DELETE FROM facility_hosts WHERE ip IN (?,?)", (IP, IP2))
         r = conn.execute("SELECT id FROM switches WHERE ip=?", (SWIP,)).fetchone()
         if r:
             conn.execute("DELETE FROM mac_entries WHERE switch_id=?", (r["id"],))
@@ -46,6 +47,17 @@ def seed():
         conn.commit()
     db.save_facility_hosts(DBP, [{"subnet": SUB, "ip": IP, "mac": "aa:bb:cc:11:22:33",
                                   "switch_name": SW, "port": "Gi1/0/12", "online": 0}])
+    # 끊겨서 현재 스위치·포트를 잃은 설비 — 과거 MAC 이력에서 포트를 되찾아야 한다
+    sw0 = [s for s in db.get_switches(DBP) if s["ip"] == SWIP][0]
+    with db.get_db(DBP) as conn:
+        conn.execute("INSERT INTO snapshots (switch_id, collected_at) "
+                     "VALUES (?, datetime('now','-2 day'))", (sw0["id"],))
+        snap = conn.execute("SELECT MAX(id) FROM snapshots").fetchone()[0]
+        conn.execute("INSERT INTO mac_entries (snapshot_id, switch_id, mac, port, vlan) "
+                     "VALUES (?,?,?,?,10)", (snap, sw0["id"], "aabbcc998877", "Gi1/0/33"))
+        conn.commit()
+    db.save_facility_hosts(DBP, [{"subnet": SUB, "ip": IP2, "mac": "aa:bb:cc:99:88:77",
+                                  "switch_name": "", "online": 0}])
     # 연결 → 끊김 → 재연결 → 끊김
     with db.get_db(DBP) as conn:
         for days, kind in ((20, "device_online"), (12, "device_offline"),
@@ -123,12 +135,22 @@ def main():
             print(oht[:340])
             assert IP in oht, "시드 설비가 목록에 없다"
             assert "끊긴 시점" in oht and "경과" in oht
+            assert "최근 연결" in oht, "최근 연결 시점 컬럼이 없다"
             ohrow = ohc.query_selector("tr[data-fachist='%s']" % IP)
             assert ohrow, "설비 행이 이력 클릭 대상이 아니다"
             rowtxt = ohrow.inner_text()
             assert "Gi1/0/12" in rowtxt, "연결 포트가 안 보인다: %r" % rowtxt
             assert "TPS-F1B02" in rowtxt, "연결 스위치가 안 보인다: %r" % rowtxt
             assert "일" in rowtxt or "시간" in rowtxt, "경과 시간이 안 보인다: %r" % rowtxt
+            # 최근 연결 시점(마지막 device_online = 8일 전)이 행에 있어야 한다
+            assert "08-09" in rowtxt, "최근 연결 시점이 안 보인다: %r" % rowtxt
+            # 끊겨서 현재 포트를 잃은 설비는 과거 포트를 '(과거)'로 보여줘야 한다
+            row2 = ohc.query_selector("tr[data-fachist='%s']" % IP2)
+            assert row2, "과거 포트 확인용 설비 행이 없다"
+            r2t = row2.inner_text()
+            assert "Gi1/0/33" in r2t, "과거 포트를 못 찾았다: %r" % r2t
+            assert "과거" in r2t, "과거 포트임을 밝히지 않는다: %r" % r2t
+            print("과거 포트 행:", r2t.replace(chr(10), " | ")[:150])
             pg.screenshot(path=os.path.join(OUT, "offline_hosts.png"), full_page=True)
 
             zrow = pg.query_selector("tr[data-zone*='TPS01']")

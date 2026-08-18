@@ -983,7 +983,10 @@ function _loadZone(label) {
           return "<tr class='wsub__row' data-fachist='" + esc(h.ip) + "'" +
             " title='클릭하면 이 설비의 연결 이력(타임라인)'>" +
             "<td><b>" + esc(h.ip) + "</b></td><td>" + st + "</td>" +
-            "<td>" + sw + "</td><td>" + esc(h.port || "-") + "</td>" +
+            "<td>" + sw + "</td><td>" + esc(h.port || "-") +
+            (h.port_source === "history" ? " <small class='wsub__na'>(과거)</small>"
+             : h.port_source === "portdesc" ? " <small class='wsub__na'>(포트 설명)</small>"
+             : "") + "</td>" +
             "<td>" + esc(h.mac || "-") + "</td>" +
             "<td><small>" + esc(h.subnet || "-") + "</small></td>" +
             "<td><small>" + esc(String(h.updated || "-").slice(5)) + "</small></td></tr>";
@@ -1048,16 +1051,34 @@ function offlineHostsCard(rows, total) {
   }
   var body =
     "<table class='wtable'><thead><tr><th>IP</th><th>연결 스위치</th><th>포트</th>" +
-    "<th>구역</th><th>끊긴 시점</th><th>경과</th></tr></thead><tbody>" +
+    "<th>구역</th><th>최근 연결</th><th>끊긴 시점</th><th>경과</th>" +
+    "</tr></thead><tbody>" +
     rows.map(function (h) {
       var sw = h.switch_name
         ? esc(h.switch_name) +
           (h.inferred ? " <small class='wsub__na'>(추정)</small>" : "")
         : "<small class='wsub__na'>미확인</small>";
+      /* 끊긴 설비는 현재 포트가 비는 일이 흔하다(MAC 에이징) — 과거 이력이나
+         포트 설명에서 찾은 포트를 쓰되, 지금 관측한 값이 아님을 밝힌다.
+         현장에서 '어느 포트를 볼까'에 바로 답이 되는 정보다. */
+      var pnote = h.port_source === "history" ? " <small class='wsub__na'>(과거)</small>"
+        : h.port_source === "portdesc" ? " <small class='wsub__na'>(포트 설명)</small>"
+        : "";
+      var port = h.port
+        ? esc(h.port) + pnote
+        : "<small class='wsub__na'>-</small>";
       /* 끊긴 시각을 모르는 건 '기록 없음'으로 밝힌다 — 마지막 수집 시각을
          끊긴 시각으로 쓰면 수집만 돌아도 값이 바뀌어 거짓이 된다. */
       var since = h.since
         ? esc(String(h.since).slice(5))
+        : "<small class='wsub__na'>기록 없음</small>";
+      /* 마지막으로 붙어 있던 때 — 끊긴 시점만 보면 그 전에 정상이었는지,
+         애초에 한 번도 붙은 적 없는지 구분되지 않는다. */
+      var lastOn = h.last_online
+        ? esc(String(h.last_online).slice(5)) +
+          (h.last_online_minutes != null
+            ? " <small class='wsub__na'>(" + esc(histDur(h.last_online_minutes)) + " 전)</small>"
+            : "")
         : "<small class='wsub__na'>기록 없음</small>";
       var ago = (h.minutes === null || h.minutes === undefined)
         ? "<small class='wsub__na'>-</small>"
@@ -1065,8 +1086,9 @@ function offlineHostsCard(rows, total) {
       return "<tr class='wsub__row' data-fachist='" + esc(h.ip) + "'" +
         " title='클릭하면 이 설비의 연결 이력(타임라인)'>" +
         "<td><b>" + esc(h.ip) + "</b></td><td>" + sw + "</td>" +
-        "<td>" + esc(h.port || "-") + "</td>" +
+        "<td>" + port + "</td>" +
         "<td><small>" + esc(h.zone || "-") + "</small></td>" +
+        "<td>" + lastOn + "</td>" +
         "<td>" + since + "</td><td>" + ago + "</td></tr>";
     }).join("") + "</tbody></table>" +
     ((total || 0) > rows.length

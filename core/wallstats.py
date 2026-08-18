@@ -459,32 +459,43 @@ def _offline_facility_list(conn, db_path=None, limit=100):
     if not off:
         return {"hosts": [], "total": 0}
 
-    # IP별 최신 끊김 시각 — 설비마다 쿼리하지 않고 한 번에(관제는 30초 폴링)
-    since_map = {}
+    # IP별 최신 끊김·연결 시각 — 설비마다 쿼리하지 않고 한 번에(관제는 30초 폴링)
+    since_map, online_map = {}, {}
     for r in _rows(conn,
-        "SELECT ip, MAX(ts) AS ts FROM device_events "
-        "WHERE kind='device_offline' AND IFNULL(ip,'')<>'' GROUP BY ip"):
-        since_map[r["ip"]] = r["ts"]
+        "SELECT ip, kind, MAX(ts) AS ts FROM device_events "
+        "WHERE kind IN ('device_offline','device_online') AND IFNULL(ip,'')<>'' "
+        "GROUP BY ip, kind"):
+        (since_map if r["kind"] == "device_offline" else online_map)[r["ip"]] = r["ts"]
 
     now = _dt.datetime.now()
+
+    def _mins(ts):
+        if not ts:
+            return None
+        try:
+            t = _dt.datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S")
+            return max(0, int((now - t).total_seconds() // 60))
+        except (TypeError, ValueError):
+            return None
+
     out = []
     for h in off:
-        sw = switch_of(h)
+        at = switch_of.attach(h)
+        sw = at["switch"]
         zone, _info = zone_of(sw) if sw else ("위치 미확인", None)
         ts = since_map.get(h.get("ip"))
-        mins = None
-        if ts:
-            try:
-                t = _dt.datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S")
-                mins = max(0, int((now - t).total_seconds() // 60))
-            except (TypeError, ValueError):
-                mins = None
+        # '마지막으로 연결돼 있던 때' — 끊긴 시점만 보면 그 전에 정상이었는지,
+        # 애초에 한 번도 붙은 적 없는지 구분되지 않는다.
+        on_ts = online_map.get(h.get("ip")) or at.get("seen") or ""
         out.append({"ip": h.get("ip"), "mac": h.get("mac") or "",
                     "subnet": h.get("subnet") or "",
-                    "switch_name": sw, "port": h.get("port") or "",
-                    "inferred": bool(sw and not h.get("sw")),
+                    "switch_name": sw, "port": at["port"],
+                    "port_source": at["source"],
+                    "inferred": bool(sw and at["source"] != "live"),
                     "zone": zone if sw else "위치 미확인",
-                    "since": (str(ts)[:16] if ts else ""), "minutes": mins})
+                    "since": (str(ts)[:16] if ts else ""), "minutes": _mins(ts),
+                    "last_online": (str(on_ts)[:16] if on_ts else ""),
+                    "last_online_minutes": _mins(on_ts)})
     # 최근에 끊긴 것을 위로 — 방금 생긴 장애가 먼저 보여야 한다.
     # 시각을 모르는 건(이벤트 없음) 맨 뒤로 보낸다.
     out.sort(key=lambda x: (x["minutes"] is None,
@@ -532,19 +543,29 @@ def _facility_zone_resolver(conn, db_path=None, rows=None):
         except Exception:
             desc = {}
 
-    def switch_of(h):
+    def attach_of(h):
+        """{switch, port, source} — source: live | history | portdesc | none.
+
+        포트도 함께 돌려준다: 끊긴 설비는 현재 포트가 비는 일이 흔한데,
+        '어느 포트에 꽂혀 있었나'를 알아야 현장에서 바로 확인할 수 있다.
+        """
         if h.get("sw"):
-            return h["sw"]
+            return {"switch": h["sw"], "port": h.get("port") or "", "source": "live"}
         hx = re.sub(r"[^0-9a-f]", "", (h.get("mac") or "").lower())
         hh = hist.get(hx) if len(hx) == 12 else None
         # 업링크에서만 보인 이력은 '거기 꽂혀 있었다'가 아니라 '길목을 지났다' —
         # 위치로 쓰면 엉뚱한 구역이 된다(설비 현황도 같은 기준으로 구분한다).
         if hh and hh.get("switch_name") and not hh.get("via_uplink"):
-            return hh["switch_name"]
+            return {"switch": hh["switch_name"], "port": hh.get("port") or "",
+                    "source": "history", "seen": hh.get("ts") or ""}
         dm = desc.get(h.get("ip"))
         if dm and dm.get("switch_name"):
-            return dm["switch_name"]
-        return ""
+            return {"switch": dm["switch_name"], "port": dm.get("port") or "",
+                    "source": "portdesc"}
+        return {"switch": "", "port": h.get("port") or "", "source": "none"}
+
+    def switch_of(h):
+        return attach_of(h)["switch"]
 
     def zone_of(sw):
         meta = sw_meta.get(sw) or {}
@@ -553,6 +574,7 @@ def _facility_zone_resolver(conn, db_path=None, rows=None):
             return info["label"], info
         return ((meta.get("location") or "").strip() or "위치 미확인"), None
 
+    switch_of.attach = attach_of      # 포트·출처까지 필요한 호출부용
     return rows, switch_of, zone_of
 
 
@@ -566,16 +588,18 @@ def facility_zone_hosts(db_path, label, limit=500):
         rows, switch_of, zone_of = _facility_zone_resolver(conn, db_path)
     hosts = []
     for h in rows:
-        sw = switch_of(h)
+        at = switch_of.attach(h)
+        sw = at["switch"]
         lbl, _info = zone_of(sw)
         if lbl != label:
             continue
         hosts.append({"ip": h.get("ip"), "mac": h.get("mac") or "",
                       "subnet": h.get("subnet") or "",
-                      "switch_name": sw, "port": h.get("port") or "",
+                      "switch_name": sw, "port": at["port"],
+                      "port_source": at["source"],
                       "online": bool(h.get("online")),
-                      # 원본 switch_name이 비었는데 스위치를 찾았다면 추정값이다
-                      "inferred": bool(sw and not h.get("sw")),
+                      # 현재 관측이 아니면 추정값이다(과거 이력·포트 설명)
+                      "inferred": bool(sw and at["source"] != "live"),
                       "updated": (h.get("updated") or "")[:16]})
     hosts.sort(key=lambda x: (x["online"], _ip_sort_key(x["ip"])))
     total = len(hosts)
