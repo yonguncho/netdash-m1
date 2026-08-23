@@ -13,6 +13,13 @@ import re
 import sys
 from pathlib import Path
 
+# 한국어 콘솔(cp949)에서 em-dash 등 비-cp949 문자를 print할 때
+# UnicodeEncodeError로 죽지 않도록 stdout을 utf-8로 재설정한다.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parent.parent
 APP_PY = (ROOT / "app.py").read_text(encoding="utf-8")
 APP_JS = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
