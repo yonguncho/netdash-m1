@@ -17,6 +17,7 @@ import threading
 import time
 
 from . import db, utils
+from .snmp_collect import SnmpError
 
 DEFAULT_MINUTES = 5
 RETENTION_DAYS = 30
@@ -414,14 +415,22 @@ def poll_once(db_path, demo_mode=False):
             try:
                 h = snmp_fortigate.collect_health(fw["host"], community, budget=8.0)
                 cpu, mem, sess = h.get("cpu_pct"), h.get("mem_pct"), h.get("sessions")
-            except Exception:
-                pass
+            except SnmpError:
+                pass  # SNMP 무응답·차단 — 주기 폴러라 조용히(예상된 정상)
+            except Exception as ex:
+                # 코드 버그(시그니처 오류·오타 등)까지 조용히 먹으면 지표가
+                # 원인 없이 사라진다(v6.39.0 온도 누락 버그와 동일 구조).
+                utils.log_event("warning", "metrics_poll_fw_snmp_bug",
+                                firewall_id=fw.get("id"), error=str(ex)[:120])
             try:
                 e = snmp_env.collect_env(fw["host"], community, budget=6.0,
                                          warn_c=_warn_c, crit_c=_crit_c)
                 temp = e.get("max_temp_c")
-            except Exception:
-                pass
+            except SnmpError:
+                pass  # SNMP 무응답·차단 — 조용히
+            except Exception as ex:
+                utils.log_event("warning", "metrics_poll_fw_env_bug",
+                                firewall_id=fw.get("id"), error=str(ex)[:120])
             if any(v is not None for v in (cpu, mem, sess, temp)):
                 db.save_metrics_point(db_path, "firewall", fw["id"],
                                       cpu=cpu, mem=mem, sessions=sess, temp_c=temp)
@@ -430,8 +439,9 @@ def poll_once(db_path, demo_mode=False):
                 nm = fw.get("name") or fw["host"]
                 check_thresholds(db_path, fw["id"], nm, cpu, mem, sess)
                 check_temp(db_path, "firewall", fw["id"], nm, temp, _crit_c)
-            except Exception:
-                pass
+            except Exception as ex:
+                utils.log_event("warning", "metrics_poll_fw_alarm_error",
+                                firewall_id=fw.get("id"), error=str(ex)[:120])
     except Exception as e:
         utils.log_event("warning", "metrics_poll_fw_error", error=str(e)[:120])
 
@@ -452,7 +462,11 @@ def poll_once(db_path, demo_mode=False):
                     check_temp(db_path, "switch", sw["id"],
                                sw.get("name") or sw["ip"],
                                e["max_temp_c"], _crit_c)
-            except Exception:
+            except SnmpError:
+                continue  # SNMP 무응답·차단 — 조용히(스위치는 온도만이라 흔하다)
+            except Exception as ex:
+                utils.log_event("warning", "metrics_poll_sw_snmp_bug",
+                                switch_id=sw.get("id"), error=str(ex)[:120])
                 continue
     except Exception as e:
         utils.log_event("warning", "metrics_poll_sw_error", error=str(e)[:120])
