@@ -10,6 +10,10 @@ import io
 import json
 import os
 import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # cp949 콘솔 크래시 방지
+except Exception:
+    pass
 import tempfile
 from pathlib import Path
 

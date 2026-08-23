@@ -9,6 +9,10 @@
 """
 import re
 import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # cp949 콘솔 크래시 방지
+except Exception:
+    pass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

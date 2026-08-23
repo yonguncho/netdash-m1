@@ -10,6 +10,10 @@ Windows 서버만 정상." → 명령이 26개인데 사양 명령이 전부 13�
 """
 import re
 import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # cp949 콘솔 크래시 방지
+except Exception:
+    pass
 import types
 from pathlib import Path
 

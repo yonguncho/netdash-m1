@@ -8,6 +8,10 @@
 import os
 import subprocess
 import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # cp949 콘솔 크래시 방지
+except Exception:
+    pass
 import time
 import urllib.request
 
