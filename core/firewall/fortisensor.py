@@ -125,6 +125,11 @@ def _ssh_run(host, username, password, commands, port=22, timeout=20):
         # 7.0부터 지원) — 전 명령이 비면 대화형 셸로 다시 실행한다.
         # 실증상: 6.x 장비만 모델명·센서·성능이 통째로 비었다(사용자 신고).
         if not any((v or "").strip() for v in out.values()):
+            # exec 채널이 전부 빈 출력 — FortiOS 6.x(exec 미지원)일 수도, 권한/차단일
+            # 수도 있다. 폴백 진입을 로그로 남겨 원인 추적이 가능하게 한다
+            # (메모리 fortios6_no_exec_channel 참조).
+            from .. import utils
+            utils.log_event("info", "fortisensor_exec_empty_shell_fallback", host=host)
             out = _shell_run(client, commands, timeout=timeout)
     finally:
         try:

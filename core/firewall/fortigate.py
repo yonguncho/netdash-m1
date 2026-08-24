@@ -336,7 +336,10 @@ def _fetch_ha(s, base, host):
                 "monitor": _parse_hbdev(res.get("monitor"))}
         logger.info("fortigate_ha host=%s mode=%s hbdev=%s", host, mode, info["hbdev"])
         return info
-    except Exception:
+    except Exception as ex:
+        # standalone은 위에서 정상 None으로 빠진다 — 여기 오는 건 권한/파싱 오류다.
+        # HA 상태가 화면에서 빠질 때 '없음'인지 '조회 실패'인지 구분되게 로그.
+        logger.info("fortigate_ha_skip host=%s err=%s", host, type(ex).__name__)
         return None
 
 
@@ -359,7 +362,12 @@ def _fetch_sysinfo(s, base, host, notes=None):
         if serial:
             out["serial"] = str(serial)[:40]
         return out or None
-    except Exception:
+    except Exception as ex:
+        # _try_get 이후 파싱부 예외 — 사유를 notes/로그에 남겨 "왜 장비 정보가
+        # 비었나"에 답할 수 있게 한다(다른 _fetch_*는 _try_get이 notes를 채운다).
+        if notes is not None:
+            notes["장비 정보"] = "파싱 실패: %s" % type(ex).__name__
+        logger.info("fortigate_sysinfo_parse_fail host=%s err=%s", host, type(ex).__name__)
         return None
 
 
@@ -445,16 +453,25 @@ def _fetch_objects(s, base, host):
     객체 수천 개의 전체 본문을 받으면 낭비다.
     """
     out = {}
+    failed = []
     for key, path in _OBJECT_PATHS:
         try:
             r = _get_with_retry(s, f"{base}/api/v2/cmdb/{path}?format=name")
             if r is None or r.status_code != 200:
+                failed.append(key)
                 continue
             res = r.json().get("results")
             if isinstance(res, list):
                 out[key] = len(res)
+            else:
+                failed.append(key)
         except Exception:
+            failed.append(key)
             continue
+    if failed:
+        # 일부 객체 카운트가 조용히 빠지면 총계가 과소 표기된다 — 어느 종류가
+        # 왜 빠졌는지 추적할 수 있게 한 번만 로그(항목마다 찍으면 잡음).
+        logger.info("fortigate_objects_partial host=%s missing=%s", host, ",".join(failed))
     if out:
         out["total"] = sum(v for k, v in out.items() if k != "total")
         logger.info("fortigate_objects host=%s total=%d", host, out["total"])
