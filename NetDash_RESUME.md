@@ -1,8 +1,34 @@
 # NetDash 재개 스냅샷
 
-**현재 버전**: v6.39.3 커밋 완료 (ddf2361 설비중복 + c6033ed TPS구역·카드정렬) — 빌드·릴리스 중.
-pytest **1875 PASS / 실패 0** + selfcheck PASS.
-(v6.39.1 = 75f853e / v6.39.0 = d93b581+f6b3ec5 / v6.38.0 = 9aa93e7 — 모두 릴리스 완료)
+**현재 버전**: v6.40.3 릴리스 완료 (GitHub Latest, 2026-08-23 게시, 태그=06bf175).
+pytest **1936 PASS / 1 skip / exit 0** + selfcheck E2E PASS(재실행 — 1회차는 flaky) + exe 프로덕션 스모크 /·/wall·/api/state 200.
+릴리스: gh release v6.40.3 + netdash.exe 첨부, 로컬 배포본 교체(구=netdash.exe.v6402.old, 해시 일치).
+(v6.40.2 = 2961abc / v6.40.1 = a0c1375 / v6.40.0 = 94d8d73 — 모두 릴리스 완료)
+
+**버그 검증 세션 (2026-08-21~23) — 커밋 5건:**
+1. `57debff` cp949 콘솔에서 검증 스크립트 2개(audit_ui_wiring/selfcheck_e2e)가
+   em-dash 출력으로 UnicodeEncodeError 크래시 → test_ui_wiring 2건 도미노 실패.
+   stdout utf-8 reconfigure 가드 추가. 실제 UI 버그 아님. [[netdash-cp949-console]]
+2. `3fd504f` ACCEPTANCE 게이트 A5가 지정한 `tests/test_codex_regressions.py`가
+   저장소에 없었고(외부 SSOT 시절 산물) T-05 명세가 코드와 불일치 →
+   현행 코드 동작 기준 named 회귀 19건 재작성 + ACCEPTANCE.md 개정. [[netdash-acceptance-gate-stale]]
+3. `4516bdd` 나머지 검증·진단 스크립트 12개에 cp949 가드 일괄 추가(동일 근본 원인).
+4. `b0f59fa` **제품 버그**: metrics_poller.poll_once가 SNMP 코드 버그(시그니처
+   오류 등)를 무로그 except로 삼켜 지표가 원인 없이 사라지던 것(v6.39.0과 동일 구조).
+   무응답=조용 / 코드버그=warning 로그로 분리, collector와 일관. 회귀 3건. [[netdash_silent_swallow_pollers]]
+5. `7a5385a` 방화벽 수집 부가경로 4곳의 무음 실패에 진단 로그·notes 추가
+   (fortigate _fetch_ha/_fetch_sysinfo/_fetch_objects, fortisensor _ssh_run 폴백).
+   동작 불변, 사유만 남김. 회귀 4건.
+- 추가 검증(서브에이전트 4): 프로덕션 실기동+인증 / dual-path 일관 /
+  formatter·escape 오용 0 / silent-failure 검토. 모두 직접 재현 확인.
+- ACCEPTANCE.md는 저장소 밖(C:\AI_WORKPLACE\NetDash)이라 git 커밋 대상 아님(수정만 반영됨).
+→ **다음 단계**: 미커밋 작업 없음 · 다음 지시 대기. 제품 코드가 커밋 3건(b0f59fa/7a5385a 등)
+  바뀌었으니 릴리스할지는 사용자 판단(현 배포본 v6.40.2 대비 진단성 개선분).
+(v6.40.1 = a0c1375 / v6.40.0 = 94d8d73 / v6.39.4 = c7679c4 / v6.39.3 = c6033ed — 모두 릴리스 완료)
+
+> **재개 시 주의**: v6.39.3~v6.40.2 릴리스 동안 이 SSOT 헤더가 v6.39.3에 멈춰 있었다
+> (2026-08-18 재개 때 git log/gh release로 실상태 확인 후 소급 기록). 릴리스마다
+> 이 파일을 같은 커밋에서 갱신할 것 — 헤더가 낡으면 재개가 잘못된 상태를 읽는다.
 
 ## ✅ DPAPI 환경 문제 해소 (2026-08-17 확인)
 
@@ -10,6 +36,58 @@ pytest **1875 PASS / 실패 0** + selfcheck PASS.
 `CryptProtectData` 액세스 거부가 사라졌다(원인은 FortiEDR 정책으로 추정했으나
 확정 못 함 — 재발하면 `NetDash_RESUME` 이력과 FortiEDR 콘솔을 함께 볼 것).
 → 이제 **pytest 실패 0이 정상 기준**이다. 실패가 보이면 진짜 회귀다.
+
+## v6.40.2 — 연결 실패 설비 '최근 연결 시점' + 끊긴 설비의 과거 포트 (사용자 요청)
+
+- **[1] 최근 연결 시점 컬럼**: 끊긴 시점만 보면 그 전에 정상이었는지, 한 번도 붙은
+  적 없는지 구분 불가 → `device_online` 최신 시각 + 경과 표시. 연결 이벤트가 없으면
+  과거 MAC 관측 시각으로 채움. IP별 최신 끊김·연결은 GROUP BY 한 번(관제 30초 폴링).
+- **[2] 끊긴 설비의 포트**: MAC 에이징으로 현재 포트가 비면 과거 MAC 이력·포트 설명에서
+  되찾음. `_facility_zone_resolver`가 `attach_of(h)`={switch,port,source}
+  (source: live|history|portdesc|none) 노출, `switch_of`는 얇은 래퍼(기존 호출부 유지).
+  표기: 포트 `Gi1/0/33 (과거)`/`(포트 설명)`, 스위치 `(추정)`. **포트를 스위치 컬럼에
+  섞지 않음** — 관측값과 추론값 구분이 현장 헛걸음을 막는다. 구역 팝업도 동일 기준.
+- 테스트 5건(파일 25건). pytest 1910 PASS.
+
+## v6.40.1 — 관제 설비 탭에 '연결 실패 설비' 목록 (사용자 요청)
+
+요약·장애 탭에만 끊긴 설비가 나오고 설비 탭엔 집계만 있어 개별 설비를 못 봤다.
+- `_offline_facility_list` — 지금 끊긴 설비 + 연결 스위치·포트(3단계 보강 재사용) +
+  끊긴 시점(device_offline 최신). **이벤트 없으면 비우고 '기록 없음'** — updated를
+  끊긴 시각으로 쓰면 수집만 돌아도 거짓이 된다.
+- 정렬: 최근 끊긴 것부터, 시각 모르면 맨 뒤. 경과 시간 표기('3일째'≠'10분 전').
+- 배치: 구역 카드(어디로) 다음(무엇이). 행 클릭 → 연결 이력 타임라인(v6.40.0 재사용).
+- 테스트 7건(파일 20건) + selfcheck. pytest 1905 PASS.
+
+## v6.40.0 — 구역 클릭 → 설비 목록·재확인 + 연결 이력 타임라인 (사용자 3건)
+
+- **[1] 구역 클릭 팝업**: `wallstats.facility_zone_hosts` +
+  `GET /api/wall/facility-zone?label=`. IP·상태·스위치·포트·MAC·대역·갱신, 실패 먼저.
+  **집계와 팝업이 같은 판정 공유**(`_facility_zone_resolver` 분리) — 따로 짜면
+  '카드 6건인데 팝업 4건'. 회귀 테스트(test_zone_hosts_matches_card_count)로 고정.
+  역추적 스위치는 **(추정)**.
+- **[2] 팝업에서 바로 재확인**: '연결 실패 N대 재확인' 버튼, 기존
+  `/api/facility/recollect-offline`(switch 필터) 재사용(대상 IP만·스위치별 세션 1회).
+  완료 후 서버 기준 재조회.
+- **[3] 연결 이력 타임라인**: `db.get_facility_events` + `wallstats.facility_history` +
+  `GET /api/facility/history?ip=&days=`. 이벤트를 상태 구간으로 접어 막대(초록 연결/
+  빨강 끊김/회색 관측없음). **첫 이벤트 이전은 'unknown'** — 모르는 기간을 초록으로
+  칠하면 거짓말. 끊김 횟수·누적 끊김 시간 표기. 진입점 둘(설비 [진단 결과] 팝업 위,
+  관제 구역 팝업 설비 행).
+- 테스트 19건(구역 6 + 이력 13) + selfcheck 3단계. pytest 1898 PASS.
+
+## v6.39.4 — 연결 실패 구역이 죄다 '위치 미확인'으로 나오던 문제 (사용자 지적)
+
+증상: 관제 '연결 실패 구역(TPS)'에 위치가 거의 안 잡히고 위치 미확인만 쌓임.
+원인: 설비 현황은 스위치를 3단계(①현재 MAC ②과거 MAC 이력 ③포트 Description)로
+찾는데 v6.39.3 구역 집계는 ①만 봤다. **끊긴 설비는 MAC이 에이징으로 지워져 ①이 비는
+게 정상** → '연결 실패'가 전부 위치 미확인으로 샜다(끊긴 걸 찾는 기능인데 끊겼다는
+이유로 위치를 잃음).
+- 수정: `_offline_by_tps_location`이 같은 3단계를 탄다. `get_mac_last_seen`/
+  `find_ports_by_description` **배치** 사용(관제 30초 폴링, v6.14.0 함수 재사용).
+- **업링크에서만 보인 이력은 위치로 안 씀** — 길목을 지나간 것이라 쓰면 백본 위치로
+  현장에 가게 됨. 보강 대상은 online=0 & switch_name 빈 것만.
+- 검증: 실화면에서 switch_name 빈 설비 심어 1공장 실패 5→6 확인. 테스트 4건.
 
 ## v6.39.2 — 설비 중복 수집 (사용자 신고)
 
